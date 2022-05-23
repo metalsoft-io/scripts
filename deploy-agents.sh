@@ -54,7 +54,7 @@ if [ -z "$DCCONF" ];then
   echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io bash <(curl -sk /https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
