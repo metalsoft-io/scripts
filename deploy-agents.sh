@@ -8,16 +8,12 @@ DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agent
 function testOS
 {
   echo :: testing OS version
-  if [ -z "$(grep "Ubuntu 20.04" /etc/issue)" ]; then
+  if [ -z "$(grep "Ubuntu 2" /etc/issue)" ]; then
     echo
     echo "This script is only compatible with Ubuntu 20.04 Operating system"
     echo "and will not run on any other OS"
     echo
-    exit 0
-  else
-    echo
-    echo "OS is" $(cat /etc/issue)
-    echo
+    exit 2
   fi
 }
 
