@@ -10,7 +10,7 @@ function testOS
   echo :: testing OS version
   if [ -z "$(grep "Ubuntu 2" /etc/issue)" ]; then
     echo
-    echo "This script is only compatible with Ubuntu 20.04 Operating system"
+    echo "This script is only compatible with Ubuntu 20+ Operating system"
     echo "and will not run on any other OS"
     echo
     exit 2
