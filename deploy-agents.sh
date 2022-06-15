@@ -4,6 +4,7 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.9-RC01'
+MAINIP=$(hostname -I | awk '{print $1}')
 
 function testOS
 {
@@ -56,6 +57,9 @@ if [ -z "$DCCONF" ];then
   fi
   # echo DCCONF $DCCONF
   # export DCCONF="$DCCONF"
+  
+  DCCONFDOWNLOADED=$(wget -q -O -)
+
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage
 
 
@@ -90,6 +94,7 @@ if [ -z "$DCCONF" ];then
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
+  DATACENTERNAME=$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)
 
   test -f /opt/metalsoft/agents/docker-compose.yaml || echo :: Creating /opt/metalsoft/agents/docker-compose.yaml && cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
@@ -153,7 +158,7 @@ services:
     environment:
       - TZ=Etc/UTC
       - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://us-chi-qts-ocient-api.poc2.metalsoft.io/api/internal/ipc_guacamole
-      - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=Ui7Cv98Rtmyilc2yDS82AqP0o1NbcVzX81OoQwertm9uiR69CvlsSdaIc1l3CnmVRnJs3xp3rt
+      - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=__NEEDS_TO_BE_FILLED__
   junos-driver:
     network_mode: bridge
     container_name: junos-driver
@@ -164,6 +169,39 @@ services:
     environment:
       - TZ=Etc/UTC
     hostname: junor-driver
+  websocket-tunnel-client:
+    image: registry.metalsoft.dev/datacenter-agents/websocket-tunnel-client:4.10
+    container_name: websocket-tunnel-client
+    restart: always
+    hostname: websocket-tunnel-client
+    environment:
+      - DATACENTER_NAME=${DATACENTERNAME}
+      - ERROR_LOG_LEVEL=debug
+      - CONTROLLER_SCHEMA=https
+      - CONTROLLER_TUNNEL_HOST=api.${SSL_HOSTNAME}
+      - CONTROLLER_TUNNEL_PORT=9010
+      - CONTROLLER_TCP_PORT=9011
+      - DISABLE_SSL_CHECKS=true
+      - OS_IMAGES_MOUNT=/iso
+      - NFS_HOST=${MAINIP}:/data
+    volumes:
+      - /opt/metalsoft/nfs-storage:/iso
+  nfs:
+    network_mode: host
+    container_name: nfs-server
+    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:2.2.1
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
+      - NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
+    volumes:
+      - /opt/metalsoft/nfs-storage:/data
+    ports:
+      - 2049:2049
+      - 111:111
+      - 32765:32765
+      - 32767:32767
 
 ENDD
 
