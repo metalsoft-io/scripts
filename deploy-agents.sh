@@ -57,8 +57,8 @@ if [ -z "$DCCONF" ];then
   fi
   # echo DCCONF $DCCONF
   # export DCCONF="$DCCONF"
-  
-  DCCONFDOWNLOADED=$(wget -q -O -)
+
+  DCCONFDOWNLOADED=$(wget -q -O - ${DCCONF})
 
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage
 
