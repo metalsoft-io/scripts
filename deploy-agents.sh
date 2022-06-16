@@ -62,6 +62,8 @@ if [ -z "$DCCONF" ];then
 
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage
 
+  test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
+  test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
 
   if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
     rm -f /opt/metalsoft/agents/ssl-cert.pem && touch /opt/metalsoft/agents/ssl-cert.pem
