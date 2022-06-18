@@ -95,7 +95,7 @@ if [ -z "$DCCONF" ];then
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
   DATACENTERNAME=$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)
-
+  HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
   test -f /opt/metalsoft/agents/docker-compose.yaml || echo :: Creating /opt/metalsoft/agents/docker-compose.yaml && cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
 services:
@@ -136,7 +136,7 @@ services:
       #- NODE_TLS_REJECT_UNAUTHORIZED=0
       # Use only if custom CA is needed
       #- NODE_EXTRA_CA_CERTS=/etc/ssl/certs/dell_local_RootCA.pem
-    hostname: agents
+    hostname: agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
   haproxy:
     network_mode: host
     container_name: dc-haproxy
