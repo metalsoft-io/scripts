@@ -51,7 +51,7 @@ if [ -z "$DCCONF" ];then
   echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io bash GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
@@ -93,6 +93,12 @@ if [ -z "$DCCONF" ];then
     read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
     SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
     echo SSL_HOSTNAME set to: $SSL_HOSTNAME
+  fi
+
+  if [ -z "$GUACAMOLE_KEY" ];then
+    read -p "Enter GUACAMOLE_KEY: " gckey
+    GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
+    echo GUACAMOLE_KEY set to: $GUACAMOLE_KEY
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
@@ -159,8 +165,8 @@ services:
     privileged: true
     environment:
       - TZ=Etc/UTC
-      - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://us-chi-qts-ocient-api.poc2.metalsoft.io/api/internal/ipc_guacamole
-      - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=__NEEDS_TO_BE_FILLED__
+      - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${DATACENTERNAME}-api.${SSL_HOSTNAME}/api/internal/ipc_guacamole
+      - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=${GUACAMOLE_KEY}
   junos-driver:
     network_mode: bridge
     container_name: junos-driver
