@@ -81,6 +81,8 @@ if [ -z "$DCCONF" ];then
 
   test -x /usr/local/bin/docker-compose || echo :: Install docker && curl -skL $(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4) -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 
+  wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
+
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
     echo :: Please provide path of the SSL pem:
     manageSSL
@@ -120,7 +122,7 @@ services:
       - /opt/metalsoft/logs:/var/log
       - /opt/metalsoft/.ssh:/root/.ssh
       - /opt/metalsoft/mon:/var/lib/mon/data
-      - /etc/ssl/certs:/etc/ssl/certs
+      #- /etc/ssl/certs:/etc/ssl/certs
       - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
       # Use only if custom CA is needed
       #- /opt/metalsoft/agents/supervisor.conf:/var/vhosts/datacenter-agents-binary-compiled/supervisor.conf
