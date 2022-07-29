@@ -3,7 +3,7 @@
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10'
+DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
 MAINIP=$(hostname -I | awk '{print $1}')
 
 function testOS
@@ -65,9 +65,9 @@ if [ -z "$DCCONF" ];then
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
 
-  if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
-    rm -f /opt/metalsoft/agents/ssl-cert.pem && touch /opt/metalsoft/agents/ssl-cert.pem
-  fi
+  #if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
+  #  rm -f /opt/metalsoft/agents/ssl-cert.pem && touch /opt/metalsoft/agents/ssl-cert.pem
+  #fi
 
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null || echo :: installing required packages && \
     apt update -qq && \
@@ -81,7 +81,9 @@ if [ -z "$DCCONF" ];then
 
   test -x /usr/local/bin/docker-compose || echo :: Install docker && curl -skL $(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4) -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 
-  wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
+  if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
+    wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
+  fi
 
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
     echo :: Please provide path of the SSL pem:
@@ -180,7 +182,7 @@ services:
       - TZ=Etc/UTC
     hostname: junor-driver
   websocket-tunnel-client:
-    image: registry.metalsoft.dev/datacenter-agents/websocket-tunnel-client:4.10
+    image: registry.metalsoft.dev/datacenter-agents/websocket-tunnel-client:4.10.1
     container_name: websocket-tunnel-client
     restart: always
     hostname: websocket-tunnel-client
