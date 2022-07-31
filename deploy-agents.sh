@@ -177,7 +177,7 @@ services:
     image: registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:integration
     restart: always
     ports:
-      - 8005:5000/tcp
+      - 8006:5000/tcp
     environment:
       - TZ=Etc/UTC
     hostname: junor-driver
