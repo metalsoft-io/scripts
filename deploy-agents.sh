@@ -106,7 +106,10 @@ if [ -z "$DCCONF" ];then
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
-  DATACENTERNAME=$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)
+  DATACENTERNAME="$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)"
+  if [ -z "$DATACENTERNAME" ];then
+    DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z\-\_]+')
+  fi
   HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
   test -f /opt/metalsoft/agents/docker-compose.yaml || echo :: Creating /opt/metalsoft/agents/docker-compose.yaml && cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
@@ -196,8 +199,11 @@ services:
       - DISABLE_SSL_CHECKS=true
       - OS_IMAGES_MOUNT=/iso
       - NFS_HOST=${MAINIP}:/data
+      - DEBUG=*
+      - DATACENTERS_SECRET=________
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
+      - /etc/hosts:/etc/hosts
   nfs:
     network_mode: host
     container_name: nfs-server
