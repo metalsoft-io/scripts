@@ -1,7 +1,6 @@
 #!/bin/bash
 for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips;do
-  if [ -f "/usr/local/bin/${z}" ];then
-
+  if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" ];then
     curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} > /tmp/${z} || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} -O /tmp/${z}
     if ! diff /usr/local/bin/${z} /tmp/${z} > /dev/null 2>&1;then
       curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum > /tmp/${z}.sum  || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum -O /tmp/${z}.sum
