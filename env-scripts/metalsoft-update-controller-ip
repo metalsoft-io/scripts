@@ -41,13 +41,12 @@ if [ -n $2 ];then
         systemctl show --no-pager --property=Environment docker
 fi
 
-
-sed -i "s/10.255.146.149/${ip}/g" /opt/metalsoft/agents/docker-compose.yaml
+sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${ip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
 if grep api.demo.metalsoft.io /etc/hosts > /dev/null;then
-sed -i "/api.demo.metalsoft.io/c${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" /etc/hosts
+        sed -i "/api.demo.metalsoft.io/c${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" /etc/hosts
 else
-echo "${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" >> /etc/hosts
-
+        echo "${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" >> /etc/hosts
 fi
+
 cd /opt/metalsoft/agents/ && docker-compose pull && docker-compose down && sleep 5 && docker-compose up -d
 echo Done
