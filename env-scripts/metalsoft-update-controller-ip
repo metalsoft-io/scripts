@@ -18,18 +18,31 @@ if [ -n $2 ];then
         lip="$(echo $ip|cut -d. -f1-3)"
 
         local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
-        no_proxy="localhost,::1,$local_ips"
+        no_proxy="localhost,::1,.demo.metalsoft.io,$local_ips"
         echo no_proxy line = $no_proxy
 
         env_file="/etc/environment"
-        if ! grep '^http_proxy=' $env_file > /dev/null;then echo "http_proxy=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^https_proxy=' $env_file > /dev/null;then echo "https_proxy=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^no_proxy=' $env_file > /dev/null;then echo "no_proxy=\"$no_proxy\"" >> $env_file; fi
 
-        if ! grep '^HTTP_PROXY=' $env_file > /dev/null;then echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^HTTPS_PROXY=' $env_file > /dev/null;then echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^NO_PROXY=' $env_file > /dev/null;then echo "NO_PROXY=\"$no_proxy\"" >> $env_file; fi
+        if grep '^HTTP_PROXY=' $env_file > /dev/null;then
 
+                sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $env_file
+                sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $env_file
+                sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $env_file
+
+                sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $env_file
+                sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $env_file
+                sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $env_file
+        else
+
+                echo "http_proxy=\"$proxy_url\"" >> $env_file
+                echo "https_proxy=\"$proxy_url\"" >> $env_file
+                echo "no_proxy=\"$no_proxy\"" >> $env_file
+
+                echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file
+                echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file
+                echo "NO_PROXY=\"$no_proxy\"" >> $env_file
+
+        fi
 
         docker_env_file="/etc/systemd/system/docker.service.d/http-proxy.conf"
         echo "[Service]" > $docker_env_file

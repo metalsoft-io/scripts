@@ -27,7 +27,7 @@ if [ -n $3 ];then
         echo setting up proxy via $proxy_url
         lip="$(echo $cip|cut -d. -f1-3)"
         local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
-        no_proxy="localhost,::1,$local_ips"
+        no_proxy="localhost,::1,.demo.metalsoft.io,.istio-system.svc,.svc.cluster.local,controller,$local_ips"
         if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
                 kubeapiiprange="$(grep -oP '.*service-cluster-ip-range=\K.*' /var/snap/microk8s/current/args/kube-apiserver|head -1)"
                 if [ -n "$kubeapiiprange" ];then
@@ -43,37 +43,61 @@ if [ -n $3 ];then
         fi
         echo no_proxy line = $no_proxy
         env_file="/etc/environment"
-        if ! grep '^http_proxy=' $env_file > /dev/null;then echo "http_proxy=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^https_proxy=' $env_file > /dev/null;then echo "https_proxy=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^no_proxy=' $env_file > /dev/null;then echo "no_proxy=\"$no_proxy\"" >> $env_file; fi
+        if grep '^HTTP_PROXY=' $env_file > /dev/null;then
 
-        if ! grep '^HTTP_PROXY=' $env_file > /dev/null;then echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^HTTPS_PROXY=' $env_file > /dev/null;then echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file; fi
-        if ! grep '^NO_PROXY=' $env_file > /dev/null;then echo "NO_PROXY=\"$no_proxy\"" >> $env_file; fi
+                sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $env_file
+                sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $env_file
+                sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $env_file
+
+                sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $env_file
+                sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $env_file
+                sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $env_file
+        else
+
+                echo "http_proxy=\"$proxy_url\"" >> $env_file
+                echo "https_proxy=\"$proxy_url\"" >> $env_file
+                echo "no_proxy=\"$no_proxy\"" >> $env_file
+
+                echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file
+                echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file
+                echo "NO_PROXY=\"$no_proxy\"" >> $env_file
+
+        fi
 
         contd_file="/var/snap/microk8s/current/args/containerd-env"
         if [ -f $contd_file ];then
-                check_contd_env=0
 
-                if ! grep '^http_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "http_proxy=\"$proxy_url\"" >> $contd_file; fi
-                if ! grep '^https_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "https_proxy=\"$proxy_url\"" >> $contd_file; fi
-                if ! grep '^no_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "no_proxy=\"$no_proxy\"" >> $contd_file; fi
+                if grep '^HTTP_PROXY=' $contd_file > /dev/null;then
 
-                if ! grep '^HTTP_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file; fi
-                if ! grep '^HTTPS_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file; fi
-                if ! grep '^NO_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "NO_PROXY=\"$no_proxy\"" >> $contd_file; fi
+                        sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $contd_file
+                        sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $contd_file
+                        sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $contd_file
+
+                        sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $contd_file
+                        sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $contd_file
+                        sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $contd_file
+                else
+
+                        echo "http_proxy=\"$proxy_url\"" >> $contd_file
+                        echo "https_proxy=\"$proxy_url\"" >> $contd_file
+                        echo "no_proxy=\"$no_proxy\"" >> $contd_file
+
+                        echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file
+                        echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file
+                        echo "NO_PROXY=\"$no_proxy\"" >> $contd_file
+
+                fi
         fi
 
-        if [ $check_contd_env -eq 1 ];then
-                echo restarting microk8s to apply proxy settings...
-                microk8s stop
-                sleep 5
-                microk8s start
-        fi
+        echo restarting microk8s to apply proxy settings...
+        microk8s stop
+        sleep 5
+        microk8s start
 fi
 
 cd ~/manifests/
-microk8s disable metallb && sleep 5 && microk8s enable metallb:$cip/32
+timeout 180 microk8s disable metallb
+sleep 5 && microk8s enable metallb:$cip/32
 sed -i "s/10.255.146.148/$cip/g" ./traefik-helm-chart-configvalues.yaml
 microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
 microk8s disable istio && sleep 5 && microk8s enable istio
