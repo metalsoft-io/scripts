@@ -10,6 +10,6 @@ for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-i
       fi
       cd - > /dev/null
     fi
-    rm -f "/tmp/${z}"
+    rm -f "/tmp/${z}" "/tmp/${z}.sum"
   fi
 done
