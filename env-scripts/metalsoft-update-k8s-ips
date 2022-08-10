@@ -1,0 +1,86 @@
+#!/bin/bash
+
+if [ "$EUID" -ne 0 ];then
+        echo "Please run as root"
+        exit 1
+fi
+
+#if ! nc -zw 4 1.1.1.1 80 >/dev/null 2>&1;then
+if ! curl -sk https://1.1.1.1 -o /dev/null 2>&1;then
+        echo This script needs public internet access. Please run it once the condition is met.
+        exit 2
+fi
+
+if [ -z $2 ];then
+        echo "Please provide the new 'k8s IP' and 'agents IP' [ and optional proxy ]"
+        echo example: $(basename $0) 10.0.0.3 10.0.0.2 [ http://172.18.34.89:3128/ ]
+        exit 3;
+fi
+
+if [ -n $3 ];then
+        proxy_url="$3"
+        echo setting up proxy via $proxy_url
+        local_ips="$(ip -o -4 a|awk '{print $4}'|xargs |sed 's/ /,/g')"
+        no_proxy="localhost,::1,$local_ips"
+        if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
+                kubeapiiprange="$(grep -oP '.*service-cluster-ip-range=\K.*' /var/snap/microk8s/current/args/kube-apiserver|head -1)"
+                if [ -n "$kubeapiiprange" ];then
+                        no_proxy="$no_proxy,$kubeapiiprange"
+                fi
+        fi
+
+        if [ -f /var/snap/microk8s/current/args/kube-proxy ];then
+                kubeproxyiprange="$(grep -oP '.*cluster-cidr=\K.*' /var/snap/microk8s/current/args/kube-proxy|head -1)"
+                if [ -n "$kubeproxyiprange" ];then
+                        no_proxy="$no_proxy,$kubeproxyiprange"
+                fi
+        fi
+        echo no_proxy line = $no_proxy
+        env_file="/etc/environment"
+        if ! grep '^http_proxy=' $env_file > /dev/null;then echo "http_proxy=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^https_proxy=' $env_file > /dev/null;then echo "https_proxy=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^no_proxy=' $env_file > /dev/null;then echo "no_proxy=\"$no_proxy\"" >> $env_file; fi
+
+        if ! grep '^HTTP_PROXY=' $env_file > /dev/null;then echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^HTTPS_PROXY=' $env_file > /dev/null;then echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^NO_PROXY=' $env_file > /dev/null;then echo "NO_PROXY=\"$no_proxy\"" >> $env_file; fi
+
+        contd_file="/var/snap/microk8s/current/args/containerd-env"
+        if [ -f $contd_file ];then
+                check_contd_env=0
+
+                if ! grep '^http_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "http_proxy=\"$proxy_url\"" >> $contd_file; fi
+                if ! grep '^https_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "https_proxy=\"$proxy_url\"" >> $contd_file; fi
+                if ! grep '^no_proxy=' $contd_file > /dev/null;then check_contd_env=1;  echo "no_proxy=\"$no_proxy\"" >> $contd_file; fi
+
+                if ! grep '^HTTP_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file; fi
+                if ! grep '^HTTPS_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file; fi
+                if ! grep '^NO_PROXY=' $contd_file > /dev/null;then check_contd_env=1;  echo "NO_PROXY=\"$no_proxy\"" >> $contd_file; fi
+        fi
+
+        if [ $check_contd_env -eq 1 ];then
+                echo restarting microk8s to apply proxy settings...
+                microk8s stop
+                sleep 5
+                microk8s start
+        fi
+fi
+
+cip=$1
+aip=$2
+echo new k8s IP: $cip
+echo new agents IP: $aip
+
+cd ~/manifests/
+microk8s disable metallb && sleep 5 && microk8s enable metallb:$cip/32
+sed -i "s/10.255.146.148/$cip/g" ./traefik-helm-chart-configvalues.yaml
+microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
+microk8s disable istio && sleep 5 && microk8s enable istio
+
+mysqlpod="$(microk8s.kubectl -n demo-metalsoft get pod|grep mysql|grep Running|awk '{print $1}')"
+if [ -n "$mysqlpod" -a -n "$aip" ];then
+        microk8s.kubectl -n demo-metalsoft exec -it $mysqlpod -- mysql -A bsi_api_demo_metalsoft_io -e "UPDATE datacenters SET datacenter_config_json = replace(datacenter_config_json, '10.255.146.149', '$aip')"
+fi
+
+echo
+echo Done

@@ -1,0 +1,53 @@
+#!/bin/bash
+
+if [ -z $1 ];then
+        echo Please provide the new Controller IP [ and optional proxy host ]
+        echo example: $(basename $0) 10.0.0.2 [ http://1.2.3.4:3128/ ]
+        exit 1;
+fi
+ip=$1
+echo new Controller IP: $ip
+
+
+if [ -n $2 ];then
+        proxy_url="$2"
+        echo setting up proxy via $proxy_url
+
+        mkdir -p /etc/systemd/system/docker.service.d
+
+
+        local_ips="$(ip -o -4 a|awk '{print $4}'|xargs |sed 's/ /,/g')"
+        no_proxy="localhost,::1,$local_ips"
+        echo no_proxy line = $no_proxy
+
+        env_file="/etc/environment"
+        if ! grep '^http_proxy=' $env_file > /dev/null;then echo "http_proxy=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^https_proxy=' $env_file > /dev/null;then echo "https_proxy=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^no_proxy=' $env_file > /dev/null;then echo "no_proxy=\"$no_proxy\"" >> $env_file; fi
+
+        if ! grep '^HTTP_PROXY=' $env_file > /dev/null;then echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^HTTPS_PROXY=' $env_file > /dev/null;then echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file; fi
+        if ! grep '^NO_PROXY=' $env_file > /dev/null;then echo "NO_PROXY=\"$no_proxy\"" >> $env_file; fi
+
+
+        docker_env_file="/etc/systemd/system/docker.service.d/http-proxy.conf"
+        echo "[Service]" > $docker_env_file
+        echo "Environment=\"HTTP_PROXY=$proxy_url\"" >> $docker_env_file
+        echo "Environment=\"HTTPS_PROXY=$proxy_url\"" >> $docker_env_file
+        echo "Environment=\"NO_PROXY=$no_proxy\"" >> $docker_env_file
+
+        systemctl daemon-reload
+        systemctl restart docker
+        systemctl show --no-pager --property=Environment docker
+fi
+
+
+sed -i "s/10.255.146.149/${ip}/g" /opt/metalsoft/agents/docker-compose.yaml
+if grep api.demo.metalsoft.io /etc/hosts > /dev/null;then
+sed -i "/api.demo.metalsoft.io/c${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" /etc/hosts
+else
+echo "${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" >> /etc/hosts
+
+fi
+cd /opt/metalsoft/agents/ && docker-compose pull && docker-compose down && sleep 5 && docker-compose up -d
+echo Done
