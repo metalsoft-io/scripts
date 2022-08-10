@@ -17,10 +17,16 @@ if [ -z $2 ];then
         exit 3;
 fi
 
+cip=$1
+aip=$2
+echo new k8s IP: $cip
+echo new agents IP: $aip
+
 if [ -n $3 ];then
         proxy_url="$3"
         echo setting up proxy via $proxy_url
-        local_ips="$(ip -o -4 a|awk '{print $4}'|xargs |sed 's/ /,/g')"
+        lip="$(echo $cip|cut -d. -f1-3)"
+        local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
         no_proxy="localhost,::1,$local_ips"
         if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
                 kubeapiiprange="$(grep -oP '.*service-cluster-ip-range=\K.*' /var/snap/microk8s/current/args/kube-apiserver|head -1)"
@@ -65,11 +71,6 @@ if [ -n $3 ];then
                 microk8s start
         fi
 fi
-
-cip=$1
-aip=$2
-echo new k8s IP: $cip
-echo new agents IP: $aip
 
 cd ~/manifests/
 microk8s disable metallb && sleep 5 && microk8s enable metallb:$cip/32

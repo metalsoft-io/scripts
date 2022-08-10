@@ -15,8 +15,9 @@ if [ -n $2 ];then
 
         mkdir -p /etc/systemd/system/docker.service.d
 
+        lip="$(echo $ip|cut -d. -f1-3)"
 
-        local_ips="$(ip -o -4 a|awk '{print $4}'|xargs |sed 's/ /,/g')"
+        local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
         no_proxy="localhost,::1,$local_ips"
         echo no_proxy line = $no_proxy
 
