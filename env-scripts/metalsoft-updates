@@ -5,17 +5,18 @@ if [ "$EUID" -ne 0 ];then
         exit 1
 fi
 
-for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips;do
-  if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" ];then
-    curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} > /tmp/${z} || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} -O /tmp/${z}
-    if ! diff /usr/local/bin/${z} /tmp/${z} > /dev/null 2>&1;then
-      curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum > /tmp/${z}.sum  || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum -O /tmp/${z}.sum
-      cd /tmp/
-      if cat ${z}|shasum -c /tmp/${z}.sum > /dev/null 2>&1 ;then
-        cp -p /tmp/${z} /usr/local/bin/${z} && chmod +x /usr/local/bin/${z}
-      fi
-      cd - > /dev/null
-    fi
-    rm -f "/tmp/${z}" "/tmp/${z}.sum"
-  fi
+cd /tmp/
+for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips
+do
+        if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" ];then
+                curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} > /tmp/${z} || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} -O /tmp/${z}
+                if ! diff /usr/local/bin/${z} /tmp/${z} > /dev/null 2>&1;then
+                        curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum > /tmp/${z}.sum  || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z}.sum -O /tmp/${z}.sum
+                        if cat ${z}|shasum -c /tmp/${z}.sum > /dev/null 2>&1 ;then
+                                cp -p /tmp/${z} /usr/local/bin/${z}
+                                chmod +x /usr/local/bin/${z}
+                        fi
+                fi
+        fi
+        rm -f "/tmp/${z}" "/tmp/${z}.sum"
 done
