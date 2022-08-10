@@ -9,8 +9,8 @@ for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-i
       if cat ${z}|shasum -c /tmp/${z}.sum > /dev/null 2>&1 ;then
         cp -p /tmp/${z} /usr/local/bin/${z} && chmod +x /usr/local/bin/${z}
       fi
-      rm -f "/tmp/${z}"
       cd - > /dev/null
     fi
+    rm -f "/tmp/${z}"
   fi
 done
