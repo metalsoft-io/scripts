@@ -340,6 +340,8 @@ docker ps
 
 echo ":: Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
 systemctl disable --now systemd-resolved.service
+systemctl disable --now rpcbind || true
+systemctl disable --now rpcbind.socket || true
 test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 
 echo :::: All done. to check containers, use: docker ps
