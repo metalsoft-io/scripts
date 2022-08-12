@@ -5,16 +5,18 @@ if [ "$EUID" -ne 0 ];then
         exit 1
 fi
 
-#if ! nc -zw 4 1.1.1.1 80 >/dev/null 2>&1;then
-if ! curl -sk https://1.1.1.1 -o /dev/null 2>&1;then
-        echo This script needs public internet access. Please run it once the condition is met.
-        exit 2
-fi
-
 if [ -z $2 ];then
         echo "Please provide the new 'k8s IP' and 'agents IP' [ and optional proxy ]"
         echo example: $(basename $0) 10.0.0.3 10.0.0.2 [ http://172.18.34.89:3128/ ]
         exit 3;
+fi
+
+#if ! nc -zw 4 1.1.1.1 80 >/dev/null 2>&1;then
+if [ -z "$3" ];then
+        if ! timeout 3 curl -sk https://1.1.1.1 -o /dev/null 2>&1;then
+                echo This script needs public internet access. Please run it once the condition is met.
+                exit 2
+        fi
 fi
 
 cip=$1
