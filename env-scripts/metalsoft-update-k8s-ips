@@ -107,10 +107,12 @@ echo restarting microk8s to apply proxy settings...
 microk8s stop
 sleep 5
 microk8s start
+microk8s status --wait-ready -t 600 >/dev/null 2>&1
 fi
 
-if [ -d "~/manifests" ];then
-        cd ~/manifests/
+if [ -d "/root/manifests" ];then
+        cd /root/manifests/
+        echo update Traefik
         sed -i "s/10.255.146.148/$cip/g" ./traefik-helm-chart-configvalues.yaml
         microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
 fi
