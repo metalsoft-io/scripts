@@ -66,48 +66,60 @@ if [ -n $3 ];then
 
         fi
 
-        contd_file="/var/snap/microk8s/current/args/containerd-env"
-        if [ -f $contd_file ];then
+# Enable these without logging out/in
+export http_proxy="$proxy_url"
+export https_proxy="$proxy_url"
+export no_proxy="$no_proxy"
 
-                if grep '^HTTP_PROXY=' $contd_file > /dev/null;then
+export HTTP_PROXY="$proxy_url"
+export HTTPS_PROXY="$proxy_url"
+export NO_PROXY="$no_proxy"
 
-                        sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $contd_file
-                        sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $contd_file
-                        sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $contd_file
+contd_file="/var/snap/microk8s/current/args/containerd-env"
+if [ -f $contd_file ];then
 
-                        sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $contd_file
-                        sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $contd_file
-                        sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $contd_file
-                else
+        if grep '^HTTP_PROXY=' $contd_file > /dev/null;then
 
-                        echo "http_proxy=\"$proxy_url\"" >> $contd_file
-                        echo "https_proxy=\"$proxy_url\"" >> $contd_file
-                        echo "no_proxy=\"$no_proxy\"" >> $contd_file
+                sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $contd_file
+                sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $contd_file
+                sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $contd_file
 
-                        echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file
-                        echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file
-                        echo "NO_PROXY=\"$no_proxy\"" >> $contd_file
+                sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $contd_file
+                sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $contd_file
+                sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $contd_file
+        else
 
-                fi
+                echo "http_proxy=\"$proxy_url\"" >> $contd_file
+                echo "https_proxy=\"$proxy_url\"" >> $contd_file
+                echo "no_proxy=\"$no_proxy\"" >> $contd_file
+
+                echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file
+                echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file
+                echo "NO_PROXY=\"$no_proxy\"" >> $contd_file
+
         fi
-
-        echo restarting microk8s to apply proxy settings...
-        microk8s stop
-        sleep 5
-        microk8s start
 fi
 
-cd ~/manifests/
-timeout 180 microk8s disable metallb
-sleep 5 && microk8s enable metallb:$cip/32
-sed -i "s/10.255.146.148/$cip/g" ./traefik-helm-chart-configvalues.yaml
-microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
-microk8s disable istio && sleep 5 && microk8s enable istio
+echo restarting microk8s to apply proxy settings...
+microk8s stop
+sleep 5
+microk8s start
+fi
 
 mysqlpod="$(microk8s.kubectl -n demo-metalsoft get pod|grep mysql|grep Running|awk '{print $1}')"
 if [ -n "$mysqlpod" -a -n "$aip" ];then
         microk8s.kubectl -n demo-metalsoft exec -it $mysqlpod -- mysql -A bsi_api_demo_metalsoft_io -e "UPDATE datacenters SET datacenter_config_json = replace(datacenter_config_json, '10.255.146.149', '$aip')"
 fi
+
+if [ -d "~/manifests" ];then
+        cd ~/manifests/
+        sed -i "s/10.255.146.148/$cip/g" ./traefik-helm-chart-configvalues.yaml
+        microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
+fi
+
+timeout 180 microk8s disable metallb
+sleep 5 && microk8s enable metallb:$cip/32
+#microk8s disable istio && sleep 5 && microk8s enable istio
 
 echo
 echo Done
