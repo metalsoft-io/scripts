@@ -28,6 +28,9 @@ black=$(tput setaf 16)
 
 unset command_not_found_handle
 
+which nc > /dev/null || { echo 'nc is needed for this script to run properly. Please install netcat' && exit 1; }
+which dig > /dev/null || { echo 'dig is needed for this script to run properly. Please install dnsutils' && exit 1; }
+
 localhost=$(hostname -i) || localhost=127.0.0.1
 
 function usage {
