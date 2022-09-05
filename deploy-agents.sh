@@ -24,12 +24,12 @@ function manageSSL
   if [ -r "$ssl" ];then
     DISCOVERED_SSL_HOSTNAMES="$(openssl x509 -in "$ssl" -noout -text 2>/dev/null|grep DNS:|head -1)"
     DISCOVERED_SSL_HOSTNAME="$(echo "$DISCOVERED_SSL_HOSTNAMES"|sed 's/,\s\+/\n/g;'|sed 's/.*DNS://g'|cut -d. -f2-10|head -1)"
-    if [ -z $DISCOVERED_SSL_HOSTNAME"" ];then
+    if [ -z "$DISCOVERED_SSL_HOSTNAME" ];then
       echo WARNING: no hostname discovered in SSL file
       # return 1
     fi
     if cp "$ssl" /opt/metalsoft/agents/ssl-cert.pem;then
-      echo :: copied "$ssl" to /opt/metalsoft/agents/ssl-cert.pem. Found SSL hosts: $DISCOVERED_SSL_HOSTNAMES
+      echo :: copied "$ssl" to /opt/metalsoft/agents/ssl-cert.pem. Found SSL hosts: "$DISCOVERED_SSL_HOSTNAMES"
       return 0
     else
       echo Error: could not copy "$ssl"
@@ -96,13 +96,13 @@ if [ -z "$DCCONF" ];then
   if [ -z "$SSL_HOSTNAME" ];then
     read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
     SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
-    echo SSL_HOSTNAME set to: $SSL_HOSTNAME
+    echo SSL_HOSTNAME set to: "$SSL_HOSTNAME"
   fi
 
   if [ -z "$GUACAMOLE_KEY" ];then
     read -p "Enter GUACAMOLE_KEY: " gckey
     GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
-    echo GUACAMOLE_KEY set to: $GUACAMOLE_KEY
+    echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
