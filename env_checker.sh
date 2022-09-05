@@ -11,20 +11,20 @@
 
 nc=$(tput sgr0)
 bold=$(tput bold)
-red=$(tput setaf 1)
-green=$(tput setaf 2)
+#red=$(tput setaf 1)
+#green=$(tput setaf 2)
 orange=$(tput setaf 3)
-blue=$(tput setaf 4)
-purple=$(tput setaf 5)
+#blue=$(tput setaf 4)
+#purple=$(tput setaf 5)
 cyan=$(tput setaf 6)
-white=$(tput setaf 7)
+#white=$(tput setaf 7)
 gray=$(tput setaf 8)
 lightred=$(tput setaf 9)
 lightgreen=$(tput setaf 10)
 yellow=$(tput setaf 11)
-lightblue=$(tput setaf 12)
-pink=$(tput setaf 13)
-black=$(tput setaf 16)
+#lightblue=$(tput setaf 12)
+#pink=$(tput setaf 13)
+#black=$(tput setaf 16)
 
 unset command_not_found_handle
 
@@ -65,9 +65,9 @@ while getopts ":a:o:n:p:k" o; do
 done
 shift $((OPTIND-1))
 
-restOfIPs="$@"
+#restOfIPs="$@"
 
-nodes_tcp_ports="$sshport 62013 10250"
+#nodes_tcp_ports="$sshport 62013 10250"
 #agents_tcp_ports="$sshport 53 80 443 9003 9009 9010 9011 9090 9091"
 agents_tcp_ports="$sshport 53"
 agents_udp_ports="53 67 69"
@@ -87,7 +87,7 @@ function nc_start_listener_and_check_remote_ip_port {
 	comment="${5} "
 
 	sleeper=2
-	if [ $protocol == 'udp' ];then
+	if [ "$protocol" == 'udp' ];then
 		proto='u'
 	fi
 	# initiate listener on remote box for the specified port for some time and put this process in the background
@@ -154,7 +154,7 @@ if [ $usek8s -eq 1 ];then
 	k8sNnodes="$(echo -e "$k8snodeslist"|awk '{print $1}'|wc -l || 0)"
 	if [ $k8sNnodes -gt 0 ];then
 		k8sNreadynodes="$(echo -e "$k8snodeslist"|grep Ready|awk '{print $1}'|wc -l || 0)"
-		k8snodes="$(echo -e "$k8snodeslist"|awk '{print $1}'|xargs)"
+		#k8snodes="$(echo -e "$k8snodeslist"|awk '{print $1}'|xargs)"
 		checkedNodes=()
 		checkedNodesNoColor=()
 		shopt -s lastpipe
@@ -212,32 +212,32 @@ for h in ${checkedNodesNoColor[@]};do
 		i="$(dig +short $h|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
 	fi
 	for z in $i;do
-		echo "${cyan}:: Checking ports for node: $z / $h${nc}"
-		nc_check_remote_conn $z 'NOTNEEDED' icmp "[$h]"
+		echo "${cyan}:: Checking ports for node: "$z" / $h${nc}"
+		nc_check_remote_conn "$z" 'NOTNEEDED' icmp "[$h]"
 		echo "${cyan}:: Checking nodes for external connectivity: $z${nc}"
-		if nc -nzw 5 $z $sshport >/dev/null 2>&1;then
-			nc_start_listener_and_check_remote_ip_port $z 10250 tcp 10 "[$h]"
-			nc_connect_back_from_remote_ip_port $z $localhost 6443 tcp
-			nc_connect_back_from_remote_ip_port $z 1.1.1.1 icmp "[$h]"
-			nc_connect_back_from_remote_ip_port $z 1.1.1.1 80 tcp "[$h]"
-			nc_connect_back_from_remote_ip_port $z 1.1.1.1 443 tcp "[$h]"
+		if nc -nzw 5 "$z" $sshport >/dev/null 2>&1;then
+			nc_start_listener_and_check_remote_ip_port "$z" 10250 tcp 10 "[$h]"
+			nc_connect_back_from_remote_ip_port "$z" $localhost 6443 tcp
+			nc_connect_back_from_remote_ip_port "$z" 1.1.1.1 icmp "[$h]"
+			nc_connect_back_from_remote_ip_port "$z" 1.1.1.1 80 tcp "[$h]"
+			nc_connect_back_from_remote_ip_port "$z" 1.1.1.1 443 tcp "[$h]"
 
-			nc_connect_back_from_remote_ip_port $z downloads.dell.com 443 tcp
-			nc_connect_back_from_remote_ip_port $z downloads.linux.hpe.com 80 tcp
-			nc_connect_back_from_remote_ip_port $z repo.metalsoft.io 80 tcp
-			nc_connect_back_from_remote_ip_port $z registry.metalsoft.dev 443 tcp
-			nc_connect_back_from_remote_ip_port $z quay.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z gcr.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z cloud.google.com 443 tcp
-			nc_connect_back_from_remote_ip_port $z helm.traefik.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z k8s.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z smtp.office365.com 587 tcp
+			nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" downloads.linux.hpe.com 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" helm.traefik.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" k8s.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
 
 			if [ -n "$node1svcports" ];then
 				for nsvc in ${node1svcports};do
 					if [ $usek8s -eq 1 ];then
 						clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-						test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port $z $clusterip $nsvc tcp
+						test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
 					else
 						nc_start_listener_and_check_remote_ip_port $h $nsvc tcp 10
 					fi
@@ -248,14 +248,14 @@ for h in ${checkedNodesNoColor[@]};do
 				for nsvc in ${node1svcportsudp};do
 					if [ $usek8s -eq 1 ];then
 						clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
-						test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port $z $clusterip $nsvc udp
+						test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp
 					else
 						nc_start_listener_and_check_remote_ip_port $h $nsvc udp 10
 					fi
 				done
 			fi
 		else
-			echo ${lightred}Could not SSH into $z port $sshport to perform remote checks${nc}
+			echo ${lightred}Could not SSH into "$z" port $sshport to perform remote checks${nc}
 		fi
 
 	done
@@ -264,41 +264,41 @@ done
 if [ -n "$agentsIp" ];then
 	for z in ${agentsIp};do
 		echo "${cyan}:: Checking agents: ${z}${nc}"
-		nc_check_remote_conn $z _ icmp '[agents]'
+		nc_check_remote_conn "$z" _ icmp '[agents]'
 
 		if [ -n "$agents_tcp_ports" ];then
 			for atp in $agents_tcp_ports;do
-				nc_check_remote_conn $z $atp tcp '[agents]'
+				nc_check_remote_conn "$z" $atp tcp '[agents]'
 			done
 		fi
 		if [ -n "$agents_udp_ports" ];then
 			for aup in $agents_udp_ports;do
-				nc_check_remote_conn $z $aup udp '[agents]'
+				nc_check_remote_conn "$z" $aup udp '[agents]'
 			done
 		fi
-		if nc -nzw 5 $z $sshport >/dev/null 2>&1;then
+		if nc -nzw 5 "$z" $sshport >/dev/null 2>&1;then
 			if [ -n "$node1svcports" ];then
 				for nsvc in ${node1svcports};do
 					clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
 					#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-					nc_connect_back_from_remote_ip_port $z $clusterip $nsvc tcp
+					nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
 				done
 			fi
 			if [ -n "$node1svcportsudp" ];then
 				for nsvc in ${node1svcportsudp};do
 					clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
 					#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-					nc_connect_back_from_remote_ip_port $z $clusterip $nsvc udp 10
+					nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp 10
 				done
 			fi
-			nc_connect_back_from_remote_ip_port $z downloads.dell.com 443 tcp
-			nc_connect_back_from_remote_ip_port $z downloads.linux.hpe.com 80 tcp
-			nc_connect_back_from_remote_ip_port $z repo.metalsoft.io 80 tcp
-			nc_connect_back_from_remote_ip_port $z registry.metalsoft.dev 443 tcp
-			nc_connect_back_from_remote_ip_port $z quay.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z gcr.io 443 tcp
-			nc_connect_back_from_remote_ip_port $z cloud.google.com 443 tcp
-			nc_connect_back_from_remote_ip_port $z smtp.office365.com 587 tcp
+			nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" downloads.linux.hpe.com 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
 
 			#agents to try to connect to oob box:
 			if [ -n "$oobIp" ];then
@@ -306,19 +306,19 @@ if [ -n "$agentsIp" ];then
 
 					if [ -n "$oob_tcp_ports" ];then
 						for otp in $oob_tcp_ports;do
-							nc_check_remote_conn $o $otp
+							nc_check_remote_conn $o "$otp"
 						done
 					fi
 					if [ -n "$oob_udp_ports" ];then
 						for oup in $oob_udp_ports;do
-							nc_check_remote_conn $o $oup udp
+							nc_check_remote_conn $o "$oup" udp
 						done
 					fi
 
 				done
 			fi
 		else
-			echo ${lightred}Could not SSH into $z port $sshport to perform remote checks${nc}
+			echo ${lightred}Could not SSH into "$z" port $sshport to perform remote checks${nc}
 		fi
 	done
 fi
@@ -329,12 +329,12 @@ if [ -n "$oobIp" ];then
 
 		if [ -n "$oob_tcp_ports" ];then
 			for otp in $oob_tcp_ports;do
-				nc_check_remote_conn $z $otp
+				nc_check_remote_conn "$z" "$otp"
 			done
 		fi
 		if [ -n "$oob_udp_ports" ];then
 			for oup in $oob_udp_ports;do
-				nc_check_remote_conn $z $oup udp
+				nc_check_remote_conn "$z" "$oup" udp
 			done
 		fi
 
