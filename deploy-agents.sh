@@ -155,7 +155,7 @@ services:
   haproxy:
     network_mode: host
     container_name: dc-haproxy
-    image: registry.metalsoft.dev/datacenter-agents/dc-haproxy:latest
+    image: registry.metalsoft.dev/datacenter-agents-compiled/dc-haproxy:latest
     restart: always
     privileged: true
     volumes:
@@ -185,7 +185,7 @@ services:
       - TZ=Etc/UTC
     hostname: junor-driver
   websocket-tunnel-client:
-    image: registry.metalsoft.dev/datacenter-agents/websocket-tunnel-client:4.10.1
+    image: registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:4.10.1
     container_name: websocket-tunnel-client
     restart: always
     hostname: websocket-tunnel-client
