@@ -51,7 +51,7 @@ if [ -z "$DCCONF" ];then
   echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET= WESOCKET_TUNNEL_key_provided_by metalsoft bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
@@ -103,6 +103,12 @@ if [ -z "$DCCONF" ];then
     read -p "Enter GUACAMOLE_KEY: " gckey
     GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
     echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
+  fi
+
+  if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
+    read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
+    WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
+    echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
@@ -200,7 +206,7 @@ services:
       - OS_IMAGES_MOUNT=/iso
       - NFS_HOST=${MAINIP}:/data
       - DEBUG=*
-      - DATACENTERS_SECRET=________
+      - DATACENTERS_SECRET=${WEBSOCKET_TUNNEL_SECRET}
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/hosts:/etc/hosts
