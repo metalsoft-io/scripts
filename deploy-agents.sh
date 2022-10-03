@@ -189,7 +189,7 @@ services:
       - 8006:5000/tcp
     environment:
       - TZ=Etc/UTC
-    hostname: junor-driver
+    hostname: junos-driver
   websocket-tunnel-client:
     image: registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:4.10.1
     container_name: websocket-tunnel-client
