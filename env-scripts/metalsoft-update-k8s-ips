@@ -6,8 +6,8 @@ if [ "$EUID" -ne 0 ];then
 fi
 
 if [ -z $2 ];then
-        echo "Please provide the new 'k8s IP' and 'agents IP' [ and optional proxy ]"
-        echo example: $(basename $0) 10.0.0.3 10.0.0.2 [ http://172.18.34.89:3128/ ]
+        echo "Please provide the new 'k8s IP' and 'agents IP' [ optional: http://_proxy_ip_:3128/ ]"
+        echo example: $(basename $0) 10.0.0.3 10.0.0.2 http://172.18.34.89:3128/
         exit 3;
 fi
 
