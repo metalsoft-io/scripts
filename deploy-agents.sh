@@ -54,7 +54,7 @@ if [ -z "$DCCONF" ];then
   echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base6HashOfCredentials SSL_PULL_URL=https://url.to/ssl.pem GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
@@ -102,16 +102,24 @@ if [ -z "$DCCONF" ];then
     echo SSL_HOSTNAME set to: "$SSL_HOSTNAME"
   fi
 
-  if [ -z "$GUACAMOLE_KEY" ];then
-    read -p "Enter GUACAMOLE_KEY: " gckey
-    GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
-    echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
+  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+    GUACAMOLE_KEY='__GUACAMOLE_KEY_NEEDS_TO_BE_SET__'
+  else
+    if [ -z "$GUACAMOLE_KEY" ];then
+      read -p "Enter GUACAMOLE_KEY: " gckey
+      GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
+      echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
+    fi
   fi
 
-  if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
-    read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
-    WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
-    echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
+  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+    WEBSOCKET_TUNNEL_SECRET='__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__'
+  else
+    if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
+      read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
+      WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
+      echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
+    fi
   fi
 
   DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
@@ -332,6 +340,9 @@ backend bk_repo_443
 ENDD
 
 echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
+if [ ! -z "${REGISTRY_LOGIN}" ];then
+  mkdir -p ~/.docker && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > ~/.docker/config.json
+fi
 docker login registry.metalsoft.dev
 while [ $? -ne 0 ]; do
   echo :: Lets try docker login again:
