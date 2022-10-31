@@ -38,6 +38,9 @@ function manageSSL
       return 1
 
     fi
+  elif [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+    echo "You are in noninteractive mode, but have not specified value for SSL_PULL_URL";
+    exit 1
   else
     echo Error: no valid path provided
     return 1
