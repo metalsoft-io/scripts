@@ -20,7 +20,9 @@ function testOS
 
 function manageSSL
 {
-  read -r -e -p "Path to SSL pem: " ssl
+  test -n "${SSL_PULL_URL}" && curl -skL "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && file /root/agents-ssl.pem.tmp |grep -q 'PEM certificate' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || rm -f /root/agents-ssl.pem.tmp
+  test -f /root/agents-ssl.pem && file /root/agents-ssl.pem |grep -q 'PEM certificate' && ssl=/root/agents-ssl.pem
+  test -z "${ssl}" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
     DISCOVERED_SSL_HOSTNAMES="$(openssl x509 -in "$ssl" -noout -text 2>/dev/null|grep DNS:|head -1)"
     DISCOVERED_SSL_HOSTNAME="$(echo "$DISCOVERED_SSL_HOSTNAMES"|sed 's/,\s\+/\n/g;'|sed 's/.*DNS://g'|cut -d. -f2-10|head -1)"
@@ -49,9 +51,10 @@ if [ -z "$DCCONF" ];then
   echo
   echo Help:
   echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path
+  echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET= WESOCKET_TUNNEL_key_provided_by metalsoft bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
