@@ -85,7 +85,7 @@ if [ -z "$DCCONF" ];then
     apt update -qq && apt -yqqqq upgrade && \
     apt-get -yqqqq install docker-ce docker-ce-cli containerd.io
 
-  test -x /usr/local/bin/docker-compose || echo :: Install docker && curl -skL $(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4) -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+  test -x /usr/local/bin/docker-compose || echo :: Install docker-compose && curl -skL $(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4) -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 
   if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
     wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
@@ -125,7 +125,7 @@ if [ -z "$DCCONF" ];then
     fi
   fi
 
-  DCAURL="${AGENTS_IMG-$DCAGENTS_URL}"
+  DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
   DATACENTERNAME="$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)"
   if [ -z "$DATACENTERNAME" ];then
     DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z\-\_]+')
@@ -167,7 +167,7 @@ services:
       - 6343:6343/udp
     environment:
       - TZ=Etc/UTC
-      - URL=\${DCCONF}
+      - URL=${DCCONF}
       #- NODE_TLS_REJECT_UNAUTHORIZED=0
       # Use only if custom CA is needed
       #- NODE_EXTRA_CA_CERTS=/etc/ssl/certs/dell_local_RootCA.pem
