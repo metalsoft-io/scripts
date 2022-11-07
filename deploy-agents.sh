@@ -93,7 +93,7 @@ if [ -z "$DCCONF" ];then
 
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
     echo :: Please provide path of the SSL pem:
-    manageSSL
+    SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
     while [ $? -ne 0 ]; do
       manageSSL
     done
