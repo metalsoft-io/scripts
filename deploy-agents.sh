@@ -75,12 +75,12 @@ if [ -z "$DCCONF" ];then
   #  rm -f /opt/metalsoft/agents/ssl-cert.pem && touch /opt/metalsoft/agents/ssl-cert.pem
   #fi
 
+  if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
+  if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
+
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null || echo :: installing required packages && \
     apt update -qq && \
     apt -yqqqq install curl ca-certificates net-tools jq
-
-  if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
-  if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
 
   command -v docker > /dev/null || echo :: Install docker && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
