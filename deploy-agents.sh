@@ -79,6 +79,9 @@ if [ -z "$DCCONF" ];then
     apt update -qq && \
     apt -yqqqq install curl ca-certificates net-tools jq
 
+  if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
+  if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
+
   command -v docker > /dev/null || echo :: Install docker && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
@@ -355,7 +358,13 @@ done
 
 echo :: starting docker containers
 systemctl start docker.service
-cd /opt/metalsoft/agents && docker-compose up -d
+cd /opt/metalsoft/agents
+if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+  docker-compose pull -q
+else
+  docker-compose pull
+fi
+docker-compose up -d
 sleep 2
 docker ps
 sleep 2
