@@ -373,10 +373,12 @@ else
   docker-compose pull
 fi
 docker-compose up -d
-sleep 2
-docker ps
-sleep 2
-docker ps
+if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
+  sleep 2
+  docker ps
+  sleep 2
+  docker ps
+fi
 
 echo ":: Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
 systemctl disable --now systemd-resolved.service
