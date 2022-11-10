@@ -102,6 +102,10 @@ if [ -z "$DCCONF" ];then
     done
   fi
 
+  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+    SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
+  fi
+
   if [ -z "$SSL_HOSTNAME" ];then
     read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
     SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
@@ -131,7 +135,7 @@ if [ -z "$DCCONF" ];then
   DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
   DATACENTERNAME="$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)"
   if [ -z "$DATACENTERNAME" ];then
-    DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z\-\_]+')
+    DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
   fi
   HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
   test -f /opt/metalsoft/agents/docker-compose.yaml || echo :: Creating /opt/metalsoft/agents/docker-compose.yaml && cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
@@ -377,5 +381,12 @@ systemctl disable --now systemd-resolved.service
 systemctl disable --now rpcbind || true
 systemctl disable --now rpcbind.socket || true
 test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+
+if [ -f /etc/ssh/ms_banner ];then
+  echo ":: update /etc/ssh/ms_banner"
+  if grep -q '^IP:' /etc/ssh/ms_banner;then sed -i "/^IP:.*/c IP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "IP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
+  dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
+  dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
+fi
 
 echo :::: All done. to check containers, use: docker ps
