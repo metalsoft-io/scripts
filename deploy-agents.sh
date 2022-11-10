@@ -367,6 +367,7 @@ echo :: starting docker containers
 systemctl start docker.service
 cd /opt/metalsoft/agents
 if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+  echo :: pulling latest images..
   docker-compose pull -q
 else
   docker-compose pull
