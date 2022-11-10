@@ -4,7 +4,8 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
-MAINIP=$(hostname -I | awk '{print $1}')
+MAINIP="$(hostname -I | awk '{print $1}')"
+test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 
 function testOS
 {
