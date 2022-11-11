@@ -3,7 +3,7 @@
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
+test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
 MAINIP="$(hostname -I | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 
@@ -353,9 +353,8 @@ backend bk_repo_443
 ENDD
 
 echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
-if [ ! -z "${REGISTRY_LOGIN}" ];then
-  mkdir -p ~/.docker && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > ~/.docker/config.json
-fi
+test -n "${REGISTRY_LOGIN}" && mkdir -p ~/.docker && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > ~/.docker/config.json
+
 docker login registry.metalsoft.dev
 while [ $? -ne 0 ]; do
   echo :: Lets try docker login again:
