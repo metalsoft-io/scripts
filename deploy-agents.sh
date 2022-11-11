@@ -4,13 +4,14 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
-MAINIP="$(hostname -I | awk '{print $1}')"
+MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
+test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 
 function testOS
 {
   echo :: testing OS version
-  if [ -z "$(grep "Ubuntu 2" /etc/issue)" ]; then
+  if ! grep -q "Ubuntu 2" /etc/issue; then
     echo
     echo "This script is only compatible with Ubuntu 20+ Operating system"
     echo "and will not run on any other OS"
@@ -18,6 +19,45 @@ function testOS
     exit 2
   fi
 }
+
+function nc_check_remote_conn {
+
+nc=$(tput sgr0)
+bold=$(tput bold)
+orange=$(tput setaf 3)
+lightred=$(tput setaf 9)
+lightgreen=$(tput setaf 10)
+
+	ip=$1
+	port=$2
+	protocol=${3:-tcp}
+	comment="$4 "
+	test "$protocol" == 'icmp' && port=icmp
+
+  command -v nc >/dev/null 2>&1 || { echo "${lightred}ERROR: nc not found. nc_check_remote_conn exiting..${nc}";return; }
+
+	echo -n "Conn check from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
+
+	if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+	fi
+	for ip in $ip;do
+
+		if [ "$protocol" == "tcp" ];then
+			nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
+		elif [ "$protocol" == "icmp" ];then
+			ping -c2 "$ip" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
+		else
+			nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
+
+		fi
+	done
+}
+
+nc_check_remote_conn repo.metalsoft.io 80 tcp
+nc_check_remote_conn registry.metalsoft.dev 443 tcp
+test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 443 tcp
+test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
@@ -50,7 +90,6 @@ function manageSSL
 
 testOS
 
-# if [ -z "$DCCONF" ] || [ -z "$SSL_HOSTNAME" ];then
 if [ -z "$DCCONF" ];then
   echo
   echo Help:
@@ -65,16 +104,12 @@ if [ -z "$DCCONF" ];then
   # echo DCCONF $DCCONF
   # export DCCONF="$DCCONF"
 
-  DCCONFDOWNLOADED=$(wget -q --no-check-certificate -O - ${DCCONF})
+  DCCONFDOWNLOADED=$(wget -q --no-check-certificate -O - "${DCCONF}")
 
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage
 
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
-
-  #if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
-  #  rm -f /opt/metalsoft/agents/ssl-cert.pem && touch /opt/metalsoft/agents/ssl-cert.pem
-  #fi
 
   if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
   if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
@@ -89,7 +124,7 @@ if [ -z "$DCCONF" ];then
     apt update -qq && apt -yqqqq upgrade && \
     apt-get -yqqqq install docker-ce docker-ce-cli containerd.io
 
-  test -x /usr/local/bin/docker-compose || echo :: Install docker-compose && curl -skL $(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4) -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+  test -x /usr/local/bin/docker-compose || echo :: Install docker-compose && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 
   if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
     wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
@@ -101,10 +136,6 @@ if [ -z "$DCCONF" ];then
     while [ $? -ne 0 ]; do
       manageSSL
     done
-  fi
-
-  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-    SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
   fi
 
   if [ -z "$SSL_HOSTNAME" ];then
@@ -134,7 +165,7 @@ if [ -z "$DCCONF" ];then
   fi
 
   DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
-  DATACENTERNAME="$(echo ${DCCONFDOWNLOADED} | jq -r .currentDatacenter)"
+  DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
   if [ -z "$DATACENTERNAME" ];then
     DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
   fi
@@ -353,7 +384,8 @@ backend bk_repo_443
 ENDD
 
 echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
-test -n "${REGISTRY_LOGIN}" && mkdir -p ~/.docker && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > ~/.docker/config.json
+mkdir -p "${HOME}/.docker"
+test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
 
 docker login registry.metalsoft.dev
 while [ $? -ne 0 ]; do
