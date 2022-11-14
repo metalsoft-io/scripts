@@ -34,7 +34,9 @@ lightgreen=$(tput setaf 10)
 	comment="$4 "
 	test "$protocol" == 'icmp' && port=icmp
 
-  command -v nc >/dev/null 2>&1 || { echo "${lightred}ERROR: nc not found. nc_check_remote_conn exiting..${nc}";return; }
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { echo :: installing required packages && \
+    apt update -qq && \
+    apt -yqqqq install curl ca-certificates net-tools jq dnsutils; }
 
 	echo -n "Conn check from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
 
@@ -114,17 +116,14 @@ if [ -z "$DCCONF" ];then
   if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
   if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
 
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null || echo :: installing required packages && \
-    apt update -qq && \
-    apt -yqqqq install curl ca-certificates net-tools jq
 
-  command -v docker > /dev/null || echo :: Install docker && \
+  command -v docker > /dev/null || { echo :: Install docker && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
     apt update -qq && apt -yqqqq upgrade && \
-    apt-get -yqqqq install docker-ce docker-ce-cli containerd.io
+    apt-get -yqqqq install docker-ce docker-ce-cli containerd.io; }
 
-  test -x /usr/local/bin/docker-compose || echo :: Install docker-compose && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+  test -x /usr/local/bin/docker-compose || { echo :: Install docker-compose && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
 
   if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
     wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
