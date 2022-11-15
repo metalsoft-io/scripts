@@ -144,7 +144,7 @@ if [ -z "$DCCONF" ];then
   fi
 
   if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-    GUACAMOLE_KEY='__GUACAMOLE_KEY_NEEDS_TO_BE_SET__'
+    GUACAMOLE_KEY="${GUACAMOLE_KEY:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}"
   else
     if [ -z "$GUACAMOLE_KEY" ];then
       read -p "Enter GUACAMOLE_KEY: " gckey
@@ -154,7 +154,7 @@ if [ -z "$DCCONF" ];then
   fi
 
   if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-    WEBSOCKET_TUNNEL_SECRET='__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__'
+    WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
   else
     if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
       read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
