@@ -4,6 +4,7 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
+test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:4.10.1'
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
@@ -243,7 +244,7 @@ services:
       - TZ=Etc/UTC
     hostname: junos-driver
   websocket-tunnel-client:
-    image: registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:4.10.1
+    image: ${WSTCLIENT_URL}
     container_name: websocket-tunnel-client
     restart: always
     hostname: websocket-tunnel-client
