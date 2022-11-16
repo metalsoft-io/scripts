@@ -64,9 +64,9 @@ test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
-  test -n "${SSL_PULL_URL}" && curl -skL "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && file /root/agents-ssl.pem.tmp |grep -q 'PEM certificate' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || rm -f /root/agents-ssl.pem.tmp
-  test -f /root/agents-ssl.pem && file /root/agents-ssl.pem |grep -q 'PEM certificate' && ssl=/root/agents-ssl.pem
-  test -z "${ssl}" && read -r -e -p "Path to SSL pem: " ssl
+  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && file /root/agents-ssl.pem.tmp |grep -q 'PEM certificate' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
+  test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
+  test -z "${ssl}" && echo ":: Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
     DISCOVERED_SSL_HOSTNAMES="$(openssl x509 -in "$ssl" -noout -text 2>/dev/null|grep DNS:|head -1)"
     DISCOVERED_SSL_HOSTNAME="$(echo "$DISCOVERED_SSL_HOSTNAMES"|sed 's/,\s\+/\n/g;'|sed 's/.*DNS://g'|cut -d. -f2-10|head -1)"
@@ -131,7 +131,6 @@ if [ -z "$DCCONF" ];then
   fi
 
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
-    echo :: Please provide path of the SSL pem:
     SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
     while [ $? -ne 0 ]; do
       manageSSL
