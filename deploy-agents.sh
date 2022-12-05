@@ -188,6 +188,7 @@ services:
       - /opt/metalsoft/mon:/var/lib/mon/data
       #- /etc/ssl/certs:/etc/ssl/certs
       - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
+      - /usr/share/ca-certificates:/usr/share/ca-certificates
       # Use only if custom CA is needed
       #- /opt/metalsoft/agents/supervisor.conf:/var/vhosts/datacenter-agents-binary-compiled/supervisor.conf
     ports:
