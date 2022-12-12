@@ -122,6 +122,8 @@ if [ -d "/root/manifests" ];then
         cd /root/manifests/
         echo update Traefik
         sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
+        microk8s helm3 repo add traefik https://helm.traefik.io/traefik
+        microk8s helm3 repo update
         microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
 fi
 
