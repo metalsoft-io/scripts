@@ -24,6 +24,11 @@ aip=$2
 echo new k8s IP: $cip
 echo new agents IP: $aip
 
+# add IP with hostname to /etc/hosts
+hn="$(hostname -f)"
+test -z "$hn" && hn="$(cat /etc/hostname)"
+test -n "$hn" && grep -q "\b${hn}$" /etc/hosts && sed -i "/${hn}/c $cip $hn" /etc/hosts || { echo "$cip $hn" >> /etc/hosts; }
+
 if [ ! -z $3 ];then
         proxy_url="$3"
         echo setting up proxy via $proxy_url
