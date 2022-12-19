@@ -4,8 +4,8 @@ echo "whoami: $(whoami)"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:4.10.1'
-test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:4.10.1'
+test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:5.0'
+test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.0'
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
@@ -170,7 +170,9 @@ if [ -z "$DCCONF" ];then
     DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
   fi
   HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
-  test -f /opt/metalsoft/agents/docker-compose.yaml || echo :: Creating /opt/metalsoft/agents/docker-compose.yaml && cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
+  if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
+    echo :: Creating /opt/metalsoft/agents/docker-compose.yaml
+    cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
 services:
   agents:
@@ -284,8 +286,11 @@ services:
       - 32767:32767
 
 ENDD
+fi
 
-test -f /opt/metalsoft/agents/haproxy.cfg || echo :: Creating /opt/metalsoft/agents/haproxy.cfg && cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
+if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
+  echo :: Creating /opt/metalsoft/agents/haproxy.cfg
+  cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
     chroot /var/lib/haproxy
     user root
@@ -383,6 +388,7 @@ backend bk_guacamole_tomcat_8080
 backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
 ENDD
+fi
 
 echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
 mkdir -p "${HOME}/.docker"
