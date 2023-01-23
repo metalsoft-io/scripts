@@ -264,7 +264,7 @@ services:
       - DEBUG=*
       - DATACENTERS_SECRET=${WEBSOCKET_TUNNEL_SECRET}
       - GUACAMOLE_PLUGIN_HOST=${MAINIP}
-      - GUACAMOLE_PLUGIN_PORT=443
+      - GUACAMOLE_PLUGIN_PORT=8081
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/hosts:/etc/hosts
