@@ -26,7 +26,7 @@ echo new agents IP: $aip
 
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
-test -n "$hn" && grep -q "^${cip}" /etc/hosts && sed -i "s/^${cip}/$cip $hn/g" /etc/hosts|| { echo "$cip $hn" >> /etc/hosts; }
+test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io" >> /etc/hosts
 
 if [ ! -z $3 ];then
         proxy_url="$3"
