@@ -133,7 +133,7 @@ fi
 
 timeout 180 microk8s disable metallb
 sleep 5 && microk8s enable metallb:${cip}/32
-#microk8s disable istio && sleep 5 && microk8s enable istio
+microk8s disable istio && sleep 5 && microk8s enable istio
 
 mysqlpod="$(microk8s.kubectl -n demo-metalsoft get pod|grep mysql|grep Running|awk '{print $1}')"
 if [ -n "$mysqlpod" -a -n "$aip" ];then
