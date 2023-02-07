@@ -131,14 +131,13 @@ if [ -d "/root/manifests" ];then
         microk8s helm3 upgrade --install traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
 fi
 
-timeout 180 microk8s disable metallb
-sleep 5 && microk8s enable metallb:${cip}/32
-microk8s disable istio && sleep 5 && microk8s enable istio
-timeout 180 microk8s disable ingress
-sleep 5 && microk8s enable ingress
+timeout 180 microk8s disable metallb; sleep 5 && microk8s enable metallb:${cip}/32
+#microk8s disable istio && sleep 5 && microk8s enable istio
+#timeout 180 microk8s disable ingress; sleep 5 && microk8s enable ingress
 
+microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ -n "$aip" ];then
-        microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "UPDATE datacenters SET datacenter_config_json = replace(datacenter_config_json, '10.255.146.149', '$aip')"
+        microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "UPDATE datacenters SET datacenter_config_json = replace(datacenter_config_json, '10.255.146.149', '$aip') where datacenter_id <= 2"
 fi
 
 echo
