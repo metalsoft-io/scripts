@@ -1,5 +1,8 @@
 #!/bin/bash
 
+aip="$(ip r get 1|head -1|awk '{print $7}')"
+test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
+
 if [ -z $1 ];then
         echo Please provide the new Controller IP [ and optional proxy host ]
         echo example: $(basename $0) 10.0.0.2 [ http://1.2.3.4:3128/ ]
@@ -9,7 +12,7 @@ ip=$1
 echo new Controller IP: $ip
 
 
-if [ -n $2 ];then
+if [ -n "$2" ];then
         proxy_url="$2"
         echo setting up proxy via $proxy_url
 
@@ -52,15 +55,25 @@ if [ -n $2 ];then
 
         systemctl daemon-reload
         systemctl restart docker
-        systemctl show --no-pager --property=Environment docker
+        systemctl show --no-pager --property='Environment docker'
 fi
 
-sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${ip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
-if grep api.demo.metalsoft.io /etc/hosts > /dev/null;then
-        sed -i "/api.demo.metalsoft.io/c${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" /etc/hosts
+sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
+sed -i "s/\(GUACAMOLE_PLUGIN_HOST\)=.*/\1=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
+
+if ! grep -q '^127.0.0.1' /etc/hosts;then echo '127.0.0.1 localhost' >> /etc/hosts;fi
+if grep -q agent-demo.metalsoft.io /etc/hosts;then
+        sed -i "/agent-demo.metalsoft.io/c${aip} agent-demo.metalsoft.io" /etc/hosts
 else
-        echo "${ip} api.demo.metalsoft.io cloud.demo.metalsoft.io cloudv1.demo.metalsoft.io" >> /etc/hosts
+        echo "${aip} agent-demo.metalsoft.io" >> /etc/hosts
+fi
+
+if grep -q '\sdemo.metalsoft.io\b' /etc/hosts;then
+        sed -i "/\sdemo.metalsoft.io\b/c${ip} demo.metalsoft.io" /etc/hosts
+else
+        echo "${ip} demo.metalsoft.io" >> /etc/hosts
 fi
 
 cd /opt/metalsoft/agents/ && docker-compose pull && docker-compose down && sleep 5 && docker-compose up -d
+test -x /etc/ms-pre-login-ips && /etc/ms-pre-login-ips
 echo Done
