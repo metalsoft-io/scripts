@@ -4,8 +4,15 @@ aip="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
 
 if [ -z $1 ];then
-        echo Please provide the new Controller IP [ and optional proxy host ]
+        echo Please provide the new Controller IP [ and_optional_proxy_host ]
         echo example: $(basename $0) 10.0.0.2 [ http://1.2.3.4:3128/ ]
+        echo
+        echo ":::: ENV variables that can also be passed to the script:"
+        echo DCURL
+        echo DATACENTERS_SECRET
+        echo GUACAMOLE_KEY
+        echo SSL_PULL_URL
+        echo
         exit 1;
 fi
 ip=$1
@@ -60,6 +67,22 @@ fi
 
 sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
 sed -i "s/\(GUACAMOLE_PLUGIN_HOST\)=.*/\1=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
+if [ -n "$DCURL" ];then
+        echo Reconfiguring URL=${DCURL}
+        sed -i "s,\(- URL=\).*,\1${DCURL},g" /opt/metalsoft/agents/docker-compose.yaml
+fi
+if [ -n "$DATACENTERS_SECRET" ];then
+        echo Reconfiguring DATACENTERS_SECRET=${DATACENTERS_SECRET}
+        sed -i "s/\(- DATACENTERS_SECRET\)=.*/\1=${DATACENTERS_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+fi
+if [ -n "$GUACAMOLE_KEY" ];then
+        echo Reconfiguring GUACAMOLE_KEY=${GUACAMOLE_KEY}
+        sed -i "s/\(- GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY\)=.*/\1=${GUACAMOLE_KEY}/g" /opt/metalsoft/agents/docker-compose.yaml
+fi
+if [ -n "$SSL_PULL_URL" ];then
+        echo Reconfiguring SSL_PULL_URL=${SSL_PULL_URL}
+        test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" > /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && cp -f /root/agents-ssl.pem.tmp /opt/metalsoft/agents/ssl-cert.pem && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate or not a valid PEM certificate"; }
+fi
 
 if ! grep -q '^127.0.0.1' /etc/hosts;then echo '127.0.0.1 localhost' >> /etc/hosts;fi
 if grep -q agent-demo.metalsoft.io /etc/hosts;then
