@@ -234,7 +234,7 @@ services:
     privileged: true
     environment:
       - TZ=Etc/UTC
-      - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${DATACENTERNAME}-${SSL_HOSTNAME}/api/internal/ipc_guacamole
+      - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${SSL_HOSTNAME}/api/internal/ipc_guacamole
       - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=${GUACAMOLE_KEY}
   junos-driver:
     network_mode: bridge
