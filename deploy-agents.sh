@@ -9,9 +9,8 @@ test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-age
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
-CLI_DCONF="$DCCONF"
+CLI_DCCONF="$DCCONF"
 CLI_DATACENTERNAME="$DATACENTERNAME"
-
 
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
