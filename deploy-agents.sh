@@ -6,6 +6,13 @@ export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:5.0'
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.0'
+
+# Env vars set via CLI:
+CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
+CLI_DCONF="$DCCONF"
+CLI_DATACENTERNAME="$DATACENTERNAME"
+
+
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
@@ -154,7 +161,7 @@ if [ -z "$DCCONF" ];then
     fi
   fi
 
-  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+  if [[ "${NONINTERACTIVE_MODE}" == 1 ]] && [[ -z "${WEBSOCKET_TUNNEL_SECRET}" ]];then
     WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
   else
     if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
@@ -389,6 +396,11 @@ backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
 ENDD
 fi
+
+test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
 
 echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
 mkdir -p "${HOME}/.docker"
