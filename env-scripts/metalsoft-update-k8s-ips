@@ -1,5 +1,15 @@
 #!/bin/bash
 
+nc=$(tput sgr0)
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+orange=$(tput setaf 3)
+blue=$(tput setaf 4)
+purple=$(tput setaf 5)
+lightblue=$(tput setaf 12)
+lightred=$(tput setaf 9)
+lightgreen=$(tput setaf 10)
+
 if [ "$EUID" -ne 0 ];then
         echo "Please run as root"
         exit 1
@@ -131,9 +141,22 @@ if [ -d "/root/manifests" ];then
         microk8s helm3 upgrade --install traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
 fi
 
-timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb; sleep 5 && microk8s enable metallb:${cip}/32
+timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb
+# ec=$?
+# if [ $ec -ne 0 ];then
+#         # cleanup roken helm installs:
+#         if [ $(microk8s kubectl get secret -A |grep demo-metalsoft|grep helm|wc -l) -gt 1 ];then
+#         microk8s kubectl get secret -A |grep demo-metalsoft|grep helm|awk '{print $2}'|while read z;do microk8s kubectl delete secret -n demo-metalsoft $z;done
+#         fi
+#         timeout 180 microk8s disable metallb
+# fi
+sleep 5 && microk8s enable metallb:${cip}/32
+ec=$?
 #microk8s disable istio && sleep 5 && microk8s enable istio
 #timeout 180 microk8s disable ingress; sleep 5 && microk8s enable ingress
+
+test ${ec} -ne 0 && echo -e "\n${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
+test ${ec} -eq 0 && echo -e "\n${lightgreen}Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n"
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 
