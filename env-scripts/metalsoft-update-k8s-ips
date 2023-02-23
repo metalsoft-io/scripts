@@ -10,6 +10,13 @@ lightblue=$(tput setaf 12)
 lightred=$(tput setaf 9)
 lightgreen=$(tput setaf 10)
 
+#check if file is old
+mage=$(stat -c%Y $(realpath $0))
+myage=${mage:-0}
+age="$(( $(date +%s) - $myage ))"
+consider_old=$(( 60 * 60 * 24 * 4 ))
+test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
+
 if [ "$EUID" -ne 0 ];then
         echo "Please run as root"
         exit 1
@@ -155,8 +162,7 @@ ec=$?
 #microk8s disable istio && sleep 5 && microk8s enable istio
 #timeout 180 microk8s disable ingress; sleep 5 && microk8s enable ingress
 
-test ${ec} -ne 0 && echo -e "\n${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
-test ${ec} -eq 0 && echo -e "\n${lightgreen}Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n"
+test ${ec} -eq 0 && echo -e "\n[${ec}] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 

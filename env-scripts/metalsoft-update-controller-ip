@@ -1,5 +1,22 @@
 #!/bin/bash
 
+nc=$(tput sgr0)
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+orange=$(tput setaf 3)
+blue=$(tput setaf 4)
+purple=$(tput setaf 5)
+lightblue=$(tput setaf 12)
+lightred=$(tput setaf 9)
+lightgreen=$(tput setaf 10)
+
+#check if file is old
+mage=$(stat -c%Y $(realpath $0))
+myage=${mage:-0}
+age="$(( $(date +%s) - $myage ))"
+consider_old=$(( 60 * 60 * 24 * 4 ))
+test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
+
 aip="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
 
