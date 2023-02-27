@@ -4,8 +4,9 @@ echo "whoami: $(whoami)"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:5.0'
-test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.0'
+test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:v5.2.0'
+test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.2.0'
+test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL='registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:v5.2.0'
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -245,7 +246,7 @@ services:
   junos-driver:
     network_mode: bridge
     container_name: junos-driver
-    image: registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:integration
+    image: ${JUNOSDRIVER_URL}
     restart: always
     ports:
       - 8006:5000/tcp
