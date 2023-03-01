@@ -165,7 +165,7 @@ ec=$?
 test ${ec} -eq 0 && echo -e "\n[${ec}] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
-microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'10.255.146.148','${aip}') where datacenter_name='dc-demo'"
+microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'10.255.146.148','${aip}') where datacenter_name='dc-demo'" && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
 
 echo
 echo Done
