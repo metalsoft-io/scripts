@@ -20,4 +20,4 @@ do
                 touch /usr/local/bin/${z}
         fi
         rm -f "/tmp/${z}" "/tmp/${z}.sum"
-done
+done 2>/dev/null
