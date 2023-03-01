@@ -1,11 +1,9 @@
 #!/bin/bash
 
-if [ "$EUID" -ne 0 ];then
-        echo "Please run as root"
-        exit 1
-fi
+test "$EUID" -ne 0 && { echo "Please run as root"; exit 1; }
 
 cd /tmp/
+set -x
 for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips
 do
         if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" ];then
