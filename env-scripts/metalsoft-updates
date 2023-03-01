@@ -18,5 +18,6 @@ do
                 fi
                 chmod +x /usr/local/bin/${z}
         fi
+        touch /usr/local/bin/${z}
         rm -f "/tmp/${z}" "/tmp/${z}.sum"
 done
