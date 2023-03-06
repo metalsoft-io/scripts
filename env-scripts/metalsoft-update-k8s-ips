@@ -143,12 +143,17 @@ if [ -d "/root/manifests" ];then
         cd /root/manifests/
         echo update Traefik
         sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
-        microk8s helm3 repo add traefik https://helm.traefik.io/traefik
-        microk8s helm3 repo update
-        microk8s helm3 upgrade --install traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
+        #microk8s helm3 repo add traefik https://helm.traefik.io/traefik
+        #microk8s helm3 repo update
+        microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --debug
 fi
 
-timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb
+microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
+sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
+microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system
+ec=$?
+microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|while read z;do microk8s kubectl delete pod -n metallb-system $z;done
+#timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb
 # ec=$?
 # if [ $ec -ne 0 ];then
 #         # cleanup roken helm installs:
@@ -157,8 +162,7 @@ timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb
 #         fi
 #         timeout 180 microk8s disable metallb
 # fi
-sleep 5 && microk8s enable metallb:${cip}/32
-ec=$?
+#sleep 5 && microk8s enable metallb:${cip}/32
 #microk8s disable istio && sleep 5 && microk8s enable istio
 #timeout 180 microk8s disable ingress; sleep 5 && microk8s enable ingress
 
