@@ -148,23 +148,23 @@ if [ -d "/root/manifests" ];then
         #microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --debug
 fi
 
-microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
-sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
-microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system
+cat > /tmp/IPAddressPool.yaml << EOFF
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-addresspool
+  namespace: metallb-system
+spec:
+  addresses:
+  - ${cip}/32
+EOFF
+
+#microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
+#sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
+microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system --force=true
 ec=$?
 microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|while read z;do microk8s kubectl delete pod -n metallb-system $z;done
-#timeout 180 microk8s disable metallb || timeout 180 microk8s disable metallb
-# ec=$?
-# if [ $ec -ne 0 ];then
-#         # cleanup roken helm installs:
-#         if [ $(microk8s kubectl get secret -A |grep demo-metalsoft|grep helm|wc -l) -gt 1 ];then
-#         microk8s kubectl get secret -A |grep demo-metalsoft|grep helm|awk '{print $2}'|while read z;do microk8s kubectl delete secret -n demo-metalsoft $z;done
-#         fi
-#         timeout 180 microk8s disable metallb
-# fi
-#sleep 5 && microk8s enable metallb:${cip}/32
-#microk8s disable istio && sleep 5 && microk8s enable istio
-#timeout 180 microk8s disable ingress; sleep 5 && microk8s enable ingress
 
 test ${ec} -eq 0 && echo -e "\n[${ec}] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
 
