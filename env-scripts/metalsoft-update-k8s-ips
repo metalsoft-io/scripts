@@ -29,12 +29,12 @@ if [ -z $2 ];then
 fi
 
 #if ! nc -zw 4 1.1.1.1 80 >/dev/null 2>&1;then
-if [ -z "$3" ];then
-        if ! timeout 3 curl -sk https://1.1.1.1 -o /dev/null 2>&1;then
-                echo This script needs public internet access. Please run it once the condition is met.
-                exit 2
-        fi
-fi
+# if [ -z "$3" ];then
+#         if ! timeout 3 curl -sk https://1.1.1.1 -o /dev/null 2>&1;then
+#                 echo This script needs public internet access. Please run it once the condition is met.
+#                 exit 2
+#         fi
+# fi
 
 cip=$1
 aip=$2
