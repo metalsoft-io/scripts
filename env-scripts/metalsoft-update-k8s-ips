@@ -167,6 +167,7 @@ EOFF
 
 #microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
+microk8s status -w -a metallb -t 600
 microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system --force=true
 ec=$?
 microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|while read z;do microk8s kubectl delete pod -n metallb-system $z;done
