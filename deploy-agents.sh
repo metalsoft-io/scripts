@@ -186,7 +186,6 @@ services:
     network_mode: host
     container_name: agents
     image: ${DCAURL}
-    pull_policy: missing
     restart: always
     privileged: true
     #command: bash -c "update-ca-certificates"
@@ -226,7 +225,6 @@ services:
     network_mode: host
     container_name: dc-haproxy
     image: registry.metalsoft.dev/datacenter-agents-compiled/dc-haproxy:latest
-    pull_policy: missing
     restart: always
     privileged: true
     volumes:
@@ -239,7 +237,6 @@ services:
     network_mode: host
     container_name: dc-remoteconsole
     image: registry.metalsoft.dev/datacenter-agents-compiled/bsi-guac:latest
-    pull_policy: missing
     restart: always
     privileged: true
     environment:
@@ -250,7 +247,6 @@ services:
     network_mode: bridge
     container_name: junos-driver
     image: ${JUNOSDRIVER_URL}
-    pull_policy: missing
     restart: always
     ports:
       - 8006:5000/tcp
@@ -259,7 +255,6 @@ services:
     hostname: junos-driver
   websocket-tunnel-client:
     image: ${WSTCLIENT_URL}
-    pull_policy: missing
     container_name: websocket-tunnel-client
     restart: always
     hostname: websocket-tunnel-client
@@ -284,7 +279,6 @@ services:
     network_mode: host
     container_name: nfs-server
     image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:2.2.1
-    pull_policy: missing
     restart: unless-stopped
     privileged: true
     environment:
