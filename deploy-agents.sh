@@ -4,9 +4,9 @@ echo "whoami: $(whoami)"
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:v5.2.0'
-test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.2.0'
-test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL='registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:v5.2.0'
+test -z "$DCAGENTS_URL" && DCAGENTS_URL='registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:v5.2.1'
+test -z "$WSTCLIENT_URL" && WSTCLIENT_URL='registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:v5.2.1'
+test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL='registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:v5.2.1'
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -104,18 +104,18 @@ testOS
 if [ -z "$DCCONF" ];then
   echo
   echo Help:
-  echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path
+  echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path or provided the PEM via SSL_B64 variable
   echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base6HashOfCredentials SSL_PULL_URL=https://url.to/ssl.pem GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
   fi
   # echo DCCONF $DCCONF
   # export DCCONF="$DCCONF"
 
-  DCCONFDOWNLOADED=$(wget -q --no-check-certificate -O - "${DCCONF}")
+  DCCONFDOWNLOADED="$(wget -q --no-check-certificate -O - "${DCCONF}")"
 
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
@@ -137,6 +137,8 @@ if [ -z "$DCCONF" ];then
   if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
     wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
   fi
+
+  test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
 
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
     SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
