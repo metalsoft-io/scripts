@@ -41,6 +41,11 @@ aip=$2
 echo new k8s IP: $cip
 echo new agents IP: $aip
 
+# Save last used $aip so that we reference it when doing a new mysql update search/replace
+test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
+test -n "$last_aip" || last_aip="10.255.146.148"
+echo -n "$aip" > ${HOME}/.ms_last_aip
+
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
 test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io" >> /etc/hosts
@@ -176,7 +181,7 @@ microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|w
 test ${ec} -eq 0 && echo -e "\n[${ec}] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
-microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'10.255.146.148','${aip}') where datacenter_name='dc-demo'" && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
+microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
 
 echo
 echo Done
