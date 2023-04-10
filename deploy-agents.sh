@@ -236,11 +236,13 @@ services:
       - TZ=Etc/UTC
     hostname: dc-haproxy
   remote-console:
-    network_mode: host
+    network_mode: bridge
     container_name: dc-remoteconsole
     image: registry.metalsoft.dev/datacenter-agents-compiled/bsi-guac:latest
     restart: always
     privileged: true
+    ports:
+      - 7590:8081/tcp    
     environment:
       - TZ=Etc/UTC
       - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${SSL_HOSTNAME}/api/internal/ipc_guacamole
@@ -273,7 +275,7 @@ services:
       - DEBUG=*
       - DATACENTERS_SECRET=${WEBSOCKET_TUNNEL_SECRET}
       - GUACAMOLE_PLUGIN_HOST=${MAINIP}
-      - GUACAMOLE_PLUGIN_PORT=8081
+      - GUACAMOLE_PLUGIN_PORT=7590
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/hosts:/etc/hosts
