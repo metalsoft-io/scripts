@@ -3,7 +3,7 @@
 test "$EUID" -ne 0 && { echo "Please run as root"; exit 1; }
 
 cd /tmp/
-for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips
+for z in metalsoft-updates metalsoft-update-controller-ip metalsoft-update-k8s-ips netplan-cli
 do
         if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" ];then
                 curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} > /tmp/${z} || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} -O /tmp/${z}
