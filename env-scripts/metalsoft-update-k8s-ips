@@ -18,13 +18,13 @@ consider_old=$(( 60 * 60 * 24 * 4 ))
 test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
 if [ "$EUID" -ne 0 ];then
-        echo "Please run as root"
+        echo -e "[\e[1;31m✗\e[0m] Please run as root"
         exit 1
 fi
 
 if [ -z $2 ];then
-        echo "Please provide the new 'k8s IP' and 'agents IP' [ optional: http://_proxy_ip_:3128/ ]"
-        echo example: $(basename $0) 10.0.0.3 10.0.0.2 http://172.18.34.89:3128/
+        echo -e "[\e[1;31m✗\e[0m] Please provide the new 'k8s IP' and 'agents IP' [ optional: http://_proxy_ip_:3128/ ]"
+        echo "[i] example: $(basename $0) 10.0.0.3 10.0.0.2 http://172.18.34.89:3128/"
         exit 3;
 fi
 
@@ -38,8 +38,8 @@ fi
 
 cip=$1
 aip=$2
-echo new k8s IP: $cip
-echo new agents IP: $aip
+echo "[i] k8s IP: $cip"
+echo "[i] agents IP: $aip"
 
 # Save last used $aip so that we reference it when doing a new mysql update search/replace
 test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
@@ -52,7 +52,7 @@ test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo
 
 if [ ! -z $3 ];then
         proxy_url="$3"
-        echo setting up proxy via $proxy_url
+        echo "[i] setting up proxy via $proxy_url"
         lip="$(echo $cip|cut -d. -f1-3)"
         local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
         no_proxy="localhost,::1,.demo.metalsoft.io,.istio-system.svc,.svc.cluster.local,controller,$local_ips"
@@ -134,10 +134,10 @@ if [ -f /var/snap/microk8s/current/certs/csr.conf.template ];then
         fi
 fi
 
-echo Waiting for k8s service...
+echo "[i] Waiting for k8s service..."
 microk8s status --wait-ready -t 600 >/dev/null 2>&1
 sleep 10
-echo restarting microk8s to apply proxy settings...
+echo "[i] restarting microk8s to apply proxy settings..."
 microk8s stop
 sleep 5
 microk8s start
@@ -146,7 +146,7 @@ fi
 
 if [ -d "/root/manifests" ];then
         cd /root/manifests/
-        echo update Traefik
+        echo Updating Traefik
         sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
         if [ -d "/root/manifests/traefik_charts/traefik" ];then
                 microk8s helm3 upgrade traefik-demo-metalsoft /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
@@ -172,16 +172,16 @@ EOFF
 
 #microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
-echo "Waiting for Metallb pods to start, then the new configuration will be applied"
+echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
 until [ "$(microk8s kubectl  -n metallb-system get pod --no-headers|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
 microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system --force=true
 ec=$?
 microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|while read z;do microk8s kubectl delete pod -n metallb-system $z;done
 
-test ${ec} -eq 0 && echo -e "\n[${ec}] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
-
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
 
+test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n$(basename $0) $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n$(basename $0) $@ ${nc}\n"
+
 echo
-echo Done
+echo "[i] Done"
