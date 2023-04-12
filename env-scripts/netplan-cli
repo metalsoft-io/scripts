@@ -9,15 +9,17 @@ lightgreen=$(tput setaf 10)
 #yellow=$(tput setaf 11)
 #lightblue=$(tput setaf 12)
 
-all_nics="$(ip -o -4 a|awk '{print $2}'|xargs)"
-discovered_nic="$(ip -o -4 a|grep -v '\ lo'|awk '{print $2}'|head -1|xargs)"
+all_nics="$(ip link|grep -oP '^\d+:\ [\w\-]+'|awk '{print $2}'|xargs)"
+discovered_nic="$( ip a|grep altname|awk '{print $2}'|xargs)"
+test -z "$discovered_nic" && discovered_nic="$(ip -o -4 a|grep -v '\ lo'|awk '{print $2}'|head -1|xargs)"
+test -z "$discovered_nic" && discovered_nic="$(ip link|grep -oP '^\d+:\ [\w\-]+'|awk '{print $2}'|grep '^e'|head -1)"
 discovered_nic=${discovered_nic:-eth0}
 
-discovered_ns="$(netplan get ethernets.${discovered_nic}.nameservers.addresses|awk '{print $2}'|xargs|sed 's/\ /,/g')"
-discovered_ns=${discovered_ns:-1.1.1.1,8.8.8.8}
+#discovered_ns="$(netplan get ethernets.${discovered_nic}.nameservers.addresses|awk '{print $2}'|xargs|sed 's/\ /,/g')"
+#discovered_ns=${discovered_ns:-1.1.1.1,8.8.8.8}
 
 function usage {
-	echo -e "[i] Configure Servers Network [Using Interface: ${bold}${discovered_nic}${nc} from all: ${orange}${all_nics}${nc}]:\n$( basename $0) ${lightgreen}-i${nc} [interface: ${bold}${discovered_nic}${nc}]  ${lightgreen}-d${nc} [use dhcp: ${lightred}true${nc}|${lightred}false${nc}] ${lightgreen}-a${nc} [IPAddress/Mask: ${bold}10.0.0.11/24${nc}] ${lightgreen}-g${nc} [Gateway: ${bold}10.0.0.1${nc}] ${lightgreen}-n${nc} [Nameservers: ${bold}1.1.1.1${nc}${orange}[,8.8.8.8]${nc}]\nExample usage:\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-d${nc} ${lightred}true${nc}\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-a${nc} ${bold}10.0.0.11/24${nc} ${lightgreen}-g${nc} ${bold}10.0.0.1${nc} ${lightgreen}-n${nc} ${bold}${discovered_ns}${nc}"
+	echo -e "[i] Configure Servers Network [Using Interface: ${bold}${discovered_nic}${nc} from all: ${orange}${all_nics}${nc}]:\n$( basename $0) ${lightgreen}-i${nc} [interface: ${bold}${discovered_nic}${nc}]  ${lightgreen}-d${nc} [use dhcp: ${lightred}true${nc}|${lightred}false${nc}] ${lightgreen}-a${nc} [IPAddress/Mask: ${bold}10.0.0.11/24${nc}] ${lightgreen}-g${nc} [Gateway: ${bold}10.0.0.1${nc}] ${lightgreen}-n${nc} [Nameservers: ${bold}1.1.1.1${nc}${orange}[,8.8.8.8]${nc}]\nExample usage:\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-d${nc} ${lightred}true${nc}\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-a${nc} ${bold}10.0.0.11/24${nc} ${lightgreen}-g${nc} ${bold}10.0.0.1${nc} ${lightgreen}-n${nc} ${bold}1.1.1.1,8.8.8.8${nc}"
 	exit 0
 }
 
@@ -37,6 +39,7 @@ do
 done
 shift "$(( OPTIND - 1 ))"
 
+test -z "$ns" && ns='1.1.1.1,8.8.8.8'
 test "$list" == "1" && ip -c -br a && exit 0
 setnic=${nic:-$discovered_nic}
 test -z "$setnic" && echo -e "[\e[1;31m✗\e[0m]${lightred} Error: Interface was not set and not discovered, please set: -i NIC_NAME${nc}" && exit 1
@@ -45,6 +48,7 @@ function set_dhcp()
 {
 	setnic=${1:-$discovered_nic}
 	echo [i] Setting Interface: ${lightgreen}$setnic${nc} to DHCP mode.
+	find /etc/netplan/ -type f ! -name "*.bak"|while read z;do mv $z /etc/netplan/$(date +'%Y%m%d%H%M%S')_${z##*/}.bak;done
 	netplan set ethernets.${setnic}.dhcp4=true
 	netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
 	exit 0
@@ -54,6 +58,7 @@ function set_static()
 {
 	if [ -n "$setnic" ] && [ -n "$ip" ] && [[ $ip =~ "/" ]] && [ -n "$gw" ] && [ -n "$ns" ];then
 		echo [i] Setting Interface: ${lightgreen}$setnic${nc} to: IP/Mask: ${lightgreen}$ip${nc}, GW: ${lightgreen}$gw${nc}, Nameservers: ${lightgreen}$ns${nc}
+		find /etc/netplan/ -type f ! -name "*.bak"|while read z;do mv $z /etc/netplan/$(date +'%Y%m%d%H%M%S')_${z##*/}.bak;done
 		netplan set ethernets.${setnic}.dhcp4=no
 		netplan set ethernets.${setnic}.routes="[{\"to\": \"default\",\"via\":\"${gw}\"}]"
 		netplan set ethernets.${setnic}.nameservers.addresses=null
