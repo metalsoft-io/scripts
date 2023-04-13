@@ -23,7 +23,7 @@ function usage {
 	exit 0
 }
 
-while getopts ":i:d:a:g:n:l" flag
+while getopts ":i:d:a:g:n:lx" flag
 do
 	case "${flag}" in
 		#C) recreate_couchdb=1;;
