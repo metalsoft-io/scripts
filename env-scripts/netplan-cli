@@ -49,7 +49,6 @@ function set_dhcp()
 {
 	setnic=${1:-$discovered_nic}
 	echo [i] Setting Interface: ${lightgreen}$setnic${nc} to DHCP mode.
-	find /etc/netplan/ -type f ! -name "*.bak"|while read z;do mv $z /etc/netplan/$(date +'%Y%m%d%H%M%S')_${z##*/}.bak;done
 	netplan set ethernets.${setnic}.dhcp4=true
 	netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
 	exit 0
@@ -59,7 +58,6 @@ function set_static()
 {
 	if [ -n "$setnic" ] && [ -n "$ip" ] && [[ $ip =~ "/" ]] && [ -n "$gw" ] && [ -n "$nameservers" ];then
 		echo [i] Setting Interface: ${lightgreen}$setnic${nc} to: IP/Mask: ${lightgreen}$ip${nc}, GW: ${lightgreen}$gw${nc}, Nameservers: ${lightgreen}$nameservers${nc}
-		find /etc/netplan/ -type f ! -name "*.bak"|while read z;do mv $z /etc/netplan/$(date +'%Y%m%d%H%M%S')_${z##*/}.bak;done
 		netplan set ethernets.${setnic}.dhcp4=no
 		netplan set ethernets.${setnic}.routes="[{\"to\": \"default\",\"via\":\"${gw}\"}]"
 		netplan set ethernets.${setnic}.nameservers.addresses=null
