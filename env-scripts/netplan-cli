@@ -33,6 +33,7 @@ do
 		g) gw="${OPTARG}" ;;
 		n) nameservers="${OPTARG}" ;;
 		l) list=1 ;;
+		x) set -x ;;
 		:) echo "Error: -${OPTARG} requires an argument." && exit 1;;
 		h | *) usage;;
 	esac
