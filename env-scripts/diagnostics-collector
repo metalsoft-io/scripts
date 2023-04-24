@@ -1,1 +1,138 @@
 #!/bin/bash
+# vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
+
+nc=$(tput sgr0)
+bold=$(tput bold)
+orange=$(tput setaf 3)
+lightred=$(tput setaf 9)
+lightgreen=$(tput setaf 10)
+gray=$(tput setaf 8)
+#yellow=$(tput setaf 11)
+#lightblue=$(tput setaf 12)
+
+test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
+thedate="$(date +"%F-%H%M%S")"
+backupFolder=/var/backups/metalsoft
+backupFolder="${backupFolder%/}"
+
+function usage {
+  echo -e "[i] $( basename $0) gathers diagnostics for Metalsoft. Optional parameters:\n  ${bold}-c${nc} ${gray}[ Use for Controller ]${nc}\n  ${bold}-a${nc} ${gray}[ Use for Agent ]${nc}\n  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}\n  ${bold}-n${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}\n  ${bold}-b${nc} ${gray}specify a backup folder [ -b /tmp/ms-diagnostics ]${nc}\n  ${bold}-p${nc} ${gray}[ Push the diagnostics to Metalsoft via HTTPS ]${nc}"
+  exit 0
+}
+
+#auto determine if we are on agent or controller:
+test -d /opt/metalsoft/agents && type docker >/dev/null 2>&1 && gather='agent'
+type kubectl >/dev/null 2>&1 && gather='controller' && k='kubectl '
+type microk8s >/dev/null 2>&1 && gather='controller' && k='microk8s.kubectl '
+pushfile=
+
+while getopts ":k:n:b:cap" flag
+do
+  case "${flag}" in
+    p) pushfile="1" ;;
+    c) gather='controller' ;;
+    a) gather='agent' ;;
+    k) k="${OPTARG}" ;;
+    n) envname="${OPTARG}" ;;
+    b) backupFolder="${OPTARG}" ;;
+    :) echo "Error: -${OPTARG} requires an argument." && exit 1;;
+    h | *) usage;;
+  esac
+done
+shift "$(( OPTIND - 1 ))"
+
+
+test -n "$gather" && echo "[i] Gathering diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please use parameter -c or -a"; exit 1; }
+originalBackupFolder=${backupFolder}
+backupFolder=${backupFolder}/${thedate}
+
+function finish {
+  echo "[i] cleaning up.."
+  rm -rf "${backupFolder}"
+  exit 3
+}
+trap finish INT #EXIT
+mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
+
+function get_disks ()
+{
+  df -h 2>&1 >> ${backupFolder}/disks_stats.txt || true
+  lsblk 2>&1 >> ${backupFolder}/disks_stats.txt || true
+  fdisk -l 2>&1 >> ${backupFolder}/disks_stats.txt | true
+  cat /etc/hosts > ${backupFolder}/etc_hosts || true
+  cat /etc/resolv.conf > ${backupFolder}/etc_resolv_conf || true
+  ip a > ${backupFolder}/ip_stats || true
+  ip r >> ${backupFolder}/ip_stats || true
+  ip link >> ${backupFolder}/ip_stats || true
+}
+
+function get_k8s ()
+{
+  $k get pod -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+  $k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+  $k get deploy -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+}
+
+if [ "$gather" == 'controller' ];then
+  if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
+  test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-controller"
+
+        # TODO: in cases where env is not found, we should still collect info on what went wrong
+        if ! $k get ns|grep -q $envname ;then echo -e "[\e[1;31m✗\e[0m] Env $envname not found. Exiting..";exit 1;fi
+        mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
+
+        get_disks
+        get_k8s
+
+        echo "[i] backing up mysql databases.."
+        #backup all mysql DBs:
+        mysqldump_opts='--skip-comments'
+        all_dbs="$($k -n $envname exec $mysql_pod -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+        while read z;do
+          if [ "$z" == "mysql" ];then
+            $k -n $envname exec $mysql_pod -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
+          else
+            $k -n $envname exec $mysql_pod -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
+          fi
+        done <<< "$all_dbs"
+
+        echo "[i] backing up couchdb.."
+        #backup all couchdb DBs:
+        couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
+        test -n "$couchdbUrl" && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/${thedate}_couchdb_backup_${z}.gz;done || true
+
+        echo "[i] backing up k8s resources.."
+        # k8s backups
+        $k api-resources --no-headers|awk '{print $1}'|while read z;do mkdir -p ${backupFolder}/k8s_api_resources/${z};$k get $z --no-headers 2>/dev/null|awk '{print $1}'|while read a;do $k get $z $a -o yaml > ${backupFolder}/k8s_api_resources/${z}/${z}_${a}.yaml 2>/dev/null;done;done || true
+
+        echo "[i] backing up k8s container logs.."
+        test -d /var/log/containers && mkdir -p ${backupFolder}/container_logs && rsync -azL /var/log/containers/* ${backupFolder}/container_logs/ || true
+
+      else # if gather=agent
+        envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
+        envnamelabel="-${envname}-agent"
+        echo "[i] backing up disk stats.."
+        get_disks
+
+        echo "[i] backing up docker stats.."
+        test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-agents && rsync -a /opt/metalsoft/agents/ ${backupFolder}/docker-agents/ || true
+        test -d /opt/metalsoft/nfs-storage && ls -lahR /opt/metalsoft/nfs-storage/ > ${backupFolder}/nfs-storage_ls.txt || true
+        systemctl status docker > ${backupFolder}/docker_status.txt || true
+        docker ps -a > ${backupFolder}/docker_ps.txt || true
+        docker ps|grep Restarting > ${backupFolder}/docker_restarting.txt || true
+        docker ps|grep Restarting|awk '{print $1}'|while read z;do docker logs $z --tail=1000 > ${backupFolder}/docker_restarting_${z}.txt;done || true
+        docker images -a > ${backupFolder}/docker_images.txt || true
+        test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do rsync -a "${z}" ${backupFolder}/docker-logs/;done || true
+
+
+fi
+
+echo "[i] creating an archive.."
+resultFilename="${originalBackupFolder}/ms-diagnostics-${thedate}${envnamelabel}.tar.gz"
+tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >/dev/null 2>&1 && \
+  rm -rf $backupFolder && \
+  filesize="$(ls -lh "${resultFilename}" | awk '{print  $5}')"
+  echo -e "[\e[1;32m✓\e[0m][$filesize] Please provide the following file to Metalsoft Team:\n${lightgreen}${resultFilename}${nc}" || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
+
+test "$pushfile" == "1" && echo -n "[i] Trying to auto-push the diagnostics file to Metalsoft [HTTPS] " && curl -sk 'https://diagnostics-report.metalsoft.io/?a=121&f=992' -F diag=@"${resultFilename}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to Metalsoft, but encountered errors."; exit 1; }
+
