@@ -59,9 +59,11 @@ function set_static()
 	if [ -n "$setnic" ] && [ -n "$ip" ] && [[ $ip =~ "/" ]] && [ -n "$gw" ] && [ -n "$nameservers" ];then
 		echo [i] Setting Interface: ${lightgreen}$setnic${nc} to: IP/Mask: ${lightgreen}$ip${nc}, GW: ${lightgreen}$gw${nc}, Nameservers: ${lightgreen}$nameservers${nc}
 		netplan set ethernets.${setnic}.dhcp4=no
+		netplan set ethernets.${setnic}.routes=null
 		netplan set ethernets.${setnic}.routes="[{\"to\": \"default\",\"via\":\"${gw}\"}]"
 		netplan set ethernets.${setnic}.nameservers.addresses=null
 		netplan set ethernets.${setnic}.nameservers.addresses=[${nameservers}]
+		netplan set ethernets.${setnic}.addresses=null
 		netplan set ethernets.${setnic}.addresses=[${ip}]
 		netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
 		exit 0
