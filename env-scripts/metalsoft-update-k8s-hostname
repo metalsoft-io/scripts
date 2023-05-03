@@ -75,7 +75,7 @@ couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
 
 debuglog "Updating CouchDB.."
 curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
- cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .repoURLRootMaster = "https://repo.metalsoft.io" | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+ cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
 curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 
 debuglog "Updating manifests.."
@@ -89,18 +89,23 @@ $k apply -f $z >/dev/null;done
 echo -ne "\033[0K\r"
 
 debuglog "Reconfiguring traefik.."
-test -f /root/manifests/traefik-helm-chart-configvalues.yaml && \
-  $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 || true
-  $micro helm upgrade --install traefik-${ns} traefik/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"; exit 2; }
+if [ ! -f /root/manifests/traefik-helm-chart-configvalues.yaml ];then
+echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+exit 2
+else
+  $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+  $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+  $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
+  $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
+fi
 
-if [ -n "$path_ssl_key" -a -n "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
+if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
 debuglog "Applying SSL.."
-test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+test -n "$path_ssl_key" && test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+test -n "$path_ssl_crt" && test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
 
 test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
 test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
-
 $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
 fi
 
