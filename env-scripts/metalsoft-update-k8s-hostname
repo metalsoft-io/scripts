@@ -1,0 +1,109 @@
+#!/bin/bash
+
+if [ "$EUID" -ne 0 ];then
+        echo -e "[\e[1;31m✗\e[0m] Please run as root"
+        exit 1
+fi
+
+if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
+
+newhostname="$1"
+path_ssl_key="$2"
+path_ssl_crt="$3"
+me="$(basename $0)"
+usage ()
+{
+  echo -e "Usage: ${bold}${me} newHostname.com${nc} [path_to_ssl_key.pem path_to_ssl_crt.pem]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can also be used to provide base64 encoded key and crt"
+}
+
+nc=$(tput sgr0)
+bold=$(tput bold)
+orange=$(tput setaf 3)
+gray=$(tput setaf 8)
+lightred=$(tput setaf 9)
+lightgreen=$(tput setaf 10)
+yellow=$(tput setaf 11)
+pink=$(tput setaf 13)
+
+function debuglog ()
+{
+msg="$1"
+mtype="${2:-info}"
+case "$mtype" in
+    'fail') mtypeis="[\e[1;31m✗\e[0m]"; color=${3:-lightred} ;;
+    'success') mtypeis="[\e[1;32m✓\e[0m]"; color=${3:-lightgreen} ;;
+    *) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
+esac
+echo -e "${mtypeis} ${!color}${msg}${nc}"
+}
+#debuglog "Add user ${SSH_USER} to sudoers" info lightred
+
+namespace="$(${micro} kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
+test -z "$namespace" && namespace='demo-metalsoft'
+
+test -n "$1" || { usage; exit 1; }
+#test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
+if [ -n "$path_ssl_key" ];then
+test -f "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
+test -f "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+else
+        if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
+debuglog "SSL pem files not provided. SSL will not be updated!" info yellow
+        fi
+fi
+test -d /root/manifests || { debuglog "Error: /root/manifests is missing. Manifests are needed for this update to work properly " fail; exit 3; }
+test -f /root/manifests/traefik-helm-chart-configvalues.yaml || { debuglog "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
+
+micro=${KUBECTL_ALT:-microk8s}
+
+ns="$(${micro} kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
+k="${micro} kubectl -n ${ns} "
+
+ingresstraefik80="$($k get ingressroute| grep ingress-traefik-port80|head -1|awk '{print $1}')" || { echo "Error: Ingress for traefik port80 not found"; exit 1; }
+hostname="$($k get ingressroute -o json ${ingresstraefik80}|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
+
+debuglog "Waiting on Mysql pod.."
+until [ "$($k get pod --no-headers|grep 'mysql-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
+$k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update domains set name = REPLACE(name,'$hostname','$newhostname') where id=1"
+$k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update records set name = REPLACE(name,'$hostname','$newhostname'), content = REPLACE(content,'$hostname','$newhostname') where domain_id=1"
+
+
+debuglog "Waiting on CouchDB pod.."
+until [ "$($k get pod --no-headers|grep 'couchdb-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
+couchdbIp="$($k get svc | grep couchdb | awk '{print $3}')"
+couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
+
+debuglog "Updating CouchDB.."
+curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
+ cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .repoURLRootMaster = "https://repo.metalsoft.io" | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+
+debuglog "Updating manifests.."
+test -d /root/manifests && cd /root/manifests && \
+hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
+grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
+#$k apply -f . >/dev/null
+find /root/manifests -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+echo -ne "applying manifest: $z ... \033[0K\r";
+$k apply -f $z >/dev/null;done
+echo -ne "\033[0K\r"
+
+debuglog "Reconfiguring traefik.."
+test -f /root/manifests/traefik-helm-chart-configvalues.yaml && \
+  $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 || true
+  $micro helm upgrade --install traefik-${ns} traefik/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"; exit 2; }
+
+if [ -n "$path_ssl_key" -a -n "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
+debuglog "Applying SSL.."
+test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+
+test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
+test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
+
+$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+fi
+
+findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
+test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is now: ${pink}${findSslSubject}${nc}"
+
