@@ -37,6 +37,7 @@ esac
 echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
 #debuglog "Add user ${SSH_USER} to sudoers" info lightred
+micro=${KUBECTL_ALT:-microk8s}
 
 namespace="$(${micro} kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
 test -z "$namespace" && namespace='demo-metalsoft'
@@ -54,7 +55,6 @@ fi
 test -d /root/manifests || { debuglog "Error: /root/manifests is missing. Manifests are needed for this update to work properly " fail; exit 3; }
 test -f /root/manifests/traefik-helm-chart-configvalues.yaml || { debuglog "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
-micro=${KUBECTL_ALT:-microk8s}
 
 ns="$(${micro} kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
 k="${micro} kubectl -n ${ns} "
