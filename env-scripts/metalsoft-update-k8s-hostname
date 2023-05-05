@@ -1,8 +1,8 @@
 #!/bin/bash
 
 if [ "$EUID" -ne 0 ];then
-        echo -e "[\e[1;31m✗\e[0m] Please run as root"
-        exit 1
+  echo -e "[\e[1;31m✗\e[0m] Please run as root"
+  exit 1
 fi
 
 if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
@@ -16,41 +16,44 @@ usage ()
   echo -e "Usage: ${bold}${me} newHostname.com${nc} [path_to_ssl_key.pem path_to_ssl_crt.pem]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can also be used to provide base64 encoded key and crt"
 }
 
-nc=$(tput sgr0)
-bold=$(tput bold)
-orange=$(tput setaf 3)
-gray=$(tput setaf 8)
-lightred=$(tput setaf 9)
-lightgreen=$(tput setaf 10)
-yellow=$(tput setaf 11)
-pink=$(tput setaf 13)
+nc="\e[00m"
+bold="\e[1;37m"
+gray="\e[2;37m"
+lightred="\e[1;31m"
+lightgreen="\e[1;32m"
+yellow="\e[1;33m"
+pink="\e[1;35m"
 
 function debuglog ()
 {
-msg="$1"
-mtype="${2:-info}"
-case "$mtype" in
+  msg="$1"
+  mtype="${2:-info}"
+  case "$mtype" in
     'fail') mtypeis="[\e[1;31m✗\e[0m]"; color=${3:-lightred} ;;
     'success') mtypeis="[\e[1;32m✓\e[0m]"; color=${3:-lightgreen} ;;
     *) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
-esac
-echo -e "${mtypeis} ${!color}${msg}${nc}"
+  esac
+  echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
-#debuglog "Add user ${SSH_USER} to sudoers" info lightred
 micro=${KUBECTL_ALT:-microk8s}
+if [ -n "$newhostname" -a "$(echo -n "$newhostname"|wc -c)" -ge 5 -a "$(echo -n "$newhostname"|grep '\.'|wc -l)" -ge 1 ];then
+  echo -n ''
+else
+  usage; exit 1
+fi
+
 
 namespace="$(${micro} kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
 test -z "$namespace" && namespace='demo-metalsoft'
 
-test -n "$1" || { usage; exit 1; }
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
 if [ -n "$path_ssl_key" ];then
-test -f "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
-test -f "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+  test -f "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
+  test -f "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
 else
-        if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
-debuglog "SSL pem files not provided. SSL will not be updated!" info yellow
-        fi
+  if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
+    debuglog "SSL pem files not provided. SSL will not be updated!" info yellow
+  fi
 fi
 test -d /root/manifests || { debuglog "Error: /root/manifests is missing. Manifests are needed for this update to work properly " fail; exit 3; }
 test -f /root/manifests/traefik-helm-chart-configvalues.yaml || { debuglog "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
@@ -75,40 +78,40 @@ couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
 
 debuglog "Updating CouchDB.."
 curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
- cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+  cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+  curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 
 debuglog "Updating manifests.."
 test -d /root/manifests && cd /root/manifests && \
-hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
-grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
-#$k apply -f . >/dev/null
-find /root/manifests -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
-echo -ne "applying manifest: $z ... \033[0K\r";
-$k apply -f $z >/dev/null;done
-echo -ne "\033[0K\r"
+  hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
+  grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
+  #$k apply -f . >/dev/null
+  find /root/manifests -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+  echo -ne "applying manifest: $z ... \033[0K\r";
+  $k apply -f $z >/dev/null;done
+  echo -ne "\033[0K\r"
 
-debuglog "Reconfiguring traefik.."
-if [ ! -f /root/manifests/traefik-helm-chart-configvalues.yaml ];then
-echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-exit 2
-else
-  $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-  $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-  $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
-  $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
-fi
+  debuglog "Reconfiguring traefik.."
+  if [ ! -f /root/manifests/traefik-helm-chart-configvalues.yaml ];then
+    echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+    exit 2
+  else
+    $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+    $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+    $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
+    $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
+  fi
 
-if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
-debuglog "Applying SSL.."
-test -n "$path_ssl_key" && test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-test -n "$path_ssl_crt" && test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+  if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
+    debuglog "Applying SSL.."
+    test -n "$path_ssl_key" && test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+    test -n "$path_ssl_crt" && test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
 
-test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
-test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
-$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
-fi
+    test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
+    test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
+    $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+  fi
 
-findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
-test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is now: ${pink}${findSslSubject}${nc}"
+  findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
+  test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is now: ${pink}${findSslSubject}${nc}"
 
