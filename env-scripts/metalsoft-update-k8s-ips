@@ -1,14 +1,12 @@
 #!/bin/bash
 
-nc=$(tput sgr0)
-red=$(tput setaf 1)
-green=$(tput setaf 2)
-orange=$(tput setaf 3)
-blue=$(tput setaf 4)
-purple=$(tput setaf 5)
-lightblue=$(tput setaf 12)
-lightred=$(tput setaf 9)
-lightgreen=$(tput setaf 10)
+nc="\e[00m"
+bold="\e[1;37m"
+gray="\e[2;37m"
+lightred="\e[1;31m"
+lightgreen="\e[1;32m"
+yellow="\e[1;33m"
+pink="\e[1;35m"
 
 me="$(basename $0)"
 #check if file is old
@@ -16,7 +14,18 @@ mage=$(stat -c%Y $(realpath $0))
 myage=${mage:-0}
 age="$(( $(date +%s) - $myage ))"
 consider_old=$(( 60 * 60 * 24 * 4 ))
-test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
+function nextIP ()
+{
+        test -n "$1" || return
+        IFS='.' read -r a b c d <<< $1
+        ip=$(((a<<24)+(b<<16)+(c<<8)+d))
+        ((ip++))
+        _nextip="$(printf "%d.%d.%d.%d\n" $(((ip>>24)&255)) $(((ip>>16)&255)) $(((ip>>8)&255)) $((ip&255)))"
+        echo $_nextip
+}
+_localip="$(ip r get 1|head -1|awk '{print $7}')"
+_nextip="$(nextIP $_localip)"
+test $age -gt $consider_old && echo -e "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
 if [ "$EUID" -ne 0 ];then
         echo -e "[\e[1;31m✗\e[0m] Please run as root"
@@ -25,7 +34,7 @@ fi
 
 if [ -z $2 ];then
         echo -e "[\e[1;31m✗\e[0m] Please provide the new 'k8s IP' and 'agents IP' [ optional: http://_proxy_ip_:3128/ ]"
-        echo "[i] example: ${me} 10.0.0.3 10.0.0.2 http://172.18.34.89:3128/"
+        echo "[i] example: ${me} ${_localip:-10.0.0.1} ${_nextip:-10.0.0.2} http://172.18.34.89:3128/"
         exit 3;
 fi
 
@@ -180,7 +189,7 @@ microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|w
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ "$last_aip" != "$aip" ];then
-microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
+        microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
 fi
 
 test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
