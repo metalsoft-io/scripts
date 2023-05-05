@@ -1,13 +1,13 @@
 #!/bin/bash
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
 
-nc=$(tput sgr0)
-bold=$(tput bold)
-orange=$(tput setaf 3)
-lightred=$(tput setaf 9)
-lightgreen=$(tput setaf 10)
-#yellow=$(tput setaf 11)
-#lightblue=$(tput setaf 12)
+nc="\e[00m"
+bold="\e[1;37m"
+gray="\e[2;37m"
+lightred="\e[1;31m"
+lightgreen="\e[1;32m"
+yellow="\e[1;33m"
+pink="\e[1;35m"
 
 all_nics="$(ip link|grep -oP '^\d+:\ [\w\-]+'|awk '{print $2}'|xargs)"
 discovered_nic="$( ip a|grep altname|awk '{print $2}'|head -1|xargs)"
@@ -19,24 +19,24 @@ discovered_nic=${discovered_nic:-eth0}
 #discovered_nameservers=${discovered_nameservers:-1.1.1.1,8.8.8.8}
 
 function usage {
-	echo -e "[i] Configure Servers Network [Using Interface: ${bold}${discovered_nic}${nc} from all: ${orange}${all_nics}${nc}]:\n$( basename $0) ${lightgreen}-i${nc} [interface: ${bold}${discovered_nic}${nc}]  ${lightgreen}-d${nc} [use dhcp: ${lightred}true${nc}|${lightred}false${nc}] ${lightgreen}-a${nc} [IPAddress/Mask: ${bold}10.0.0.11/24${nc}] ${lightgreen}-g${nc} [Gateway: ${bold}10.0.0.1${nc}] ${lightgreen}-n${nc} [Nameservers: ${bold}1.1.1.1${nc}${orange}[,8.8.8.8]${nc}]\nExample usage:\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-d${nc} ${lightred}true${nc}\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-a${nc} ${bold}10.0.0.11/24${nc} ${lightgreen}-g${nc} ${bold}10.0.0.1${nc} ${lightgreen}-n${nc} ${bold}1.1.1.1,8.8.8.8${nc}"
-	exit 0
+        echo -e "[i] Configure Servers Network [Using Interface: ${bold}${discovered_nic}${nc} from all: ${orange}${all_nics}${nc}]:\n$( basename $0) ${lightgreen}-i${nc} [interface: ${bold}${discovered_nic}${nc}]  ${lightgreen}-d${nc} [use dhcp: ${lightred}true${nc}|${lightred}false${nc}] ${lightgreen}-a${nc} [IPAddress/Mask: ${bold}10.0.0.11/24${nc}] ${lightgreen}-g${nc} [Gateway: ${bold}10.0.0.1${nc}] ${lightgreen}-n${nc} [Nameservers: ${bold}1.1.1.1${nc}${orange}[,8.8.8.8]${nc}]\nExample usage:\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-d${nc} ${lightred}true${nc}\n$( basename $0) ${lightgreen}-i${nc} ${bold}${discovered_nic}${nc} ${lightgreen}-a${nc} ${bold}10.0.0.11/24${nc} ${lightgreen}-g${nc} ${bold}10.0.0.1${nc} ${lightgreen}-n${nc} ${bold}1.1.1.1,8.8.8.8${nc}"
+        exit 0
 }
 
 while getopts ":i:d:a:g:n:lx" flag
 do
-	case "${flag}" in
-		#C) recreate_couchdb=1;;
-		i) nic="${OPTARG}" ;;
-		d) dhcp="${OPTARG}" ;;
-		a) ip="${OPTARG}" ;;
-		g) gw="${OPTARG}" ;;
-		n) nameservers="${OPTARG}" ;;
-		l) list=1 ;;
-		x) set -x ;;
-		:) echo "Error: -${OPTARG} requires an argument." && exit 1;;
-		h | *) usage;;
-	esac
+        case "${flag}" in
+                #C) recreate_couchdb=1;;
+                i) nic="${OPTARG}" ;;
+                d) dhcp="${OPTARG}" ;;
+                a) ip="${OPTARG}" ;;
+                g) gw="${OPTARG}" ;;
+                n) nameservers="${OPTARG}" ;;
+                l) list=1 ;;
+                x) set -x ;;
+                :) echo "Error: -${OPTARG} requires an argument." && exit 1;;
+                h | *) usage;;
+        esac
 done
 shift "$(( OPTIND - 1 ))"
 
@@ -47,43 +47,43 @@ test -z "$setnic" && echo -e "[\e[1;31m✗\e[0m]${lightred} Error: Interface was
 
 function set_dhcp()
 {
-	setnic=${1:-$discovered_nic}
-	echo [i] Setting Interface: ${lightgreen}$setnic${nc} to DHCP mode.
-	netplan set ethernets.${setnic}.dhcp4=true
-	netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
-	exit 0
+        setnic=${1:-$discovered_nic}
+        echo -e "[i] Setting Interface: ${lightgreen}$setnic${nc} to DHCP mode."
+        netplan set ethernets.${setnic}.dhcp4=true
+        netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
+        exit 0
 }
 
 function calculate_gw()
 {
-_gwip="$1"
-IP=${_gwip%%/*}
-PREFIX=${_gwip##*/}
-IFS=. read -r i1 i2 i3 i4 <<< $IP
-IFS=. read -r xx m1 m2 m3 m4 <<< $(for a in $(seq 1 32); do if [ $(((a - 1) % 8)) -eq 0 ]; then echo -n .; fi; if [ $a -le $PREFIX ]; then echo -n 1; else echo -n 0; fi; done)
-gw="$(printf "%d.%d.%d.%d\n" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$(((i4 & (2#$m4)) + 1))")"
+        _gwip="$1"
+        IP=${_gwip%%/*}
+        PREFIX=${_gwip##*/}
+        IFS=. read -r i1 i2 i3 i4 <<< $IP
+        IFS=. read -r xx m1 m2 m3 m4 <<< $(for a in $(seq 1 32); do if [ $(((a - 1) % 8)) -eq 0 ]; then echo -n .; fi; if [ $a -le $PREFIX ]; then echo -n 1; else echo -n 0; fi; done)
+        gw="$(printf "%d.%d.%d.%d\n" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$(((i4 & (2#$m4)) + 1))")"
 }
 
 function set_static()
 {
-	if [ -n "$setnic" ] && [ -n "$ip" ] && [[ $ip =~ "/" ]] && [ -n "$nameservers" ];then
-		test -z "$gw" && calculate_gw $ip && echo "[i] ${bold}Gateway was found to be: ${nc}${lightred}$gw${nc} ${bold}If this is incorect use the -g parameter to set Gateway${nc}"
-		test -z "$gw" && echo -e "[\e[1;31m✗\e[0m] ${lightred} Error: Cannot set static IP as Gateway is not specified. Please set -g parameter${nc}" && exit 4
-		echo "[i] Setting Interface: ${lightgreen}$setnic${nc} to: IP/Mask: ${lightgreen}$ip${nc}, GW: ${lightgreen}$gw${nc}, Nameservers: ${lightgreen}$nameservers${nc}"
-		netplan set ethernets.${setnic}.dhcp4=no
-		netplan set ethernets.${setnic}.routes=null
-		netplan set ethernets.${setnic}.routes="[{\"to\": \"default\",\"via\":\"${gw}\"}]"
-		netplan set ethernets.${setnic}.nameservers.addresses=null
-		netplan set ethernets.${setnic}.nameservers.addresses=[${nameservers}]
-		netplan set ethernets.${setnic}.addresses=null
-		netplan set ethernets.${setnic}.addresses=[${ip}]
-		netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
-		exit 0
-	else
-		echo -e "[\e[1;31m✗\e[0m] ${lightred} Error: Cannot set static IP as not all parameters are specified correctly${nc}"
-		usage
-		exit 1
-	fi
+        if [ -n "$setnic" ] && [ -n "$ip" ] && [[ $ip =~ "/" ]] && [ -n "$nameservers" ];then
+                test -z "$gw" && calculate_gw $ip && echo -e "[i] ${bold}Using Gateway: ${nc}${lightred}$gw${nc} ${bold}If this is incorect use the -g parameter to set Gateway${nc}"
+                test -z "$gw" && echo -e "[\e[1;31m✗\e[0m] ${lightred} Error: Cannot set static IP as Gateway is not specified. Please set -g parameter${nc}" && exit 4
+                echo -e "[i] Setting Interface: ${lightgreen}$setnic${nc} to: IP/Mask: ${lightgreen}$ip${nc}, GW: ${lightgreen}$gw${nc}, Nameservers: ${lightgreen}$nameservers${nc}"
+                netplan set ethernets.${setnic}.dhcp4=no
+                netplan set ethernets.${setnic}.routes=null
+                netplan set ethernets.${setnic}.routes="[{\"to\": \"default\",\"via\":\"${gw}\"}]"
+                netplan set ethernets.${setnic}.nameservers.addresses=null
+                netplan set ethernets.${setnic}.nameservers.addresses=[${nameservers}]
+                netplan set ethernets.${setnic}.addresses=null
+                netplan set ethernets.${setnic}.addresses=[${ip}]
+                netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
+                exit 0
+        else
+                echo -e "[\e[1;31m✗\e[0m] ${lightred} Error: Cannot set static IP as not all parameters are specified correctly${nc}"
+                usage
+                exit 1
+        fi
 }
 test "$dhcp" == 'true' && set_dhcp $nic && exit 0
 test "$dhcp" != 'true' && set_static && exit 0
