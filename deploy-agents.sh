@@ -8,6 +8,7 @@ test -z "$IMAGES_TAG" && IMAGES_TAG='v5.2.1'
 test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
+test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -280,6 +281,20 @@ services:
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/hosts:/etc/hosts
+  ms-agent:
+    container_name: ms-agent
+    network_mode: host
+    hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${MSAGENT_URL}
+    restart: always
+    environment:
+      - TZ=Etc/UTC
+      - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
+      - AGENT_SECRET=${MS-TUNNEL-SECRET}
+      - DATACENTER_ID=${DATACENTERNAME}
+      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
+      - MONITORING_SERVICE_PORT=8099
+      - LOG_LEVEL=debug
   nfs:
     network_mode: host
     container_name: nfs-server
@@ -404,6 +419,7 @@ fi
 
 test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
 test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
 test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
 sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
 
