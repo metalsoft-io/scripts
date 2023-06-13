@@ -134,5 +134,6 @@ tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >
   filesize="$(ls -lh "${resultFilename}" | awk '{print  $5}')"
   echo -e "[\e[1;32m✓\e[0m][$filesize] Please provide the following file to Metalsoft Team:\n${lightgreen}${resultFilename}${nc}" || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
 
-test "$pushfile" == "1" && echo -n "[i] Trying to auto-push the diagnostics file to Metalsoft [HTTPS] " && curl -sk 'https://diagnostics-report.metalsoft.io/?a=121&f=992' -F diag=@"${resultFilename}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to Metalsoft, but encountered errors."; exit 1; }
-
+  if [ "$pushfile" == "1" ];then
+    echo -n "[i] Trying to auto-push the diagnostics file to Metalsoft [HTTPS] " && curl -sk 'https://diagnostics-report.metalsoft.io/?a=121&f=992' -F diag=@"${resultFilename}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to Metalsoft, but encountered errors."; exit 1; }
+  fi
