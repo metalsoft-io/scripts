@@ -35,6 +35,7 @@ localhost=$(hostname -i) || localhost=127.0.0.1
 
 function usage {
 	echo
+	echo "${orange}If using proxy make sure ${nc}${bold}http_proxy${nc}${orange} env variable is set${nc}"
 	echo "${bold}Options:${nc}"
 	echo "  ${bold}-a${nc} <agent_ip> ${gray} to check against${nc}"
 	echo "  ${bold}-o${nc} <oob_ip> ${gray} to check against${nc}"
@@ -107,7 +108,10 @@ function nc_connect_back_from_remote_ip_port {
 	echo -n "From ${orange}$connectToIp${nc} to ${orange}$pingIp:$port${nc}: "
 
 	if [[ ! $pingIp =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-		pingIp="$(dig +short $pingIp|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+		hostname_to_ips="$(dig +short $pingIp|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+		if [ $(echo $hostname_to_ips | awk '{print $1}') != "127.0.0.53" ]; then
+			$pingIp = $hostname_to_ips
+		fi
 	fi
 	for pingIp in $pingIp;do
 		if [[ $port == 'icmp' ]];then
@@ -116,7 +120,17 @@ function nc_connect_back_from_remote_ip_port {
 			if [[ "$protocol" == 'udp' ]];then
 				test "$(ssh -A  -p $sshport -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=20 -l root $connectToIp nc -nzuw5 $pingIp $port >/dev/null 2>&1 && echo 0 || echo 1)" == "0" && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
 			else
-				test "$(ssh -A  -p $sshport -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=20 -l root $connectToIp nc -nzw5 $pingIp $port >/dev/null 2>&1 && echo 0 || echo 1)" == "0" && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+				if [ $port = "80" ] || [ $port = "443" ]; then
+					if [ -z ${http_proxy+x} ]; then
+						test "$(ssh -A  -p $sshport -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=20 -l root $connectToIp nc -nzw5 $pingIp $port >/dev/null 2>&1 && echo 0 || echo 1)" == "0" && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+					else
+						proxy_ip=$(echo $http_proxy | cut -d ":" -f2 | cut -d"/" -f 3)
+						proxy_port=$(echo $http_proxy | cut -d ":" -f3)
+						test "$(ssh -A  -p $sshport -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=20 -l root $connectToIp nc -nzw5 -X connect -x ${proxy_ip}:${proxy_port} $pingIp $port >/dev/null 2>&1 && echo 0 || echo 1)" == "0" && echo ${lightgreen}via proxy success${nc} || echo ${lightred}via proxy failure${nc}
+					fi	
+				else
+					test "$(ssh -A  -p $sshport -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=20 -l root $connectToIp nc -nzw5 $pingIp $port >/dev/null 2>&1 && echo 0 || echo 1)" == "0" && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+				fi
 			fi
 		fi
 	done
@@ -131,12 +145,25 @@ function nc_check_remote_conn {
 	echo -n "From ${bold}${localhost}:$protocol${nc} to ${comment}${orange}$ip:$port${nc}: "
 
 	if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-		ip="$(dig +short $ip|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+		hostname_to_ips="$(dig +short $ip|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+		if [ $(echo $hostname_to_ips | awk '{print $1}') != "127.0.0.53" ]; then
+			$ip = $hostname_to_ips
+		fi
 	fi
 	for ip in $ip;do
 
 		if [ "$protocol" == "tcp" ];then
-			nc -nzw 5 $ip $port >/dev/null 2>&1 && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+			if [ $port = "80" ] || [ $port = "443" ]; then
+				if [ -z ${http_proxy+x} ]; then
+					nc -nzw 5 $ip $port >/dev/null 2>&1 && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+				else
+					proxy_ip=$(echo $http_proxy | cut -d ":" -f2 | cut -d"/" -f 3)
+					proxy_port=$(echo $http_proxy | cut -d ":" -f3)
+					nc -nzw 5 -X connect -x ${proxy_ip}:${proxy_port} $ip $port >/dev/null 2>&1 && echo ${lightgreen}via proxy success${nc} || echo ${lightred}via proxy failure${nc}
+				fi	
+			else
+				nc -nzw 5 $ip $port >/dev/null 2>&1 && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
+			fi
 		elif [ "$protocol" == "icmp" ];then
 			ping -c2 $ip >/dev/null 2>&1 && echo ${lightgreen}success${nc} || echo ${lightred}failure${nc}
 		else
@@ -186,6 +213,7 @@ nc_check_remote_conn 1.1.1.1 443 tcp
 
 nc_check_remote_conn downloads.dell.com 443 tcp
 nc_check_remote_conn downloads.linux.hpe.com 80 tcp
+nc_check_remote_conn apt.kubernetes.io 443 tcp
 nc_check_remote_conn repo.metalsoft.io 80 tcp
 nc_check_remote_conn registry.metalsoft.dev 443 tcp
 nc_check_remote_conn quay.io 443 tcp
@@ -206,7 +234,7 @@ fi
 
 
 for h in ${checkedNodesNoColor[@]};do
-	if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	if [[ $h =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 		i=$h
 	else
 		i="$(dig +short $h|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
@@ -224,6 +252,7 @@ for h in ${checkedNodesNoColor[@]};do
 
 			nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" downloads.linux.hpe.com 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
 			nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
@@ -293,6 +322,7 @@ if [ -n "$agentsIp" ];then
 			fi
 			nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" downloads.linux.hpe.com 80 tcp
+			nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
 			nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
