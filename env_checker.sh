@@ -219,8 +219,14 @@ nc_check_remote_conn registry.metalsoft.dev 443 tcp
 nc_check_remote_conn quay.io 443 tcp
 nc_check_remote_conn gcr.io 443 tcp
 nc_check_remote_conn cloud.google.com 443 tcp
+nc_check_remote_conn packages.cloud.google.com 443 tcp
 nc_check_remote_conn helm.traefik.io 443 tcp
+nc_check_remote_conn get.helm.sh 443 tcp
 nc_check_remote_conn k8s.io 443 tcp
+nc_check_remote_conn k8s.gcr.io 443 tcp
+nc_check_remote_conn git.k8s.io 443 tcp
+nc_check_remote_conn download.opensuse.org 443 tcp
+nc_check_remote_conn download.opensuse.org 80 tcp
 nc_check_remote_conn smtp.office365.com 587 tcp
 
 if [ $usek8s -eq 1 ];then
@@ -258,8 +264,14 @@ for h in ${checkedNodesNoColor[@]};do
 			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" helm.traefik.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" get.helm.sh 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" k8s.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" k8s.gcr.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" git.k8s.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp
 			nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
 
 			if [ -n "$node1svcports" ];then
@@ -328,6 +340,14 @@ if [ -n "$agentsIp" ];then
 			nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
 			nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" helm.traefik.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" get.helm.sh 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" k8s.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" k8s.gcr.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" git.k8s.io 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp
+			nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp
 			nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
 
 			#agents to try to connect to oob box:
