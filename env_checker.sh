@@ -26,7 +26,7 @@ yellow=$(tput setaf 11)
 #pink=$(tput setaf 13)
 #black=$(tput setaf 16)
 
-defaultTimeout=1
+defaultTimeout=3
 
 unset command_not_found_handle
 
