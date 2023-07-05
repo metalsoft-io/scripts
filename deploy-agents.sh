@@ -295,6 +295,9 @@ services:
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - MONITORING_SERVICE_PORT=8099
       - LOG_LEVEL=debug
+    volumes:
+      - /opt/metalsoft/nfs-storage:/iso
+      - /etc/ssl/certs:/etc/ssl/certs
   nfs:
     network_mode: host
     container_name: nfs-server
