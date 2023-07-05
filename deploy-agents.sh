@@ -362,12 +362,14 @@ frontend ft_local_apache_80
     acl host_dhcpe path_beg -i /os-ready
     acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
     acl has_special_uri path_beg /remote-console
+    acl has_iso_uri path_beg /iso
     use_backend bk_local_apache_8080 if host_ws
     use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
     use_backend bk_fullmetal_tftpe_8069 if host_tftp
     use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
     use_backend bk_repo_443 if host_repo
     use_backend bk_guacamole_tomcat_8080 if has_special_uri
+    use_backend bk_msagents_8099 if has_iso_uri
     default_backend bk_local_apache_81
 
 frontend ft_local_apache_443
@@ -417,6 +419,9 @@ backend bk_guacamole_tomcat_8080
 
 backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
+    
+backend bk_msagents_8099
+    server localhost 127.0.0.1:8099
 ENDD
 fi
 
