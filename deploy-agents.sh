@@ -1,6 +1,29 @@
 #!/bin/bash
 # set -x
-echo "whoami: $(whoami)"
+
+nc="\e[00m"
+bold="\e[1;37m"
+gray="\e[2;37m"
+lightred="\e[1;31m"
+lightgreen="\e[1;32m"
+yellow="\e[1;33m"
+pink="\e[1;35m"
+orange="\e[6;33m"
+
+
+function debuglog ()
+{
+  msg="$1"
+  mtype="${2:-info}"
+  case "$mtype" in
+    'fail') mtypeis="[\e[1;31m✗\e[0m]"; color=${3:-lightred} ;;
+    'success') mtypeis="[\e[1;32m✓\e[0m]"; color=${3:-lightgreen} ;;
+    *) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
+  esac
+  echo -e "${mtypeis} ${!color}${msg}${nc}"
+}
+
+debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
@@ -20,7 +43,7 @@ test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 
 function testOS
 {
-  echo :: testing OS version
+  debuglog "testing OS version"
   if ! grep -q "Ubuntu 2" /etc/issue; then
     echo
     echo "This script is only compatible with Ubuntu 20+ Operating system"
@@ -32,38 +55,32 @@ function testOS
 
 function nc_check_remote_conn {
 
-nc=$(tput sgr0)
-bold=$(tput bold)
-orange=$(tput setaf 3)
-lightred=$(tput setaf 9)
-lightgreen=$(tput setaf 10)
+  ip=$1
+  port=$2
+  protocol=${3:-tcp}
+  comment="$4 "
+  test "$protocol" == 'icmp' && port=icmp
 
-	ip=$1
-	port=$2
-	protocol=${3:-tcp}
-	comment="$4 "
-	test "$protocol" == 'icmp' && port=icmp
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
+    apt-get update -qq && \
+    apt-get -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
 
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { echo :: installing required packages && \
-    apt update -qq && \
-    apt -yqqqq install curl ca-certificates net-tools jq dnsutils; }
+  echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
 
-	echo -n "Conn check from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
+  if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
+  fi
+  for ip in $ip;do
 
-	if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-		ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
-	fi
-	for ip in $ip;do
+    if [ "$protocol" == "tcp" ];then
+      nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
+    elif [ "$protocol" == "icmp" ];then
+      ping -c2 "$ip" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
+    else
+      nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
 
-		if [ "$protocol" == "tcp" ];then
-			nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
-		elif [ "$protocol" == "icmp" ];then
-			ping -c2 "$ip" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
-		else
-			nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && echo "${lightgreen}success${nc}" || echo "${lightred}failure${nc}"
-
-		fi
-	done
+    fi
+  done
 }
 
 nc_check_remote_conn repo.metalsoft.io 80 tcp
@@ -75,16 +92,16 @@ function manageSSL
 {
   test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
   test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
-  test -z "${ssl}" && echo ":: Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
+  test -z "${ssl}" && debuglog "Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
     DISCOVERED_SSL_HOSTNAMES="$(openssl x509 -in "$ssl" -noout -text 2>/dev/null|grep DNS:|head -1)"
     DISCOVERED_SSL_HOSTNAME="$(echo "$DISCOVERED_SSL_HOSTNAMES"|sed 's/,\s\+/\n/g;'|sed 's/.*DNS://g'|cut -d. -f2-10|head -1)"
     if [ -z "$DISCOVERED_SSL_HOSTNAME" ];then
-      echo WARNING: no hostname discovered in SSL file
+      debuglog "WARNING: no hostname discovered in SSL file" bold yellow
       # return 1
     fi
     if cp "$ssl" /opt/metalsoft/agents/ssl-cert.pem;then
-      echo :: copied "$ssl" to /opt/metalsoft/agents/ssl-cert.pem. Found SSL hosts: "$DISCOVERED_SSL_HOSTNAMES"
+      debuglog "copied $ssl to /opt/metalsoft/agents/ssl-cert.pem. Found SSL hosts: $DISCOVERED_SSL_HOSTNAMES"
       return 0
     else
       echo Error: could not copy "$ssl"
@@ -101,6 +118,7 @@ function manageSSL
 }
 
 testOS
+debuglog "Checking DCONF"
 
 if [ -z "$DCCONF" ];then
   echo
@@ -116,29 +134,37 @@ if [ -z "$DCCONF" ];then
   # echo DCCONF $DCCONF
   # export DCCONF="$DCCONF"
 
-  DCCONFDOWNLOADED="$(wget -q --no-check-certificate -O - "${DCCONF}")"
+  debuglog "Pulling DC config URL"
+  DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
 
+  debuglog "Creating folders"
   mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
+  debuglog "Enabling nfs/nfsd kernel modules"
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
   test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
 
+  debuglog "Setting static DNS resolvers in /etc/resolv.conf"
   if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
   if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
 
 
-  command -v docker > /dev/null || { echo :: Install docker && \
+  debuglog "Ensuring Docker is installed"
+  command -v docker > /dev/null || { debuglog "Install docker" && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-    apt update -qq && apt -yqqqq upgrade && \
-    apt-get -yqqqq install docker-ce docker-ce-cli containerd.io; }
+    apt-get update -qq && apt-get -y upgrade >/dev/null && \
+    apt-get -y install docker-ce docker-ce-cli containerd.io >/dev/null; }
 
-  test -x /usr/local/bin/docker-compose || { echo :: Install docker-compose && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
+  debuglog "Ensuring docker-compose is installed"
+  test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
 
+  debuglog "Ensuring CA is installed"
   if [ ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt ];then
-    wget https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
+    wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
   fi
 
+  debuglog "Checking provided SSL"
   test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
 
   if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
@@ -151,9 +177,10 @@ if [ -z "$DCCONF" ];then
   if [ -z "$SSL_HOSTNAME" ];then
     read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
     SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
-    echo SSL_HOSTNAME set to: "$SSL_HOSTNAME"
+    debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
   fi
 
+  debuglog "Setting GUACAMOLE_KEY"
   if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
     GUACAMOLE_KEY="${GUACAMOLE_KEY:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}"
   else
@@ -164,6 +191,7 @@ if [ -z "$DCCONF" ];then
     fi
   fi
 
+  debuglog "Setting WEBSOCKET_TUNNEL_SECRET"
   if [[ "${NONINTERACTIVE_MODE}" == 1 ]] && [[ -z "${WEBSOCKET_TUNNEL_SECRET}" ]];then
     WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
   else
@@ -174,6 +202,7 @@ if [ -z "$DCCONF" ];then
     fi
   fi
 
+  debuglog "Setting DATACENTERNAME"
   DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
   DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
   if [ -z "$DATACENTERNAME" ];then
@@ -181,7 +210,7 @@ if [ -z "$DCCONF" ];then
   fi
   HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
   if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
-    echo :: Creating /opt/metalsoft/agents/docker-compose.yaml
+    debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
     cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
 services:
@@ -243,7 +272,7 @@ services:
     restart: always
     privileged: true
     ports:
-      - 7590:8081/tcp    
+      - 7590:8081/tcp
     environment:
       - TZ=Etc/UTC
       - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${SSL_HOSTNAME}/api/internal/ipc_guacamole
@@ -298,11 +327,11 @@ services:
       - 32767:32767
 
 ENDD
-fi
+      fi
 
-if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
-  echo :: Creating /opt/metalsoft/agents/haproxy.cfg
-  cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
+      if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
+        debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
+        cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
     chroot /var/lib/haproxy
     user root
@@ -400,52 +429,54 @@ backend bk_guacamole_tomcat_8080
 backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
 ENDD
-fi
+    fi
 
-test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+    debuglog "Updating /opt/metalsoft/agents/docker-compose.yaml"
+    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
 
-echo :: Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:
-mkdir -p "${HOME}/.docker"
-test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
+    debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
+    mkdir -p "${HOME}/.docker"
+    test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
 
-docker login registry.metalsoft.dev
-while [ $? -ne 0 ]; do
-  echo :: Lets try docker login again:
-  docker login registry.metalsoft.dev
-  sleep 1
-done
+    docker login registry.metalsoft.dev
+    while [ $? -ne 0 ]; do
+      debuglog "Lets try docker login again:"
+      docker login registry.metalsoft.dev
+      sleep 1
+    done
 
-echo ":: Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
-systemctl disable --now systemd-resolved.service
-systemctl disable --now rpcbind || true
-systemctl disable --now rpcbind.socket || true
-test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+    debuglog "starting docker containers"
+    systemctl start docker.service
+    cd /opt/metalsoft/agents
+    if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+      debuglog "pulling latest images.."
+      docker-compose pull -q || docker compose pull -q
+    else
+      docker-compose pull || docker compose pull
+    fi
+    docker-compose up -d
+    if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
+      sleep 2
+      docker ps
+      sleep 2
+      docker ps
+    fi
 
-echo :: starting docker containers
-systemctl start docker.service
-cd /opt/metalsoft/agents
-if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-  echo :: pulling latest images..
-  docker-compose pull -q
-else
-  docker-compose pull
-fi
-docker-compose up -d
-if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
-  sleep 2
-  docker ps
-  sleep 2
-  docker ps
-fi
+    if [ -f /etc/ssh/ms_banner ];then
+      debuglog "update /etc/ssh/ms_banner"
+      if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
+      dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
+      dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
+    fi
 
-if [ -f /etc/ssh/ms_banner ];then
-  echo ":: update /etc/ssh/ms_banner"
-  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
-  dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
-  dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
-fi
+    debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
+    systemctl disable --now systemd-resolved.service
+    systemctl disable --now rpcbind || true
+    systemctl disable --now rpcbind.socket || true
+    systemctl daemon-reload
+    test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 
-echo :::: All done. to check containers, use: docker ps
+    debuglog "All done. to check containers, use: docker ps" success
