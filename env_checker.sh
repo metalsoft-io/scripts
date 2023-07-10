@@ -227,7 +227,6 @@ function nc_connect_back_from_remote_ip_port {
 			nc_check_remote_conn apt.kubernetes.io 443 tcp
 			nc_check_remote_conn repo.metalsoft.io 80 tcp
 			nc_check_remote_conn registry.metalsoft.dev 443 tcp
-			nc_check_remote_conn quay.io 443 tcp
 			nc_check_remote_conn gcr.io 443 tcp
 			nc_check_remote_conn cloud.google.com 443 tcp
 			nc_check_remote_conn packages.cloud.google.com 443 tcp
@@ -239,6 +238,13 @@ function nc_connect_back_from_remote_ip_port {
 			nc_check_remote_conn download.opensuse.org 443 tcp
 			nc_check_remote_conn download.opensuse.org 80 tcp
 			nc_check_remote_conn smtp.office365.com 587 tcp
+			nc_check_remote_conn quay.io 443 tcp
+			nc_check_remote_conn cdn.quay.io 443 tcp
+			nc_check_remote_conn cdn01.quay.io 443 tcp
+			nc_check_remote_conn cdn02.quay.io 443 tcp
+			nc_check_remote_conn cdn03.quay.io 443 tcp
+			nc_check_remote_conn docker.io 443 tcp
+			nc_check_remote_conn registry-1.docker.io 443 tcp
 
 			if [ $usek8s -eq 1 ];then
 				if [ -n "$node1svcports" ];then
@@ -272,7 +278,6 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
 						nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
-						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp
@@ -284,6 +289,13 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp
 						nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
+						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn01.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn02.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn03.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" docker.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" registry-1.docker.io 443 tcp
 
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do
@@ -348,7 +360,6 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp $defaultTimeout '[agent]'
@@ -360,7 +371,13 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp $defaultTimeout '[agent]'
-
+						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" cdn.quay.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" cdn01.quay.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" cdn02.quay.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" cdn03.quay.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" docker.io 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" registry-1.docker.io 443 tcp $defaultTimeout '[agent]'
 												#agents to try to connect to oob box:
 												if [ -n "$oobIp" ];then
 													for o in ${oobIp};do
