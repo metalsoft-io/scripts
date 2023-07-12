@@ -243,8 +243,12 @@ function nc_connect_back_from_remote_ip_port {
 			if [ $usek8s -eq 1 ];then
 				if [ -n "$node1svcports" ];then
 					for nsvc in ${node1svcports};do
-						clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-						test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+						if which kubectl >/dev/null 2>&1;then
+							clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+							test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+						else
+							echo "kubectl not found on this node, skipping check towards: $clusterip $nsvc"
+						fi
 					done
 				fi
 			fi
@@ -288,8 +292,12 @@ function nc_connect_back_from_remote_ip_port {
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do
 								if [ $usek8s -eq 1 ];then
-									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-									test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+									if which kubectl >/dev/null 2>&1;then
+										clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+										test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+									else
+										echo "kubectl not found on this node, skipping TCP check towards: $z $clusterip $nsvc"
+									fi
 								else
 									nc_start_listener_and_check_remote_ip_port $h $nsvc tcp 10
 								fi
@@ -299,8 +307,12 @@ function nc_connect_back_from_remote_ip_port {
 						if [ -n "$node1svcportsudp" ];then
 							for nsvc in ${node1svcportsudp};do
 								if [ $usek8s -eq 1 ];then
-									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
-									test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp
+									if which kubectl >/dev/null 2>&1;then
+										clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
+										test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp
+									else
+										echo "kubectl not found on this node, skipping UDP check towards: $z $clusterip $nsvc"
+									fi
 								else
 									nc_start_listener_and_check_remote_ip_port $h $nsvc udp 10
 								fi
@@ -331,16 +343,24 @@ function nc_connect_back_from_remote_ip_port {
 					if nc -nzw${defaultTimeout} "$z" $sshport >/dev/null 2>&1;then
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do
-								clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-								#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-								nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+								if which kubectl >/dev/null 2>&1;then
+									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+									#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+									nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+								else
+									echo "kubectl not found on this node, skipping TCP check towards: $z $clusterip ${nsvc}"
+								fi
 							done
 						fi
 						if [ -n "$node1svcportsudp" ];then
 							for nsvc in ${node1svcportsudp};do
-								clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
-								#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-								nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp 10
+								if which kubectl >/dev/null 2>&1;then
+									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
+									#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+									nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp 10
+								else
+									echo "kubectl not found on this node, skipping UDP check towards: $z  $clusterip $nsvc"
+								fi
 							done
 						fi
 						nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp $defaultTimeout '[agent]'
