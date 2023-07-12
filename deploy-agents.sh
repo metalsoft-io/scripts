@@ -457,7 +457,7 @@ ENDD
     else
       docker-compose pull || docker compose pull
     fi
-    docker-compose up -d
+    docker-compose up -d || docker compose up -d
     if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
       sleep 2
       docker ps
