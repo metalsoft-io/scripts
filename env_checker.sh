@@ -28,6 +28,8 @@ yellow=$(tput setaf 11)
 
 defaultTimeout=3
 
+defaultTimeout=3
+
 unset command_not_found_handle
 
 which nc > /dev/null || { echo 'nc is needed for this script to run properly. Please install netcat' && exit 1; }
@@ -87,6 +89,8 @@ function nc_start_listener_and_check_remote_ip_port {
 	protocol=${3:-tcp}
 	to=${4:-$defaultTimeout}
 	proto=''
+	fromComment="$5"
+	toComment="$6"
 	fromComment="$5"
 	toComment="$6"
 
@@ -227,6 +231,7 @@ function nc_connect_back_from_remote_ip_port {
 			nc_check_remote_conn apt.kubernetes.io 443 tcp
 			nc_check_remote_conn repo.metalsoft.io 80 tcp
 			nc_check_remote_conn registry.metalsoft.dev 443 tcp
+			nc_check_remote_conn quay.io 443 tcp
 			nc_check_remote_conn gcr.io 443 tcp
 			nc_check_remote_conn cloud.google.com 443 tcp
 			nc_check_remote_conn packages.cloud.google.com 443 tcp
@@ -238,19 +243,16 @@ function nc_connect_back_from_remote_ip_port {
 			nc_check_remote_conn download.opensuse.org 443 tcp
 			nc_check_remote_conn download.opensuse.org 80 tcp
 			nc_check_remote_conn smtp.office365.com 587 tcp
-			nc_check_remote_conn quay.io 443 tcp
-			nc_check_remote_conn cdn.quay.io 443 tcp
-			nc_check_remote_conn cdn01.quay.io 443 tcp
-			nc_check_remote_conn cdn02.quay.io 443 tcp
-			nc_check_remote_conn cdn03.quay.io 443 tcp
-			nc_check_remote_conn docker.io 443 tcp
-			nc_check_remote_conn registry-1.docker.io 443 tcp
 
 			if [ $usek8s -eq 1 ];then
 				if [ -n "$node1svcports" ];then
 					for nsvc in ${node1svcports};do
-						clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-						test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+						if which kubectl >/dev/null 2>&1;then
+							clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+							test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+						else
+							echo "kubectl not found on this node, skipping check towards: $clusterip $nsvc"
+						fi
 					done
 				fi
 			fi
@@ -300,8 +302,12 @@ function nc_connect_back_from_remote_ip_port {
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do
 								if [ $usek8s -eq 1 ];then
-									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-									test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+									if which kubectl >/dev/null 2>&1;then
+										clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+										test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+									else
+										echo "kubectl not found on this node, skipping TCP check towards: $z $clusterip $nsvc"
+									fi
 								else
 									nc_start_listener_and_check_remote_ip_port $h $nsvc tcp 10
 								fi
@@ -311,8 +317,12 @@ function nc_connect_back_from_remote_ip_port {
 						if [ -n "$node1svcportsudp" ];then
 							for nsvc in ${node1svcportsudp};do
 								if [ $usek8s -eq 1 ];then
-									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
-									test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp
+									if which kubectl >/dev/null 2>&1;then
+										clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
+										test ! -z "$clusterip" && nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp
+									else
+										echo "kubectl not found on this node, skipping UDP check towards: $z $clusterip $nsvc"
+									fi
 								else
 									nc_start_listener_and_check_remote_ip_port $h $nsvc udp 10
 								fi
@@ -343,16 +353,24 @@ function nc_connect_back_from_remote_ip_port {
 					if nc -nzw${defaultTimeout} "$z" $sshport >/dev/null 2>&1;then
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do
-								clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
-								#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-								nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+								if which kubectl >/dev/null 2>&1;then
+									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/TCP"|awk '{print $5}')
+									#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+									nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc tcp
+								else
+									echo "kubectl not found on this node, skipping TCP check towards: $z $clusterip ${nsvc}"
+								fi
 							done
 						fi
 						if [ -n "$node1svcportsudp" ];then
 							for nsvc in ${node1svcportsudp};do
-								clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
-								#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
-								nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp 10
+								if which kubectl >/dev/null 2>&1;then
+									clusterip=$(kubectl get svc -A|egrep ",?${nsvc}:.*\/UDP"|awk '{print $5}')
+									#test ! -z "$clusterip" && nc_check_remote_conn $clusterip $nsvc
+									nc_connect_back_from_remote_ip_port "$z" $clusterip $nsvc udp 10
+								else
+									echo "kubectl not found on this node, skipping UDP check towards: $z  $clusterip $nsvc"
+								fi
 							done
 						fi
 						nc_connect_back_from_remote_ip_port "$z" downloads.dell.com 443 tcp $defaultTimeout '[agent]'
@@ -360,6 +378,7 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp $defaultTimeout '[agent]'
+						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp $defaultTimeout '[agent]'
@@ -371,13 +390,7 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp $defaultTimeout '[agent]'
 						nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" cdn.quay.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" cdn01.quay.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" cdn02.quay.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" cdn03.quay.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" docker.io 443 tcp $defaultTimeout '[agent]'
-						nc_connect_back_from_remote_ip_port "$z" registry-1.docker.io 443 tcp $defaultTimeout '[agent]'
+
 												#agents to try to connect to oob box:
 												if [ -n "$oobIp" ];then
 													for o in ${oobIp};do
