@@ -453,11 +453,11 @@ ENDD
     cd /opt/metalsoft/agents
     if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
       debuglog "pulling latest images.."
-      docker-compose pull -q || docker compose pull -q
+      docker compose pull -q
     else
-      docker-compose pull || docker compose pull
+      docker compose pull
     fi
-    docker-compose up -d || docker compose up -d
+    docker compose up -d
     if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
       sleep 2
       docker ps
