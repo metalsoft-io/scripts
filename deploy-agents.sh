@@ -43,6 +43,7 @@ test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 
 function testOS
 {
+  echo
   debuglog "testing OS version"
   if ! grep -q "Ubuntu 2" /etc/issue; then
     echo
@@ -155,6 +156,8 @@ if [ -z "$DCCONF" ];then
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
     apt-get update -qq && apt-get -y upgrade >/dev/null && \
     apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+
+  docker compose 2>/dev/null || { apt-get update -qq && apt-get -y install docker-compose-plugin; }
 
   # debuglog "Ensuring docker-compose is installed"
   # test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
