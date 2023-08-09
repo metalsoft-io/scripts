@@ -27,7 +27,7 @@ debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-test -z "$IMAGES_TAG" && IMAGES_TAG='v5.2.1'
+test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
 test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
