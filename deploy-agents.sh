@@ -152,12 +152,17 @@ if [ -z "$DCCONF" ];then
 
   debuglog "Ensuring Docker is installed"
   command -v docker > /dev/null || { debuglog "Install docker" && \
+    debuglog "Getting https://download.docker.com/linux/ubuntu/gpg" && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    debuglog "Adding repository to /etc/apt/sources.list.d/docker.list" && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+    debuglog "Apt update.." && \
     apt-get update -qq && apt-get -y upgrade >/dev/null && \
+    debuglog "Apt installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
     apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
 
-  docker compose >/dev/null 2>&1 || { apt-get update -qq && apt-get -y install docker-compose-plugin; }
+    debuglog "Checking if 'docker compose' is available"
+  docker compose >/dev/null 2>&1 || { debuglog "Installing docker-compose-plugin" && apt-get update -qq && apt-get -y install docker-compose-plugin; }
 
   # debuglog "Ensuring docker-compose is installed"
   # test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
