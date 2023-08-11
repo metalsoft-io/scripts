@@ -17,6 +17,27 @@ age="$(( $(date +%s) - $myage ))"
 consider_old=$(( 60 * 60 * 24 * 4 ))
 test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
+if [ "$EUID" -ne 0 ];then
+        echo -e "[\e[1;31m✗\e[0m] Please run as root"
+        exit 1
+fi
+
+if docker >/dev/null 2>&1;then
+        if docker compose >/dev/null 2>&1;then
+                docker_compose="docker compose"
+        else
+                if docker-compose >/dev/null 2>&1;then
+                        docker_compose="docker-compose"
+                else
+                        echo "docker-compose-plugin is missing and docker-compose is not installed. One of these is needed. Exiting.."
+                        exit 2
+                fi
+        fi
+else
+        echo "docker is missing. Exiting.."
+        exit 1
+fi
+
 aip="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
 
@@ -114,6 +135,6 @@ else
         echo "${ip} demo.metalsoft.io" >> /etc/hosts
 fi
 
-cd /opt/metalsoft/agents/ && docker-compose pull && docker-compose down && sleep 5 && docker-compose up -d
+cd /opt/metalsoft/agents/ && ${docker_compose} pull && ${docker_compose} down && sleep 2 && ${docker_compose} up -d
 test -x /etc/ms-pre-login-ips && /etc/ms-pre-login-ips
 echo Done
