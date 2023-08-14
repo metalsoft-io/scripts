@@ -33,7 +33,7 @@ test -z "$MSAGENTS_URL" && MSAGENTS_URL="registry.metalsoft.dev/datacenter-agent
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
 
-test -z "$MSAGENTS_SECRET" && MSAGENTS_SECRET='default'
+test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -329,7 +329,7 @@ services:
     environment:
       - TZ=Etc/UTC
       - AGENT_ID=agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
-      - AGENT_SECRET=${MSAGENTS_SECRET}
+      - AGENT_SECRET=${MS_TUNNEL_SECRET}
       - DATACENTER_ID=${DATACENTERNAME}
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - MONITORING_SERVICE_PORT=8099
