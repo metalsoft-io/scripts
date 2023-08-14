@@ -29,8 +29,11 @@ export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
 test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
+test -z "$MSAGENTS_URL" && MSAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
+
+test -z "$MSAGENTS_SECRET" && MSAGENTS_SECRET='default'
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -317,6 +320,22 @@ services:
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/hosts:/etc/hosts
+  ms-agent:
+    container_name: ms-agent
+    network_mode: host
+    hostname: ms-agent-agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${MSAGENTS_URL}
+    restart: always
+    environment:
+      - TZ=Etc/UTC
+      - AGENT_ID=agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
+      - AGENT_SECRET=${MSAGENTS_SECRET}
+      - DATACENTER_ID=${DATACENTERNAME}
+      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
+      - MONITORING_SERVICE_PORT=8099
+      - LOG_LEVEL=debug
+    volumes:
+      - /etc/ssl/certs:/etc/ssl/certs
   nfs:
     network_mode: host
     container_name: nfs-server
