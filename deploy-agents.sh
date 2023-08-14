@@ -164,7 +164,7 @@ if [ -z "$DCCONF" ];then
     debuglog "Apt installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
     apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
 
-    debuglog "Checking if 'docker compose' is available"
+  debuglog "Checking if 'docker compose' is available"
   docker compose >/dev/null 2>&1 || { debuglog "Installing docker-compose-plugin" && apt-get update -qq && apt-get -y install docker-compose-plugin; }
 
   # debuglog "Ensuring docker-compose is installed"
@@ -478,12 +478,8 @@ ENDD
     debuglog "starting docker containers"
     systemctl start docker.service
     cd /opt/metalsoft/agents
-    if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-      debuglog "pulling latest images.."
-      docker compose pull -q
-    else
-      docker compose pull
-    fi
+    debuglog "pulling latest images.."
+    docker compose pull
     docker compose up -d
     if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
       sleep 2
