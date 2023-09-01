@@ -27,11 +27,16 @@ debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
-test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.0'
+
+test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
+
 test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
+test -z "$MSAGENTS_URL" && MSAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
 test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+
+test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
 
 # Env vars set via CLI:
 CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
@@ -44,6 +49,7 @@ test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 
 function testOS
 {
+  echo
   debuglog "testing OS version"
   if ! grep -q "Ubuntu 2" /etc/issue; then
     echo
@@ -152,10 +158,17 @@ if [ -z "$DCCONF" ];then
 
   debuglog "Ensuring Docker is installed"
   command -v docker > /dev/null || { debuglog "Install docker" && \
+    debuglog "Getting https://download.docker.com/linux/ubuntu/gpg" && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    debuglog "Adding repository to /etc/apt/sources.list.d/docker.list" && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+    debuglog "Apt update.." && \
     apt-get update -qq && apt-get -y upgrade >/dev/null && \
+    debuglog "Apt installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
     apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+
+  debuglog "Checking if 'docker compose' is available"
+  docker compose >/dev/null 2>&1 || { debuglog "Installing docker-compose-plugin" && apt-get update -qq && apt-get -y install docker-compose-plugin; }
 
   # debuglog "Ensuring docker-compose is installed"
   # test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
@@ -313,6 +326,7 @@ services:
   ms-agent:
     container_name: ms-agent
     network_mode: host
+
     hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
     image: ${MSAGENT_URL}
     restart: always
@@ -474,13 +488,9 @@ sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/
     debuglog "starting docker containers"
     systemctl start docker.service
     cd /opt/metalsoft/agents
-    if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-      debuglog "pulling latest images.."
-      docker-compose pull -q || docker compose pull -q
-    else
-      docker-compose pull || docker compose pull
-    fi
-    docker-compose up -d || docker compose up -d
+    debuglog "pulling latest images.."
+    docker compose pull
+    docker compose up -d
     if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
       sleep 2
       docker ps
