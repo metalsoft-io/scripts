@@ -325,7 +325,6 @@ services:
   ms-agent:
     container_name: ms-agent
     network_mode: host
-
     hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
     image: ${MSAGENT_URL}
     restart: always
