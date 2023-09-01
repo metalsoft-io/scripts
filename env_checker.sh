@@ -28,6 +28,8 @@ yellow=$(tput setaf 11)
 
 defaultTimeout=3
 
+defaultTimeout=3
+
 unset command_not_found_handle
 
 which nc > /dev/null || { echo 'nc is needed for this script to run properly. Please install netcat' && exit 1; }
@@ -87,6 +89,8 @@ function nc_start_listener_and_check_remote_ip_port {
 	protocol=${3:-tcp}
 	to=${4:-$defaultTimeout}
 	proto=''
+	fromComment="$5"
+	toComment="$6"
 	fromComment="$5"
 	toComment="$6"
 
@@ -276,7 +280,6 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" apt.kubernetes.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" repo.metalsoft.io 80 tcp
 						nc_connect_back_from_remote_ip_port "$z" registry.metalsoft.dev 443 tcp
-						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" gcr.io 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" cloud.google.com 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" packages.cloud.google.com 443 tcp
@@ -288,6 +291,13 @@ function nc_connect_back_from_remote_ip_port {
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 443 tcp
 						nc_connect_back_from_remote_ip_port "$z" download.opensuse.org 80 tcp
 						nc_connect_back_from_remote_ip_port "$z" smtp.office365.com 587 tcp
+						nc_connect_back_from_remote_ip_port "$z" quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn01.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn02.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" cdn03.quay.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" docker.io 443 tcp
+						nc_connect_back_from_remote_ip_port "$z" registry-1.docker.io 443 tcp
 
 						if [ -n "$node1svcports" ];then
 							for nsvc in ${node1svcports};do

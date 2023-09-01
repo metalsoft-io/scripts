@@ -27,11 +27,14 @@ debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
+
 test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
+
 test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
 test -z "$MSAGENTS_URL" && MSAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
 test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
+test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 
 test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
 
@@ -323,18 +326,20 @@ services:
   ms-agent:
     container_name: ms-agent
     network_mode: host
-    hostname: ms-agent-agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
-    image: ${MSAGENTS_URL}
+
+    hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${MSAGENT_URL}
     restart: always
     environment:
       - TZ=Etc/UTC
-      - AGENT_ID=agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
+      - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
       - DATACENTER_ID=${DATACENTERNAME}
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - MONITORING_SERVICE_PORT=8099
       - LOG_LEVEL=debug
     volumes:
+      - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
   nfs:
     network_mode: host
@@ -370,7 +375,7 @@ global
     ssl-default-server-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
 defaults
     mode http
-    log global
+    log stdout format raw local0
 
     retries 3
     timeout connect 10s
@@ -400,12 +405,14 @@ frontend ft_local_apache_80
     acl host_dhcpe path_beg -i /os-ready
     acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
     acl has_special_uri path_beg /remote-console
+    acl has_iso_uri path_beg /iso
     use_backend bk_local_apache_8080 if host_ws
     use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
     use_backend bk_fullmetal_tftpe_8069 if host_tftp
     use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
     use_backend bk_repo_443 if host_repo
     use_backend bk_guacamole_tomcat_8080 if has_special_uri
+    use_backend bk_msagents_8099 if has_iso_uri
     default_backend bk_local_apache_81
 
 frontend ft_local_apache_443
@@ -455,14 +462,17 @@ backend bk_guacamole_tomcat_8080
 
 backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
+    
+backend bk_msagents_8099
+    server localhost 127.0.0.1:8099
 ENDD
     fi
 
-    debuglog "Updating /opt/metalsoft/agents/docker-compose.yaml"
-    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
 
     debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
     mkdir -p "${HOME}/.docker"
