@@ -28,12 +28,20 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
-test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
-
-test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
-test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
-test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+if [ -n "$DOCKERENV" ];then
+  IMAGES_TAG_SAVED="$IMAGES_TAG"
+  IMAGES_TAG='${TAG}'
+  DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
+  WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
+  JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
+  MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+else
+  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
+  test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
+  test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
+  test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
+  test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+fi
 
 test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
 
@@ -162,7 +170,7 @@ if [ -z "$DCCONF" ];then
     debuglog "Adding repository to /etc/apt/sources.list.d/docker.list" && \
     echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
     debuglog "Apt update.." && \
-    apt-get update -qq && apt-get -y upgrade >/dev/null && \
+    apt-get update -qq && \
     debuglog "Apt installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
     apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
 
@@ -222,6 +230,11 @@ if [ -z "$DCCONF" ];then
     DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
   fi
   HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
+  if [ -n "$DOCKERENV" ];then
+    cat > /opt/metalsoft/agents/.env <<ENDD
+TAG=${IMAGES_TAG_SAVED}
+ENDD
+  fi
   if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
     debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
     cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
@@ -460,17 +473,17 @@ backend bk_guacamole_tomcat_8080
 
 backend bk_repo_443
     server repo.poc.metalsoft.io 127.0.0.1:9080
-    
+
 backend bk_msagents_8099
     server localhost 127.0.0.1:8099
 ENDD
     fi
 
-test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
 
     debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
     mkdir -p "${HOME}/.docker"
@@ -510,4 +523,4 @@ sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/
     systemctl daemon-reload
     test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 
-    debuglog "All done. to check containers, use: docker ps" success
+    debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
