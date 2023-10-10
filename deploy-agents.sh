@@ -164,6 +164,13 @@ debuglog "Ensuring Metalsoft CA is installed"
 test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt
 test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
 
+debuglog "Checking for other custom CAs"
+if [[ -n "$CUSTOM_CA" ]]; then
+  echo ${CUSTOM_CA_CERT} > /usr/local/share/ca-certificates/${CUSTOM_CA}
+  echo ${CUSTOM_CA_CERT} > /etc/ssl/certs/${CUSTOM_CA}
+  update-ca-certificates
+fi
+
 debuglog "Creating folders"
 mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
@@ -179,22 +186,17 @@ if [ -z "$DCCONF" ];then
   echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
-  fi
+fi
 
-  debuglog "Pulling DC config URL"
-  DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
+debuglog "Pulling DC config URL"
+DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
 
-  debuglog "Enabling nfs/nfsd kernel modules"
-  test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
-  test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
+debuglog "Enabling nfs/nfsd kernel modules"
+test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
+test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
 
-
-  debuglog "Setting static DNS resolvers in /etc/resolv.conf"
-  if ! grep -q 1.1.1.1 /etc/resolv.conf;then echo "nameserver 1.1.1.1" >> /etc/resolv.conf;fi
-  if ! grep -q 8.8.8.8 /etc/resolv.conf;then echo "nameserver 8.8.8.8" >> /etc/resolv.conf;fi
-
-  test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
-    cat > /tmp/docker-archive-keyring.gpg <<ENDD
+test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
+cat > /tmp/docker-archive-keyring.gpg <<ENDD
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
@@ -258,6 +260,7 @@ YT90qFF93M3v01BbxP+EIY2/9tiIPbrd
 =0YYh
 -----END PGP PUBLIC KEY BLOCK-----
 ENDD
+
 cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
 debuglog "Ensuring Docker is installed"
@@ -274,59 +277,63 @@ docker compose >/dev/null 2>&1 || { debuglog "Installing docker-compose-plugin" 
   # debuglog "Ensuring docker-compose is installed"
   # test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
 
-  debuglog "Checking provided SSL"
-  test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
+debuglog "Checking provided SSL"
+test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
 
-  if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
-    SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
-    while [ $? -ne 0 ]; do
-      manageSSL
-    done
-  fi
+if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
+  SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
+  while [ $? -ne 0 ]; do
+    manageSSL
+  done
+fi
 
-  if [ -z "$SSL_HOSTNAME" ];then
-    read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
-    SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
-    debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
-  fi
+if [ -z "$SSL_HOSTNAME" ];then
+  read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
+  SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
+  debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
+fi
 
-  debuglog "Setting GUACAMOLE_KEY"
-  if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-    GUACAMOLE_KEY="${GUACAMOLE_KEY:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}"
-  else
-    if [ -z "$GUACAMOLE_KEY" ];then
-      read -p "Enter GUACAMOLE_KEY: " gckey
-      GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
-      echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
-    fi
-  fi
+ debuglog "Setting GUACAMOLE_KEY"
+ if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
+   GUACAMOLE_KEY="${GUACAMOLE_KEY:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}"
+ else
+   if [ -z "$GUACAMOLE_KEY" ];then
+     read -p "Enter GUACAMOLE_KEY: " gckey
+     GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
+     echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
+   fi
+ fi
 
-  debuglog "Setting WEBSOCKET_TUNNEL_SECRET"
-  if [[ "${NONINTERACTIVE_MODE}" == 1 ]] && [[ -z "${WEBSOCKET_TUNNEL_SECRET}" ]];then
-    WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
-  else
-    if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
-      read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
-      WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
-      echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
-    fi
+debuglog "Setting WEBSOCKET_TUNNEL_SECRET"
+if [[ "${NONINTERACTIVE_MODE}" == 1 ]] && [[ -z "${WEBSOCKET_TUNNEL_SECRET}" ]];then
+  WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
+else
+  if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
+    read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
+    WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
+    echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
   fi
+fi
 
-  debuglog "Setting DATACENTERNAME"
-  DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
-  DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
-  if [ -z "$DATACENTERNAME" ];then
-    DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
-  fi
-  HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
-  if [ -n "$DOCKERENV" ];then
-    cat > /opt/metalsoft/agents/.env <<ENDD
+debuglog "Setting DATACENTERNAME"
+DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
+DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
+
+if [ -z "$DATACENTERNAME" ];then
+  DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
+fi
+
+HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
+
+if [ -n "$DOCKERENV" ];then
+  cat > /opt/metalsoft/agents/.env <<ENDD
 TAG=${IMAGES_TAG_SAVED}
 ENDD
-  fi
-  if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
-    debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
-    cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
+fi
+
+if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
+  debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
+  cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 version: '3'
 services:
   agents:
@@ -342,7 +349,7 @@ services:
       - /opt/metalsoft/logs:/var/log
       - /opt/metalsoft/.ssh:/root/.ssh
       - /opt/metalsoft/mon:/var/lib/mon/data
-      #- /etc/ssl/certs:/etc/ssl/certs
+      - /etc/ssl/certs:/etc/ssl/certs
       - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
       - /usr/share/ca-certificates:/usr/share/ca-certificates
       # Use only if custom CA is needed
@@ -459,11 +466,11 @@ services:
       - 32767:32767
 
 ENDD
-      fi
+fi
 
-      if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
-        debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
-        cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
+if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
+  debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
+  cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
     chroot /var/lib/haproxy
     user root
@@ -566,50 +573,126 @@ backend bk_repo_443
 backend bk_msagents_8099
     server localhost 127.0.0.1:8099
 ENDD
-    fi
+fi
 
-    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+if [[ -n $CUSTOM_CA ]]; then
+  cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
+[supervisord]
+nodaemon=true
 
-    debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
-    mkdir -p "${HOME}/.docker"
-    test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
+[unix_http_server]
+file=/var/run/supervisor.sock
+chmod=0700
 
-    docker login registry.metalsoft.dev
-    while [ $? -ne 0 ]; do
-      debuglog "Lets try docker login again:"
-      docker login registry.metalsoft.dev
-      sleep 1
-    done
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 
-    debuglog "starting docker containers"
-    systemctl start docker.service
-    cd /opt/metalsoft/agents
-    debuglog "pulling latest images.."
-    docker compose pull
-    docker compose up -d
-    if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
-      sleep 2
-      docker ps
-      sleep 2
-      docker ps
-    fi
+[supervisorctl]
+serverurl=unix:///var/run/supervisor.sock
 
-    if [ -f /etc/ssh/ms_banner ];then
-      debuglog "update /etc/ssh/ms_banner"
-      if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
-      dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
-      dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
-    fi
+[program:BSI]
+command=/var/vhosts/datacenter-agents-binary-compiled/BSI/BSI --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/BSI.err.log
+stdout_logfile=/var/log/BSI.out.log
 
-    debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
-    systemctl disable --now systemd-resolved.service
-    systemctl disable --now rpcbind || true
-    systemctl disable --now rpcbind.socket || true
-    systemctl daemon-reload
-    test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+[program:DHCP]
+command=/var/vhosts/datacenter-agents-binary-compiled/DHCP/DHCP --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/DHCP.err.log
+stdout_logfile=/var/log/DHCP.out.log
 
-    debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
+
+[program:TFTP]
+command=/var/vhosts/datacenter-agents-binary-compiled/TFTP/TFTP --expose-gc
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/TFTP.err.log
+stdout_logfile=/var/log/TFTP.out.log
+
+[program:DNS]
+command=/var/vhosts/datacenter-agents-binary-compiled/DNS/DNS --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/DNS.err.log
+stdout_logfile=/var/log/DNS.out.log
+
+[program:iSNS]
+command=/var/vhosts/datacenter-agents-binary-compiled/iSNS/iSNS --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/iSNS.err.log
+stdout_logfile=/var/log/iSNS.out.log
+
+[program:Power]
+command=/var/vhosts/datacenter-agents-binary-compiled/Power/Power --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/Power.err.log
+stdout_logfile=/var/log/Power.out.log
+
+[program:AnsibleRunner]
+command=/var/vhosts/datacenter-agents-binary-compiled/AnsibleRunner/AnsibleRunner --expose-gc --use-openssl-ca
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/AnsibleRunner.err.log
+stdout_logfile=/var/log/AnsibleRunner.out.log
+
+[program:Monitoring]
+command=/usr/local/bin/node --expose-gc --use-openssl-ca /var/vhosts/datacenter-agents-binary-compiled/Monitoring/Monitoring.portable.js
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/Monitoring.err.log
+stdout_logfile=/var/log/Monitoring.out.log
+ENDD
+
+
+fi
+
+debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
+mkdir -p "${HOME}/.docker"
+test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
+
+docker login registry.metalsoft.dev
+
+while [ $? -ne 0 ]; do
+  debuglog "Lets try docker login again:"
+  docker login registry.metalsoft.dev
+  sleep 1
+done
+
+debuglog "starting docker containers"
+systemctl start docker.service
+cd /opt/metalsoft/agents
+debuglog "pulling latest images.."
+docker compose pull
+docker compose up -d
+
+if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
+  sleep 2
+  docker ps
+  sleep 2
+  docker ps
+fi
+
+if [ -f /etc/ssh/ms_banner ];then
+  debuglog "update /etc/ssh/ms_banner"
+  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
+  dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
+  dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
+fi
+
+debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
+systemctl disable --now systemd-resolved.service
+systemctl disable --now rpcbind || true
+systemctl disable --now rpcbind.socket || true
+systemctl daemon-reload
+test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
