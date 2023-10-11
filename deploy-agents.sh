@@ -23,6 +23,23 @@ function debuglog ()
   echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
 
+function parse_yaml {
+   local prefix=$2
+   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
+   sed -ne "s|^\($s\):|\1|" \
+        -e "s|^\($s\)\($w\)$s:$s[\"']\(.*\)[\"']$s\$|\1$fs\2$fs\3|p" \
+        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
+   awk -F$fs '{
+      indent = length($1)/2;
+      vname[indent] = $2;
+      for (i in vname) {if (i > indent) {delete vname[i]}}
+      if (length($3) > 0) {
+         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
+         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
+      }
+   }'
+}
+
 debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
@@ -166,8 +183,8 @@ test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates
 
 debuglog "Checking for other custom CAs"
 if [[ -n "$CUSTOM_CA" ]]; then
-  echo ${CUSTOM_CA_CERT} > /usr/local/share/ca-certificates/${CUSTOM_CA}
-  echo ${CUSTOM_CA_CERT} > /etc/ssl/certs/${CUSTOM_CA}
+  echo ${CUSTOM_CA_CERT} | base64 --decode > /usr/local/share/ca-certificates/${CUSTOM_CA}
+  echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/ssl/certs/${CUSTOM_CA}
   update-ca-certificates
 fi
 
@@ -584,6 +601,9 @@ if [[ -n $CUSTOM_CA ]]; then
   cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
 [supervisord]
 nodaemon=true
+environment=
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/${CUSTOM_CA},
+    NODE_OPTIONS="--use-openssl-ca"
 
 [unix_http_server]
 file=/var/run/supervisor.sock
@@ -653,6 +673,7 @@ stderr_logfile=/var/log/Monitoring.err.log
 stdout_logfile=/var/log/Monitoring.out.log
 ENDD
 
+sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/agents\/supervisor.conf/g" /opt/metalsoft/agents/docker-compose.yaml
 
 fi
 
@@ -694,5 +715,20 @@ systemctl disable --now systemd-resolved.service
 systemctl disable --now rpcbind || true
 systemctl disable --now rpcbind.socket || true
 systemctl daemon-reload
-test -L /etc/resolv.conf && \rm -f /etc/resolv.conf &&  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+
+debuglog "Add DNS resolvers to /etc/resolv.conf"
+test -L /etc/resolv.conf && \rm -f /etc/resolv.conf 
+find /etc/netplan -type f | while read -r netplan_file; do
+  nameservers=$(parse_yaml $netplan_file | grep nameservers | cut -d "=" -f 2 | tr -d '"[]' | sed -e "s/,/ /g")
+  for nameserver in $nameservers; do
+    echo "nameserver $nameserver"
+    if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
+      echo "nameserver $nameserver" >> /etc/resolv.conf
+    fi
+  done
+done
+if [[ -z $(grep nameserver /etc/resolv.conf) ]];then
+  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+fi
+
 debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
