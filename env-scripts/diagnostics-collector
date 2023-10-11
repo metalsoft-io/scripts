@@ -26,10 +26,11 @@ type kubectl >/dev/null 2>&1 && gather='controller' && k='kubectl '
 type microk8s >/dev/null 2>&1 && gather='controller' && k='microk8s.kubectl '
 pushfile=
 
-while getopts ":k:n:b:cap" flag
+while getopts ":k:n:b:P:cap" flag
 do
   case "${flag}" in
     p) pushfile="1" ;;
+    P) pushfileFromArg="${OPTARG}" ;;
     c) gather='controller' ;;
     a) gather='agent' ;;
     k) k="${OPTARG}" ;;
@@ -41,6 +42,11 @@ do
 done
 shift "$(( OPTIND - 1 ))"
 
+if [ -n "$pushfileFromArg" ];then
+  test -f "$pushfileFromArg" || { echo -e "[\e[1;31m✗\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
+  echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to Metalsoft [HTTPS] ... " && curl -sk 'https://diagnostics-report.metalsoft.io/?a=121&f=992' -F diag=@"${pushfileFromArg}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to Metalsoft, but encountered errors."; exit 1; }
+  exit 0;
+fi
 
 test -n "$gather" && echo "[i] Gathering diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please use parameter -c or -a"; exit 1; }
 originalBackupFolder=${backupFolder}
