@@ -76,6 +76,7 @@ function get_k8s ()
 if [ "$gather" == 'controller' ];then
   if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
   test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-controller"
+  test -n "$envname" && echo -e "[i] Namespace: \e[1;31m${envname}\e[0m"
 
         # TODO: in cases where env is not found, we should still collect info on what went wrong
         if ! $k get ns|grep -q $envname ;then echo -e "[\e[1;31m✗\e[0m] Env $envname not found. Exiting..";exit 1;fi
@@ -95,6 +96,9 @@ if [ "$gather" == 'controller' ];then
             $k -n $envname exec $mysql_pod -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
           fi
         done <<< "$all_dbs"
+
+        # get information_schema.innodb_trx
+        $k -n $envname exec $mysql_pod -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/${thedate}_mysql_information_schema.innodb_trx || true
 
         echo "[i] backing up couchdb.."
         #backup all couchdb DBs:
