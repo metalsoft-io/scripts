@@ -160,7 +160,7 @@ function nc_connect_back_from_remote_ip_port {
 				if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 					hostAsComment="$ip "
 					hostname_to_ips="$(dig +short $ip|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
-					if [ $(echo $hostname_to_ips | awk '{print $1}') != "127.0.0.53" ]; then
+					if [ -n "$hostname_to_ips" ] && [ $(echo $hostname_to_ips | awk '{print $1}') != "127.0.0.53" ]; then
 						ip="$hostname_to_ips"
 					fi
 				fi
