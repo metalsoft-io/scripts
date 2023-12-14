@@ -157,12 +157,12 @@ if [ -d "/root/manifests" ];then
         echo "[i] Updating Traefik"
         sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
         if [ -d "/root/manifests/traefik_charts/traefik" ];then
-                microk8s helm3 upgrade traefik-demo-metalsoft /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
+                microk8s helm3 upgrade traefik-demo-metalsoft /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 25.0.0
         else
                 echo "!!!! Local Traefik Charts missing, falling back to try to pull from official repository"
                 microk8s helm3 repo add traefik https://helm.traefik.io/traefik
                 microk8s helm3 repo update
-                microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft
+                microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 25.0.0
         fi
 fi
 
