@@ -188,7 +188,7 @@ microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|w
 
 microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ "$last_aip" != "$aip" ];then
-        microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_api_demo_metalsoft_io -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
+        microk8s.kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip && microk8s.kubectl -n demo-metalsoft get pod --no-headers|grep websocket-tunnel-server-|col1|xargs microk8s.kubectl -n demo-metalsoft delete pod
 fi
 
 test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
