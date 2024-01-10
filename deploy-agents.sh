@@ -462,6 +462,10 @@ services:
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - MONITORING_SERVICE_PORT=8099
       - LOG_LEVEL=debug
+      - HTTP_PROXY=enabled
+      - FILE_TRANSFER=enabled
+      - SWITCH_SUBSCRIPTION=enabled
+      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9002
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
