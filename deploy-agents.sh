@@ -466,6 +466,8 @@ services:
       - FILE_TRANSFER=enabled
       - SWITCH_SUBSCRIPTION=enabled
       - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9002
+      - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
+      - VNC=enabled
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
