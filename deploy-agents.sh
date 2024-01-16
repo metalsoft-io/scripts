@@ -468,6 +468,7 @@ services:
       - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9002
       - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
       - VNC=enabled
+      - FILES_MOUNT=/iso
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
