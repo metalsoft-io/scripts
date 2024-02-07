@@ -362,7 +362,6 @@ services:
     #command: bash -c "update-ca-certificates"
     volumes:
       - /opt/metalsoft/BSIAgentsVolume:/etc/BSIDatacenterAgents
-      - /opt/metalsoft/logs_agents:/root/.pm2/logs
       - /opt/metalsoft/logs:/var/log
       - /opt/metalsoft/.ssh:/root/.ssh
       - /opt/metalsoft/mon:/var/lib/mon/data
