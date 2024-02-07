@@ -459,14 +459,14 @@ services:
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
       - DATACENTER_ID=${DATACENTERNAME}
-      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - MONITORING_SERVICE_PORT=8099
       - LOG_LEVEL=debug
+      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
+      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9091
+      - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
       - HTTP_PROXY=enabled
       - FILE_TRANSFER=enabled
       - SWITCH_SUBSCRIPTION=enabled
-      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9002
-      - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
       - VNC=enabled
       - COMMAND_EXECUTION=enabled
       - FILES_MOUNT=/iso
