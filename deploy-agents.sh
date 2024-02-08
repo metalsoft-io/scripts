@@ -468,7 +468,8 @@ services:
       - SWITCH_SUBSCRIPTION=enabled
       - VNC=enabled
       - COMMAND_EXECUTION=enabled
-      - FILES_MOUNT=/iso
+      - OS_IMAGES_MOUNT=/iso
+      - NFS_HOST=${MAINIP}:/data
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
