@@ -1,6 +1,9 @@
 #!/bin/bash
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
 
+# How to install:
+# wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/diagnostics-collector -O /usr/local/bin/diagnostics-collector && chmod +x /usr/local/bin/diagnostics-collector
+
 nc=$(tput sgr0)
 bold=$(tput bold)
 orange=$(tput setaf 3)
@@ -10,13 +13,13 @@ gray=$(tput setaf 8)
 #yellow=$(tput setaf 11)
 #lightblue=$(tput setaf 12)
 
-test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
+#test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
 thedate="$(date +"%F-%H%M%S")"
 backupFolder=/var/backups/metalsoft
 backupFolder="${backupFolder%/}"
 
 function usage {
-	echo -e "[i] $( basename $0) gathers diagnostics for MetalSoft. Optional parameters:\n  ${bold}-c${nc} ${gray}[ Use for Controller ]${nc}\n  ${bold}-a${nc} ${gray}[ Use for Agent ]${nc}\n  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}\n  ${bold}-n${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}\n  ${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}\n  ${bold}-p${nc} ${gray}[ Push the diagnostics to MetalSoft via HTTPS ]${nc}\n  ${bold}-e${nc} ${gray}extended collection of k8s resources and DBs${nc}"
+	echo -e "[i] $( basename $0) gathers diagnostics for MetalSoft. Optional parameters:\n  ${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}\n  ${bold}-c${nc} ${gray}[ Use for Controller ]${nc}\n  ${bold}-a${nc} ${gray}[ Use for Agent ]${nc}\n  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}\n  ${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}\n  ${bold}-p${nc} ${gray}[ Push the diagnostics to MetalSoft via HTTPS ]${nc}\n  ${bold}-e${nc} ${gray}[ Extended collection of k8s resources and DBs ]${nc}"
 	exit 0
 }
 
@@ -50,7 +53,7 @@ if [ -n "$pushfileFromArg" ];then
 	exit 0;
 fi
 
-test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please use parameter -c or -a"; exit 1; }
+test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 originalBackupFolder=${backupFolder}
 backupFolder=${backupFolder}/${thedate}
 
@@ -165,12 +168,10 @@ tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >
 	if [ "$pushfile" == "1" ];then
 		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
 	else
-		while :;do
 			read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST?${nc} " yn
 			case $yn in
-				[Yy]* ) (echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; }); break;;
+				[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
 				[Nn]* ) exit;;
 				* ) exit;;
 			esac
-		done
 	fi
