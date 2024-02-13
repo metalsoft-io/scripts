@@ -168,7 +168,7 @@ tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >
 	if [ "$pushfile" == "1" ];then
 		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
 	else
-			read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST?${nc} " yn
+			read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
 			case $yn in
 				[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
 				[Nn]* ) exit;;
