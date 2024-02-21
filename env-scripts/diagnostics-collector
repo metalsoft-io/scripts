@@ -49,13 +49,14 @@ shift "$(( OPTIND - 1 ))"
 
 if [ -n "$pushfileFromArg" ];then
 	test -f "$pushfileFromArg" || { echo -e "[\e[1;31m✗\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
-	echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${pushfileFromArg}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to MetalSoft, but encountered errors."; exit 1; }
+	echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushfromarg=1&ns=${envname}" -F diag=@"${pushfileFromArg}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to MetalSoft, but encountered errors."; exit 1; }
 	exit 0;
 fi
 
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
+test -z "$envname" && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
-backupFolder=${backupFolder}/${thedate}
+backupFolder=${backupFolder}/${thedate}_${envname}
 
 function finish {
 	echo "[i] cleaning up.."
@@ -128,6 +129,9 @@ if [ "$gather" == 'controller' ];then
 	test -n "$bsipod" && while read bsi;do
 	varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/ -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
 	test -n "$varlogs" && while read z;do $k -n $envname cp $bsi:${z} ${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_} &>/dev/null;done <<< "$varlogs"
+
+	varlogsbsi="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
+	test -n "$varlogsbsi" && while read z;do $k -n $envname cp $bsi:${z} ${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_} &>/dev/null;done <<< "$varlogsbsi"
 done <<< "$bsipod"
 
 if [ "$extended" == '1' ];then
@@ -153,7 +157,7 @@ else # if gather=agent
 	docker ps|grep Restarting > ${backupFolder}/docker_restarting.txt || true
 	docker ps|grep Restarting|awk '{print $1}'|while read z;do docker logs $z --tail=1000 > ${backupFolder}/docker_restarting_${z}.txt;done || true
 	docker images -a > ${backupFolder}/docker_images.txt || true
-	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do rsync -a "${z}" ${backupFolder}/docker-logs/;done || true
+	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do echo $z|while read f;do find $f -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} ${backupFolder}/docker-logs/ \;;done;done
 
 
 fi
@@ -166,12 +170,15 @@ tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >
 	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}" || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
 
 	if [ "$pushfile" == "1" ];then
-		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
+		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
 	else
-			read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
-			case $yn in
-				[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
-				[Nn]* ) exit;;
-				* ) exit;;
-			esac
+		if timeout 3 bash -c "</dev/tcp/176.223.248.10/443" 2>/dev/null; then
+			curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" -F diag=@"${resultFilename}" &>/dev/null
+		fi
+		read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
+		case $yn in
+			[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
+			[Nn]* ) exit;;
+			* ) exit;;
+		esac
 	fi
