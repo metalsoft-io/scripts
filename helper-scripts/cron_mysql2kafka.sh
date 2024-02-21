@@ -9,7 +9,7 @@ test -z "$namespace" && test -n "$ns" && namespace="$ns"
 test -z "$namespace" && echo "Namespace not specified as first parameter. Exiting.." && exit 2
 k="kubectl -n $namespace"
 nsexists="$($k get ns --no-headers|awk '{print $1}'|grep "^$namespace$")"
-test -n "$nsexists" || { echo "Namespace: $nsexists was not found. Exiting"; exit 3; }
+test -n "$nsexists" || { echo "Namespace: $namespace was not found. Exiting"; exit 3; }
 
 dbname="$($k exec deploy/mysql -- mysql -BNe 'show databases' 2>/dev/null|grep -E '^metalsoft'|head -1|xargs|tr -d '\r')"
 test -z "$dbname" && dbname="$($k exec deploy/mysql -- mysql -BNe 'show databases' 2>/dev/null|grep -E '^bsi_api_'|head -1)"
