@@ -24,9 +24,9 @@ function usage {
 }
 
 #auto determine if we are on agent or controller:
-test -d /opt/metalsoft/agents && type docker >/dev/null 2>&1 && gather='agent'
-type kubectl >/dev/null 2>&1 && gather='controller' && k='kubectl '
-type microk8s >/dev/null 2>&1 && gather='controller' && k='microk8s.kubectl '
+test -d /opt/metalsoft/agents && type docker &>/dev/null && gather='agent'
+type kubectl &>/dev/null && gather='controller' && k='kubectl '
+type microk8s &>/dev/null && gather='controller' && k='microk8s.kubectl '
 pushfile=
 extended=
 
