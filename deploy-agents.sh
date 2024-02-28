@@ -49,13 +49,11 @@ if [ -n "$DOCKERENV" ];then
   IMAGES_TAG_SAVED="$IMAGES_TAG"
   IMAGES_TAG='${TAG}'
   DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-  WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
   JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 else
   test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
   test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-  test -z "$WSTCLIENT_URL" && WSTCLIENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/websocket-tunnel-client:${IMAGES_TAG}"
   test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 fi
@@ -63,7 +61,6 @@ fi
 test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
 
 # Env vars set via CLI:
-CLI_WEBSOCKET_TUNNEL_SECRET="$WEBSOCKET_TUNNEL_SECRET"
 CLI_DCCONF="$DCCONF"
 CLI_DATACENTERNAME="$DATACENTERNAME"
 
@@ -200,7 +197,7 @@ if [ -z "$DCCONF" ];then
   echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] GUACAMOLE_KEY=your_guacamole_key_provided_by_metalsoft WEBSOCKET_TUNNEL_SECRET=WESOCKET_TUNNEL_KEY_provided_by_metalsoft ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
 fi
@@ -310,28 +307,6 @@ if [ -z "$SSL_HOSTNAME" ];then
   debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
 fi
 
- debuglog "Setting GUACAMOLE_KEY"
- if [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-   GUACAMOLE_KEY="${GUACAMOLE_KEY:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}"
- else
-   if [ -z "$GUACAMOLE_KEY" ];then
-     read -p "Enter GUACAMOLE_KEY: " gckey
-     GUACAMOLE_KEY=${gckey:-__GUACAMOLE_KEY_NEEDS_TO_BE_SET__}
-     echo GUACAMOLE_KEY set to: "$GUACAMOLE_KEY"
-   fi
- fi
-
-debuglog "Setting WEBSOCKET_TUNNEL_SECRET"
-if [[ "${NONINTERACTIVE_MODE}" == 1 ]] && [[ -z "${WEBSOCKET_TUNNEL_SECRET}" ]];then
-  WEBSOCKET_TUNNEL_SECRET="${WEBSOCKET_TUNNEL_SECRET:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}"
-else
-  if [ -z "$WEBSOCKET_TUNNEL_SECRET" ]; then
-    read -p "Enter WEBSOCKET_TUNNEL_SECRET: " wstunkey
-    WEBSOCKET_TUNNEL_SECRET=${wstunkey:-__WEBSOCKET_TUNNEL_SECRET_NEEDS_TO_BE_SET__}
-    echo WEBSOCKET_TUNNEL_SECRET set to: "$WEBSOCKET_TUNNEL_SECRET"
-  fi
-fi
-
 debuglog "Setting DATACENTERNAME"
 DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
 DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
@@ -403,18 +378,6 @@ services:
     environment:
       - TZ=Etc/UTC
     hostname: dc-haproxy
-  remote-console:
-    network_mode: bridge
-    container_name: dc-remoteconsole
-    image: registry.metalsoft.dev/datacenter-agents-compiled/bsi-guac:latest
-    restart: always
-    privileged: true
-    ports:
-      - 7590:8081/tcp
-    environment:
-      - TZ=Etc/UTC
-      - GUACAMOLE_BSI_GUACAMOLE_ENDPOINT_URL=https://${SSL_HOSTNAME}/api/internal/ipc_guacamole
-      - GUACAMOLE_BSI_GUACAMOLE_ENPOINT_SALT_API_KEY=${GUACAMOLE_KEY}
   junos-driver:
     network_mode: bridge
     container_name: junos-driver
@@ -425,28 +388,6 @@ services:
     environment:
       - TZ=Etc/UTC
     hostname: junos-driver
-  websocket-tunnel-client:
-    image: ${WSTCLIENT_URL}
-    container_name: websocket-tunnel-client
-    restart: always
-    hostname: websocket-tunnel-client
-    environment:
-      - DATACENTER_NAME=${DATACENTERNAME}
-      - ERROR_LOG_LEVEL=debug
-      - CONTROLLER_SCHEMA=https
-      - CONTROLLER_TUNNEL_HOST=${SSL_HOSTNAME}
-      - CONTROLLER_TUNNEL_PORT=9010
-      - CONTROLLER_TCP_PORT=9011
-      - DISABLE_SSL_CHECKS=true
-      - OS_IMAGES_MOUNT=/iso
-      - NFS_HOST=${MAINIP}:/data
-      - DEBUG=*
-      - DATACENTERS_SECRET=${WEBSOCKET_TUNNEL_SECRET}
-      - GUACAMOLE_PLUGIN_HOST=${MAINIP}
-      - GUACAMOLE_PLUGIN_PORT=7590
-    volumes:
-      - /opt/metalsoft/nfs-storage:/iso
-      - /etc/hosts:/etc/hosts
   ms-agent:
     container_name: ms-agent
     network_mode: host
@@ -601,7 +542,6 @@ ENDD
 fi
 
 test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_WEBSOCKET_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- DATACENTERS_SECRET=\).*/\1${CLI_WEBSOCKET_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
 test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
 test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
 sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
