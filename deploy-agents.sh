@@ -405,6 +405,7 @@ services:
       - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9091
       - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
       - HTTP_PROXY=enabled
+      - INBAND_HTTP_PROXY=disabled
       - FILE_TRANSFER=enabled
       - SWITCH_SUBSCRIPTION=enabled
       - VNC=enabled
