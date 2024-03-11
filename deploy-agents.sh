@@ -52,7 +52,7 @@ if [ -n "$DOCKERENV" ];then
   JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 else
-  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.0.4'
+  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.1.1'
   test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
   test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
@@ -275,7 +275,7 @@ YT90qFF93M3v01BbxP+EIY2/9tiIPbrd
 -----END PGP PUBLIC KEY BLOCK-----
 ENDD
 
-cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+test -f /tmp/docker-archive-keyring.gpg && cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
 debuglog "Ensuring Docker is installed"
 command -v docker > /dev/null || { debuglog "Install docker" && \
@@ -323,18 +323,78 @@ TAG=${IMAGES_TAG_SAVED}
 ENDD
 fi
 
-if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
-  debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
-  cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
-version: '3'
-services:
-  agents:
+ENVVAR_HTTP_PROXY=enabled
+ENVVAR_FILE_TRANSFER=enabled
+ENVVAR_SWITCH_SUBSCRIPTION=enabled
+ENVVAR_COMMAND_EXECUTION=enabled
+ENVVAR_VNC=enabled
+ENVVAR_INBAND_HTTP_PROXY=disabled
+ENVVAR_INBAND_FILE_TRANSFER=disabled
+
+if [ "$INBAND" == "1" ]; then
+FORCE=1
+debuglog "INBAND mode" info pink
+ENVVAR_HTTP_PROXY=disabled
+ENVVAR_FILE_TRANSFER=disabled
+ENVVAR_SWITCH_SUBSCRIPTION=disabled
+ENVVAR_COMMAND_EXECUTION=disabled
+ENVVAR_VNC=disabled
+ENVVAR_INBAND_HTTP_PROXY=enabled
+ENVVAR_INBAND_FILE_TRANSFER=enabled
+non_inband_dc=''
+fi
+inband_dc="  ms-agent:
+    container_name: ms-agent
+    network_mode: host
+    hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${MSAGENT_URL}
+    restart: always
+    environment:
+      - TZ=Etc/UTC
+      - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
+      - AGENT_SECRET=${MS_TUNNEL_SECRET}
+      - DATACENTER_ID=${DATACENTERNAME}
+      - MONITORING_SERVICE_PORT=8099
+      - LOG_LEVEL=debug
+      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
+      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9091
+      - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
+      - HTTP_PROXY=${ENVVAR_HTTP_PROXY}
+      - FILE_TRANSFER=${ENVVAR_FILE_TRANSFER}
+      - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION}
+      - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION}
+      - VNC=${ENVVAR_VNC}
+      - OS_IMAGES_MOUNT=/iso
+      - NFS_HOST=${MAINIP}:/data
+      - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY}
+      - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER}
+    volumes:
+      - /opt/metalsoft/nfs-storage:/iso
+      - /etc/ssl/certs:/etc/ssl/certs
+  nfs:
+    network_mode: host
+    container_name: nfs-server
+    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:2.2.1
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
+      - NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
+    volumes:
+      - /opt/metalsoft/nfs-storage:/data
+    ports:
+      - 2049:2049
+      - 111:111
+      - 32765:32765
+      - 32767:32767
+"
+non_inband_dc="  agents:
     network_mode: host
     container_name: agents
     image: ${DCAURL}
     restart: always
     privileged: true
-    #command: bash -c "update-ca-certificates"
+    #command: bash -c \"update-ca-certificates\"
     volumes:
       - /opt/metalsoft/BSIAgentsVolume:/etc/BSIDatacenterAgents
       - /opt/metalsoft/logs:/var/log
@@ -388,51 +448,16 @@ services:
     environment:
       - TZ=Etc/UTC
     hostname: junos-driver
-  ms-agent:
-    container_name: ms-agent
-    network_mode: host
-    hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
-    image: ${MSAGENT_URL}
-    restart: always
-    environment:
-      - TZ=Etc/UTC
-      - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
-      - AGENT_SECRET=${MS_TUNNEL_SECRET}
-      - DATACENTER_ID=${DATACENTERNAME}
-      - MONITORING_SERVICE_PORT=8099
-      - LOG_LEVEL=debug
-      - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
-      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9091
-      - CONTROLLER_VNC_URI=wss://${SSL_HOSTNAME}/agent-vnc
-      - HTTP_PROXY=enabled
-      - FILE_TRANSFER=enabled
-      - SWITCH_SUBSCRIPTION=enabled
-      - VNC=enabled
-      - COMMAND_EXECUTION=enabled
-      - OS_IMAGES_MOUNT=/iso
-      - NFS_HOST=${MAINIP}:/data
-      - INBAND_HTTP_PROXY=disabled
-      - INBAND_FILE_TRANSFER=disabled
-    volumes:
-      - /opt/metalsoft/nfs-storage:/iso
-      - /etc/ssl/certs:/etc/ssl/certs
-  nfs:
-    network_mode: host
-    container_name: nfs-server
-    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:2.2.1
-    restart: unless-stopped
-    privileged: true
-    environment:
-      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
-      - NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
-    volumes:
-      - /opt/metalsoft/nfs-storage:/data
-    ports:
-      - 2049:2049
-      - 111:111
-      - 32765:32765
-      - 32767:32767
+"
 
+test "$INBAND" == "1" && non_inband_dc=''
+if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
+  debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
+  cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
+version: '3'
+services:
+$inband_dc
+$non_inband_dc
 ENDD
 fi
 
@@ -641,6 +666,10 @@ done
 
 debuglog "starting docker containers"
 systemctl start docker.service
+if [ "$FORCE" == "1" ] || [ "$INBAND" == "1" ] ;then
+debuglog "stopping any running docker containers.." info lightred
+docker ps -qa|xargs -i bash -c 'docker stop {} && docker rm {}' >/dev/null
+fi
 cd /opt/metalsoft/agents
 debuglog "pulling latest images.."
 docker compose pull
