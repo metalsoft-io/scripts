@@ -114,7 +114,9 @@ if [ "$gather" == 'controller' ];then
 	fi
 
 	# get information_schema.innodb_trx
+	$k -n $envname exec $mysql_pod -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/${thedate}_mysql_show_engine_innodb_status 2>/dev/null|| true
 	$k -n $envname exec $mysql_pod -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/${thedate}_mysql_information_schema.innodb_trx 2>/dev/null|| true
+	$k -n $envname exec $mysql_pod -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/${thedate}_mysql_performance_schema.data_locks 2>/dev/null|| true
 
 	echo "[i] backing up couchdb.."
 	#backup all couchdb DBs:
@@ -133,6 +135,8 @@ if [ "$gather" == 'controller' ];then
 	varlogsbsi="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
 	test -n "$varlogsbsi" && while read z;do $k -n $envname cp $bsi:${z} ${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_} &>/dev/null;done <<< "$varlogsbsi"
 done <<< "$bsipod"
+
+$k -n $envname get secret --no-headers|awk '{print $1}'|while read z;do echo -e '\n---';$k -n $envname get secret $z -o yaml;done > ${backupFolder}/k8s_secrets
 
 if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s resources.."
