@@ -689,9 +689,6 @@ if [ -f /etc/ssh/ms_banner ];then
   dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
 fi
 
-debuglog "Pulling discovery ISO"
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
-
 debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
 systemctl disable --now systemd-resolved.service
 systemctl disable --now rpcbind || true
@@ -712,5 +709,8 @@ done
 if [[ -z $(grep nameserver /etc/resolv.conf) ]];then
   echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 fi
+
+debuglog "Pulling discovery ISO"
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
 
 debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
