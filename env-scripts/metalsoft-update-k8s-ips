@@ -24,6 +24,7 @@ function nextIP ()
         echo $_nextip
 }
 _localip="$(ip r get 1|head -1|awk '{print $7}')"
+if [ "$(echo "$_localip"|wc -m)" -le 3 ];then _localip=1.2.3.4;fi
 _nextip="$(nextIP $_localip)"
 test $age -gt $consider_old && echo -e "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
@@ -57,6 +58,22 @@ test -n "$last_aip" || last_aip="10.255.146.148"
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
 test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io" >> /etc/hosts
+
+if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
+        if grep -q -- '--advertise-address=' /var/snap/microk8s/current/args/kube-apiserver;then
+                sed -i "s/--advertise-address=[0-9\.]\+/--advertise-address=${cip}/g" /var/snap/microk8s/current/args/kube-apiserver
+        else
+                echo "--advertise-address=${cip}" >> /var/snap/microk8s/current/args/kube-apiserver
+        fi
+fi
+
+if [ -f /var/snap/microk8s/current/args/kubelet ];then
+        if grep -q -- '--node-ip=' /var/snap/microk8s/current/args/kubelet;then
+                sed -i "s/--node-ip=[0-9\.]\+/--node-ip=${cip}/g" /var/snap/microk8s/current/args/kubelet
+        else
+                echo "--node-ip=${cip}" >> /var/snap/microk8s/current/args/kubelet
+        fi
+fi
 
 if [ ! -z $3 ];then
         proxy_url="$3"
@@ -133,6 +150,7 @@ if [ -f $contd_file ];then
 
         fi
 fi
+fi
 
 if [ -f /var/snap/microk8s/current/certs/csr.conf.template ];then
         if grep -q '^IP\.103 = ' /var/snap/microk8s/current/certs/csr.conf.template;then
@@ -144,13 +162,15 @@ fi
 
 echo "[i] Waiting for k8s service..."
 microk8s status --wait-ready -t 600 >/dev/null 2>&1
-sleep 10
-echo "[i] restarting microk8s to apply proxy settings..."
-microk8s stop
 sleep 5
-microk8s start
+echo "[i] refresh-certs..."
+microk8s refresh-certs --cert ca.crt --cert server.crt --cert front-proxy-client.crt
+echo "[i] restarting microk8s..."
+microk8s stop
+sleep 2
+microk8s start && echo "[i] microk8s started, waiting for k8s service..."
 microk8s status --wait-ready -t 600 >/dev/null 2>&1
-fi
+sleep 60
 
 if [ -d "/root/manifests" ];then
         cd /root/manifests/
