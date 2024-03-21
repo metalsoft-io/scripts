@@ -451,6 +451,21 @@ non_inband_dc="  agents:
 "
 
 test "$INBAND" == "1" && non_inband_dc=''
+if [ "$FORCE" == "1" ] ;then
+  backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
+  if [ -f /opt/metalsoft/agents/docker-compose.yaml ];then
+    cp /opt/metalsoft/agents/docker-compose.yaml /opt/metalsoft/agents/${backupPrefix}-docker-compose.yaml.bak
+  fi
+  if [ -f /opt/metalsoft/agents/haproxy.cfg ];then
+    cp /opt/metalsoft/agents/haproxy.cfg /opt/metalsoft/agents/${backupPrefix}-haproxy.cfg.bak
+  fi
+  if [ -f /opt/metalsoft/agents/supervisor.conf ];then
+    cp /opt/metalsoft/agents/supervisor.conf /opt/metalsoft/agents/${backupPrefix}-supervisor.conf.bak
+  fi
+  if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
+    cp /opt/metalsoft/agents/ssl-cert.pem /opt/metalsoft/agents/${backupPrefix}-ssl-cert.pem.bak
+  fi
+fi
 if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
   debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
   cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
