@@ -13,7 +13,7 @@ path_ssl_crt="$3"
 me="$(basename $0)"
 usage ()
 {
-  echo -e "Usage: ${bold}${me} newHostname.com${nc} [path_to_ssl_key.pem path_to_ssl_crt.pem]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can also be used to provide base64 encoded key and crt"
+  echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt"
 }
 
 nc="\e[00m"
@@ -48,7 +48,7 @@ if [ -n "$path_ssl_key" ];then
   test -f "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
 else
   if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
-    debuglog "SSL pem files not provided. SSL will not be updated!" info yellow
+    debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
   fi
 fi
 test -d /root/manifests || { debuglog "Error: /root/manifests is missing. Manifests are needed for this update to work properly " fail; exit 3; }
