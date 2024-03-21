@@ -92,10 +92,15 @@ test -d /root/manifests && cd /root/manifests && \
     echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
     exit 2
   else
-    $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-    $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-    $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
-    $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
+    if [ -d "/root/manifests/traefik_charts/traefik" ];then
+      debuglog "Using local /root/manifests/traefik_charts/traefik"
+      $micro helm3 upgrade traefik-${ns} /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+    else
+      $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+      $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+      $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
+      $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
+    fi
   fi
 
   if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
@@ -106,8 +111,10 @@ test -d /root/manifests && cd /root/manifests && \
     test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
     test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
     $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+  else
+    debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
   fi
 
   findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
-  test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is now: ${pink}${findSslSubject}${nc}"
+  test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is: ${pink}${findSslSubject}${nc}"
 
