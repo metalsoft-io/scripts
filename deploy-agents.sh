@@ -469,7 +469,6 @@ fi
 if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
   debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
   cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
-version: '3'
 services:
 $inband_dc
 $non_inband_dc
