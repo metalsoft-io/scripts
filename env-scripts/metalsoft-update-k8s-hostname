@@ -103,6 +103,10 @@ test -d /root/manifests && cd /root/manifests && \
     fi
   fi
 
+  for pod in license bsi;do
+    $k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
+  done
+
   if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
     debuglog "Applying SSL.."
     test -n "$path_ssl_key" && test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
