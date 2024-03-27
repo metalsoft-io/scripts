@@ -94,7 +94,7 @@ if [ "$gather" == 'controller' ];then
 
 	# TODO: in cases where env is not found, we should still collect info on what went wrong
 	if ! $k get ns|grep -q $envname ;then echo -e "[\e[1;31m✗\e[0m] Env $envname not found. Exiting..";exit 1;fi
-	mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
+	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
 	get_disks
 	get_k8s
@@ -103,21 +103,22 @@ if [ "$gather" == 'controller' ];then
 		echo "[i] backing up mysql databases.."
 		#backup all mysql DBs:
 		mysqldump_opts='--skip-comments'
-		all_dbs="$($k -n $envname exec $mysql_pod -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+		all_dbs="$($k -n $envname exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read z;do
 			if [ "$z" == "mysql" ];then
-				$k -n $envname exec $mysql_pod -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
+				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
 			else
-				$k -n $envname exec $mysql_pod -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
+				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz || true
 			fi
 		done <<< "$all_dbs"
 	fi
 
 	# get information_schema.innodb_trx
-	$k -n $envname exec $mysql_pod -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/${thedate}_mysql_show_engine_innodb_status 2>/dev/null|| true
-	$k -n $envname exec $mysql_pod -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/${thedate}_mysql_information_schema.innodb_trx 2>/dev/null|| true
-	$k -n $envname exec $mysql_pod -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/${thedate}_mysql_performance_schema.data_locks 2>/dev/null|| true
-	$k -n $envname exec $mysql_pod -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/${thedate}_mysql_database_version 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/${thedate}_mysql_show_engine_innodb_status 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/${thedate}_mysql_information_schema.innodb_trx 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/${thedate}_mysql_performance_schema.data_locks 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/${thedate}_mysql_database_version 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/${thedate}_mysql_database_schema.sql 2>/dev/null|| true
 
 	echo "[i] backing up couchdb.."
 	#backup all couchdb DBs:
