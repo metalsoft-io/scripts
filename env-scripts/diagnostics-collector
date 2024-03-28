@@ -113,11 +113,13 @@ if [ "$gather" == 'controller' ];then
 		done <<< "$all_dbs"
 	fi
 
+	echo "[i] backing up mysql locks.."
 	# get information_schema.innodb_trx
 	$k -n $envname exec deploy/mysql -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/mysql_show_engine_innodb_status 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/mysql_information_schema.innodb_trx 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql_performance_schema.data_locks 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql_database_version 2>/dev/null|| true
+	echo "[i] backing up mysql schema.."
 	timeout 120 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/mysql_database_schema.sql 2>/dev/null|| true
 
 	echo "[i] backing up couchdb.."
