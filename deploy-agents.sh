@@ -23,21 +23,9 @@ function debuglog ()
   echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
 
-function parse_yaml {
-   local prefix=$2
-   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
-   sed -ne "s|^\($s\):|\1|" \
-        -e "s|^\($s\)\($w\)$s:$s[\"']\(.*\)[\"']$s\$|\1$fs\2$fs\3|p" \
-        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
-   awk -F$fs '{
-      indent = length($1)/2;
-      vname[indent] = $2;
-      for (i in vname) {if (i > indent) {delete vname[i]}}
-      if (length($3) > 0) {
-         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
-         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
-      }
-   }'
+yamltojson ()
+{
+    python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
 }
 
 debuglog "whoami: $(whoami)" bold pink
@@ -710,9 +698,9 @@ systemctl disable --now rpcbind.socket || true
 systemctl daemon-reload
 
 debuglog "Add DNS resolvers to /etc/resolv.conf"
-test -L /etc/resolv.conf && \rm -f /etc/resolv.conf 
-find /etc/netplan -type f | while read -r netplan_file; do
-  nameservers=$(parse_yaml $netplan_file | grep nameservers | cut -d "=" -f 2 | tr -d '"[]' | sed -e "s/,/ /g")
+test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf
+find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
+  nameservers=$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')
   for nameserver in $nameservers; do
     echo "nameserver $nameserver"
     if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
