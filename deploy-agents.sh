@@ -699,8 +699,8 @@ systemctl daemon-reload
 
 debuglog "Add DNS resolvers to /etc/resolv.conf"
 test -L /etc/resolv.conf && \rm -f /etc/resolv.conf 
-find /etc/netplan -type f | while read -r netplan_file; do
-  nameservers=$(parse_yaml $netplan_file | grep nameservers | cut -d "=" -f 2 | tr -d '"[]' | sed -e "s/,/ /g")
+find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
+  nameservers=$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')
   for nameserver in $nameservers; do
     echo "nameserver $nameserver"
     if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
