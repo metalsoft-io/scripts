@@ -698,18 +698,28 @@ systemctl disable --now rpcbind.socket || true
 systemctl daemon-reload
 
 debuglog "Add DNS resolvers to /etc/resolv.conf"
-test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf
+test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
 find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
   nameservers=$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')
   for nameserver in $nameservers; do
     echo "nameserver $nameserver"
     if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
       echo "nameserver $nameserver" >> /etc/resolv.conf
+      RESOLVCONFCHANGED="YES"
     fi
   done
 done
 if [[ -z $(grep nameserver /etc/resolv.conf) ]];then
   echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+  RESOLVCONFCHANGED="YES"
+fi
+
+if [[ -n ${RESOLVCONFCHANGED} ]];then
+  debuglog "Resolv.conf changed, restarting docker containers"
+  cd /opt/metalsoft/agents || return
+  docker compose down
+  docker compose up -d
+  cd - || return
 fi
 
 debuglog "Pulling discovery ISO"
