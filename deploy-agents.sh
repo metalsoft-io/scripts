@@ -25,13 +25,18 @@ function debuglog ()
 
 yamltojson ()
 {
-    python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
+  python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
 }
 
 debuglog "whoami: $(whoami)" bold pink
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
+
+command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
+  apt-get update -qq && \
+  apt-get -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
+
 
 if [ -n "$DOCKERENV" ];then
   IMAGES_TAG_SAVED="$IMAGES_TAG"
@@ -77,17 +82,12 @@ function nc_check_remote_conn {
   comment="$4 "
   test "$protocol" == 'icmp' && port=icmp
 
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
-    apt-get update -qq && \
-    apt-get -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
-
   echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
 
   if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
   fi
   for ip in $ip;do
-
     if [ "$protocol" == "tcp" ];then
       nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
     elif [ "$protocol" == "icmp" ];then
