@@ -194,8 +194,18 @@ debuglog "Pulling DC config URL"
 DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
 
 debuglog "Enabling nfs/nfsd kernel modules"
-test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko && modprobe nfs && if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi || { echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
-test -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko && modprobe nfsd && if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi || { echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1; }
+if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
+  modprobe nfs && \
+    if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
+  else
+    echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+fi
+if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
+  modprobe nfsd && \
+    if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
+  else
+    echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+fi
 
 test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
 cat > /tmp/docker-archive-keyring.gpg <<ENDD
