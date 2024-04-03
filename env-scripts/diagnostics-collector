@@ -118,6 +118,8 @@ if [ "$gather" == 'controller' ];then
 	# get information_schema.innodb_trx
 	$k -n $envname exec deploy/mysql -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/mysql_show_engine_innodb_status 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'show full processlist' > ${backupFolder}/mysql_show_full_processlist 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'show global variables\G' > ${backupFolder}/mysql_show_global_variables 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'show session variables\G' > ${backupFolder}/mysql_show_session_variables 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/mysql_information_schema.innodb_trx 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql_performance_schema.data_locks 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql_database_version 2>/dev/null|| true
