@@ -85,6 +85,9 @@ function get_k8s ()
 	$k get pod -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	$k get ingressroute --no-headers|awk '{print $1}'|while read z;do $k get ingressroute $z -o yaml > ${backupFolder}/k8s_ingressroute_${z}.yaml;done || true
+	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k get ingressroutetcp $z -o yaml > ${backupFolder}/k8s_ingressroutetcp_${z}.yaml;done || true
+	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k get ingressrouteudp $z -o yaml > ${backupFolder}/k8s_ingressrouteudp_${z}.yaml;done || true
 }
 
 if [ "$gather" == 'controller' ];then
@@ -100,6 +103,7 @@ if [ "$gather" == 'controller' ];then
 	get_disks
 	get_k8s
 
+	mkdir -p ${backupFolder}/mysql
 	if [ "$extended" == '1' ];then
 		echo "[i] backing up mysql databases.."
 		#backup all mysql DBs:
@@ -107,32 +111,34 @@ if [ "$gather" == 'controller' ];then
 		all_dbs="$($k -n $envname exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read z;do
 			if [ "$z" == "mysql" ];then
-				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/mysqldatabase_${z}_${envname}.sql.gz || true
+				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz || true
 			else
-				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/mysqldatabase_${z}_${envname}.sql.gz || true
+				$k -n $envname exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz || true
 			fi
 		done <<< "$all_dbs"
 	fi
 
 	echo "[i] backing up mysql locks.."
 	# get information_schema.innodb_trx
-	$k -n $envname exec deploy/mysql -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/mysql_show_engine_innodb_status 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'show full processlist' > ${backupFolder}/mysql_show_full_processlist 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'show global variables\G' > ${backupFolder}/mysql_show_global_variables 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'show session variables\G' > ${backupFolder}/mysql_show_session_variables 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/mysql_information_schema.innodb_trx 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql_performance_schema.data_locks 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql_database_version 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/mysql/mysql_show_engine_innodb_status 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'show full processlist' > ${backupFolder}/mysql/mysql_show_full_processlist 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'show global variables\G' > ${backupFolder}/mysql/mysql_show_global_variables 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'show session variables\G' > ${backupFolder}/mysql/mysql_show_session_variables 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/mysql/mysql_information_schema.innodb_trx 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql/mysql_performance_schema.data_locks 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -e 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql/mysql_database_version 2>/dev/null|| true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
-	timeout 120 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/mysql_database_schema.sql 2>/dev/null|| true
+	timeout 180 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/mysql/mysql_database_schema.sql 2>/dev/null
+	mysqldump_exitcode="$?"
+	test $mysqldump_exitcode -ne "0" && mysqldump_exitcode_error="${lightred}[mysqldump failed with exit code $mysqldump_exitcode]${nc}"
 	mysql_end="$SECONDS"
 	mysql_elapsed=$((mysql_end-mysql_start))
-	echo "[+] ${mysql_elapsed} sec"
+	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
 	echo "[i] backing up couchdb.."
 	#backup all couchdb DBs:
 	couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
-	test -n "$couchdbUrl" && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/couchdb_backup_${z}.gz;done || true
+	test -n "$couchdbUrl" && mkdir -p ${backupFolder}/couchdb && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/couchdb/couchdb_backup_${z}.gz;done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
 	$k -n $envname get pod --no-headers|awk '{print $1}'|while read z;do $k -n $envname logs $z > ${backupFolder}/logs_pod_${z} 2>&1; $k -n $envname describe pod $z >  ${backupFolder}/describe_pod_${z} 2>&1;done
@@ -191,10 +197,12 @@ tar czf ${resultFilename} -C $(dirname ${backupFolder%*/}) ${backupFolder##*/} >
 		if timeout 3 bash -c "</dev/tcp/176.223.248.10/443" 2>/dev/null; then
 			test -z "$doNotAutoSend" && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" -F diag=@"${resultFilename}" &>/dev/null
 		fi
-		read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
-		case $yn in
-			[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
-			[Nn]* ) exit;;
-			* ) exit;;
-		esac
+		if [ -z "$doNotAutoSend" ];then
+			read -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
+			case $yn in
+				[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
+				[Nn]* ) exit;;
+				* ) exit;;
+			esac
+		fi
 	fi
