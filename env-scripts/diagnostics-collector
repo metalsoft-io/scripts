@@ -57,7 +57,7 @@ fi
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 test -z "$envname" && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
-backupFolder=${backupFolder}/${thedate}_${envname}
+backupFolder=${backupFolder}/${thedate}_${envname}_${gather}
 
 function finish {
 	echo "[i] cleaning up.."
@@ -172,7 +172,8 @@ else # if gather=agent
 	docker ps|grep Restarting > ${backupFolder}/docker_restarting.txt || true
 	docker ps|grep Restarting|awk '{print $1}'|while read z;do docker logs $z --tail=1000 > ${backupFolder}/docker_restarting_${z}.txt;done || true
 	docker images -a > ${backupFolder}/docker_images.txt || true
-	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do echo $z|while read f;do find $f -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} ${backupFolder}/docker-logs/ \;;done;done
+	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-agents-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do echo $z|while read f;do find $f -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} ${backupFolder}/docker-agents-logs/ \;;done;done
+	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && docker ps -a --format '{{.Names}}.{{.ID}}'|while read z;do docker logs ${z%%.*} > "${backupFolder}/docker-logs/${z}.log" 2>&1;done
 
 
 fi
