@@ -69,21 +69,31 @@ mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could 
 
 function get_disks ()
 {
+	echo -e "\n:: df -h\n" >> ${backupFolder}/disks_stats.txt
 	df -h 2>&1 >> ${backupFolder}/disks_stats.txt || true
+	echo -e "\n:: lsblk\n" >> ${backupFolder}/disks_stats.txt
 	lsblk 2>&1 >> ${backupFolder}/disks_stats.txt || true
+	echo -e "\n:: fdisk -l\n" >> ${backupFolder}/disks_stats.txt
 	fdisk -l 2>&1 >> ${backupFolder}/disks_stats.txt | true
 	cat /etc/hosts > ${backupFolder}/etc_hosts || true
 	cat /etc/resolv.conf > ${backupFolder}/etc_resolv_conf || true
-	ip a > ${backupFolder}/ip_stats || true
+	echo -e "\n:: ip a\n" > ${backupFolder}/ip_stats
+	ip a >> ${backupFolder}/ip_stats || true
+	echo -e "\n:: ip r\n" >> ${backupFolder}/ip_stats
 	ip r >> ${backupFolder}/ip_stats || true
+	echo -e "\n:: ip link\n" >> ${backupFolder}/ip_stats
 	ip link >> ${backupFolder}/ip_stats || true
 }
 
 function get_k8s ()
 {
+	echo -e "\n:: kubectl get node -o wide\n" >> ${backupFolder}/k8s_stats.txt
 	$k get node -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get pod -A\n" >> ${backupFolder}/k8s_stats.txt
 	$k get pod -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get svc -A\n" >> ${backupFolder}/k8s_stats.txt
 	$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get deploy -A -o wide\n" >> ${backupFolder}/k8s_stats.txt
 	$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	$k get ingressroute --no-headers|awk '{print $1}'|while read z;do $k get ingressroute $z -o yaml > ${backupFolder}/k8s_ingressroute_${z}.yaml;done || true
 	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k get ingressroutetcp $z -o yaml > ${backupFolder}/k8s_ingressroutetcp_${z}.yaml;done || true
@@ -146,7 +156,7 @@ if [ "$gather" == 'controller' ];then
 	mkdir -p ${backupFolder}/k8s_pod_bsi_varlog
 	bsipod="$($k -n $envname get pod --no-headers|grep ^bsi|awk '{print $1}')"
 	test -n "$bsipod" && while read bsi;do
-	varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/ -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
+	varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
 	test -n "$varlogs" && while read z;do $k -n $envname cp $bsi:${z} ${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_} &>/dev/null;done <<< "$varlogs"
 
 	varlogsbsi="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
