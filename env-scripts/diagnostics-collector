@@ -112,6 +112,11 @@ if [ "$gather" == 'controller' ];then
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
 	get_disks
+	echo "[i] checking disk latency.."
+	echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
+	$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct;rm -f /testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+	echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
+	$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct;rm -f /var/log/testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
 	get_k8s
 
 	mkdir -p ${backupFolder}/mysql
