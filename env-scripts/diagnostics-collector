@@ -164,9 +164,9 @@ if [ "$gather" == 'controller' ];then
 	bsipod="$($k -n $envname get pod --no-headers|grep ^bsi|awk '{print $1}')"
 	test -n "$bsipod" && while read bsi;do
 	if [ -z "$sqlUpgradeLogs" ];then
-		varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
+		varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
 	else
-		varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
+		varlogs="$($k -n $envname exec -it $bsi -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
 	fi
 
 	test -n "$varlogs" && while read z;do $k -n $envname cp $bsi:${z} ${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_} &>/dev/null;done <<< "$varlogs"
