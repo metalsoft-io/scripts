@@ -111,7 +111,7 @@ MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 test -n "$MAINIP" && NFSIP="$MAINIP"
-test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && NFSIP="$_nfsip"
+test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
 
 
 function nc_check_remote_conn {
