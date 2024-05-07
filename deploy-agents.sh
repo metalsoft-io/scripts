@@ -28,14 +28,64 @@ yamltojson ()
   python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
 }
 
+testOS ()
+{
+  if [ -f /etc/os-release ]; then
+    source /etc/os-release
+    echo "$ID_LIKE" | grep -i -q rhel &&  found_os=rhel
+    echo "$ID_LIKE" | grep -i -q debian && found_os=debian
+  fi
+
+  if [ -n "$found_os" ]; then
+    source /etc/os-release
+    if [ "$found_os" == "rhel" ]; then
+        command -v yum > /dev/null && os_packager=yum
+        command -v dnf > /dev/null && os_packager=dnf
+      if echo $ID|grep -qoP '(rocky|almalinux)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^8\.9|^9\.3)"; then
+        found_os_ver="rocky"
+        test -n $os_packager && os_supported=1
+      elif echo $ID|grep -qoP '(rhel|centos)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^9)"; then
+        found_os_ver="rhel9"
+        test -n $os_packager && os_supported=1
+      fi
+    elif [ "$found_os" == "debian" ]; then
+        command -v apt > /dev/null && os_packager=apt
+        command -v apt-get > /dev/null && os_packager=apt-get
+      if echo $ID|grep -qoP '(ubuntu)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(20\.04|22\.04)"; then
+        found_os_ver="ubuntuLTS"
+        test -n $os_packager && os_supported=1
+      fi
+    fi
+    _all="$ID $VERSION_ID $found_os $os_packager"
+    local array=($_all)
+    echo "${array[@]}"
+  else
+
+    echo
+    echo "This script is only compatible with Ubuntu 20+ OS, and RedHat 9+ OS"
+    echo "and will not run on any other OS"
+    echo
+    exit 2
+  fi
+}
+read NAME VERSION_ID found_os os_packager < <(testOS)
+
+debuglog "OS: $NAME $VERSION_ID / $os_packager for $found_os"
 debuglog "whoami: $(whoami)" bold pink
+if [ "$found_os" == "debian" ];then
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
+fi
 
-command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
-  apt-get update -qq && \
-  apt-get -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
+if [ "$found_os" == "debian" ];then
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
+    $os_packager update -qq && \
+    $os_packager -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
+    else # if rhel
+      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
+        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget >/dev/null; }
+fi
 
 
 if [ -n "$DOCKERENV" ];then
@@ -45,7 +95,7 @@ if [ -n "$DOCKERENV" ];then
   JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
 else
-  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.1.1'
+  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.2.3'
   test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
   test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
@@ -60,19 +110,9 @@ CLI_DATACENTERNAME="$DATACENTERNAME"
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
+test -n "$MAINIP" && NFSIP="$MAINIP"
+test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K.*' /opt/metalsoft/agents/docker-compose.yaml|cut -d: -f1)" && test -n "$_nfsip" && NFSIP="$_nfsip"
 
-function testOS
-{
-  echo
-  debuglog "testing OS version"
-  if ! grep -q "Ubuntu 2" /etc/issue; then
-    echo
-    echo "This script is only compatible with Ubuntu 20+ Operating system"
-    echo "and will not run on any other OS"
-    echo
-    exit 2
-  fi
-}
 
 function nc_check_remote_conn {
 
@@ -87,14 +127,16 @@ function nc_check_remote_conn {
   if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
   fi
+  test -z "$ip" && echo -e "${lightred}Error: not resolved${nc}" && return
   for ip in $ip;do
     if [ "$protocol" == "tcp" ];then
-      nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
+      nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     elif [ "$protocol" == "icmp" ];then
-      ping -c2 "$ip" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
+      ping -c2 "$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     else
-      nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && echo -e "${lightgreen}success${nc}" || echo -e "${lightred}failure${nc}"
+      nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     fi
+    echo -e "$res"
   done
 }
 
@@ -132,7 +174,6 @@ function manageSSL
   fi
 }
 
-testOS
 
 test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && \
   cat > /usr/local/share/ca-certificates/metalsoft_ca.crt <<ENDD
@@ -163,14 +204,24 @@ dvVIE0i3gwt0+qhni75EgUbufGrVlO5aC1BK
 ENDD
 
 debuglog "Ensuring Metalsoft CA is installed"
-test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt
-test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates
+test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /usr/local/share/ca-certificates/metalsoft_ca.crt
+test "$found_os" == "debian" && test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates >/dev/null
+
+test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
+test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && update-ca-trust extract >/dev/null
 
 debuglog "Checking for other custom CAs"
-if [[ -n "$CUSTOM_CA" ]]; then
-  echo ${CUSTOM_CA_CERT} | base64 --decode > /usr/local/share/ca-certificates/${CUSTOM_CA}
-  echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/ssl/certs/${CUSTOM_CA}
-  update-ca-certificates
+if [ "$found_os" == "debian" ];then
+  if [[ -n "$CUSTOM_CA" ]]; then
+    echo ${CUSTOM_CA_CERT} | base64 --decode > /usr/local/share/ca-certificates/${CUSTOM_CA}
+    echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/ssl/certs/${CUSTOM_CA}
+    update-ca-certificates
+  fi
+else # if rhel
+  if [[ -n "$CUSTOM_CA" ]]; then
+    echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
+    update-ca-trust extract
+  fi
 fi
 
 debuglog "Creating folders"
@@ -194,20 +245,35 @@ debuglog "Pulling DC config URL"
 DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
 
 debuglog "Enabling nfs/nfsd kernel modules"
-if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
-  modprobe nfs && \
-    if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
-  else
-    echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
-fi
-if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
-  modprobe nfsd && \
-    if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
-  else
-    echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+if [ "$found_os" == "debian" ];then
+  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
+    modprobe nfs && \
+      if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
+    else
+      echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+  fi
+  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
+    modprobe nfsd && \
+      if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
+    else
+      echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+  fi
+else # if rhel
+  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.xz ]];then
+    modprobe nfs && \
+      if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
+    else
+      echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+  fi
+  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.xz ]];then
+    modprobe nfsd && \
+      if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
+    else
+      echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
+  fi
 fi
 
-test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
+test -d /usr/share/keyrings && test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
 cat > /tmp/docker-archive-keyring.gpg <<ENDD
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
@@ -273,21 +339,25 @@ YT90qFF93M3v01BbxP+EIY2/9tiIPbrd
 -----END PGP PUBLIC KEY BLOCK-----
 ENDD
 
-test -f /tmp/docker-archive-keyring.gpg && cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+test -f /tmp/docker-archive-keyring.gpg && test -d /usr/share/keyrings && cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
 debuglog "Ensuring Docker is installed"
-command -v docker > /dev/null || { debuglog "Install docker" && \
-  echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-  debuglog "Apt update.." && \
-  apt-get update -qq && \
-  debuglog "Apt installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
-  apt-get -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+if [ "$found_os" == "debian" ];then
+  command -v docker > /dev/null || { debuglog "Install docker" && \
+    echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+    debuglog "$os_packager update.." && \
+    $os_packager update -qq && \
+    debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
+    $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+else # if rhel
+  command -v docker > /dev/null || { debuglog "Install docker" && \
+    $os_packager config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null && \
+    debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
+    $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+fi
 
 debuglog "Checking if 'docker compose' is available"
-docker compose >/dev/null 2>&1 || { debuglog "Installing docker-compose-plugin" && apt-get update -qq && apt-get -y install docker-compose-plugin; }
-
-  # debuglog "Ensuring docker-compose is installed"
-  # test -x /usr/local/bin/docker-compose || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|grep browser_download_url|grep "$(uname -s|tr '[:upper:]' '[:lower:]')-$(uname -m)"|grep -v sha25|head -1|cut -d'"' -f4)" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; } || { debuglog "Installing docker-compose" && curl -skL "$(curl -s https://api.github.com/repos/docker/compose/releases/latest|jq -r '.assets[] | select(.name=="docker-compose-linux-'$(uname -m)'") | .browser_download_url')" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose; }
+docker compose >/dev/null 2>&1 || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
 
 debuglog "Checking provided SSL"
 test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
@@ -363,7 +433,7 @@ inband_dc="  ms-agent:
       - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION}
       - VNC=${ENVVAR_VNC}
       - OS_IMAGES_MOUNT=/iso
-      - NFS_HOST=${MAINIP}:/data
+      - NFS_HOST=${NFSIP}:/data
       - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY}
       - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER}
     volumes:
@@ -677,7 +747,7 @@ while [ $? -ne 0 ]; do
 done
 
 debuglog "starting docker containers"
-systemctl start docker.service
+systemctl enable --now docker.service
 if [ "$FORCE" == "1" ] || [ "$INBAND" == "1" ] ;then
 debuglog "stopping any running docker containers.." info lightred
 docker ps -qa|xargs -i bash -c 'docker stop {} && docker rm {}' >/dev/null
@@ -687,13 +757,6 @@ debuglog "pulling latest images.."
 docker compose pull
 docker compose up -d
 
-if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
-  sleep 2
-  docker ps
-  sleep 2
-  docker ps
-fi
-
 if [ -f /etc/ssh/ms_banner ];then
   debuglog "update /etc/ssh/ms_banner"
   if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
@@ -701,25 +764,38 @@ if [ -f /etc/ssh/ms_banner ];then
   dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
 fi
 
-debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
-systemctl disable --now systemd-resolved.service
-systemctl disable --now rpcbind || true
-systemctl disable --now rpcbind.socket || true
-systemctl daemon-reload
+if [ "$found_os" == "debian" ];then
+  debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
+  systemctl disable --now systemd-resolved.service 2>/dev/null || true
+  systemctl disable --now rpcbind 2>/dev/null || true
+  systemctl disable --now rpcbind.socket 2>/dev/null || true
+  systemctl daemon-reload
 
-debuglog "Add DNS resolvers to /etc/resolv.conf"
-test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
-find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
-  nameservers=$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')
+  debuglog "Add DNS resolvers to /etc/resolv.conf"
+  test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
+  find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
+  nameservers="$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')"
   for nameserver in $nameservers; do
-    echo "nameserver $nameserver"
-    if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
+    debuglog "nameserver $nameserver"
+    if [[ "$nameserver" != "$(grep $nameserver /etc/resolv.conf | cut -d" " -f2)" ]];then
       echo "nameserver $nameserver" >> /etc/resolv.conf
       RESOLVCONFCHANGED="YES"
     fi
   done
 done
-if [[ -z $(grep nameserver /etc/resolv.conf) ]];then
+else #if rhel
+  test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
+  nameservers="$(nmcli d show $(ip r get 1|head -1|awk '{print $5}') 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
+  test -n "$nameservers" && for nameserver in $nameservers; do
+  debuglog "nameserver $nameserver"
+  if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
+    echo "nameserver $nameserver" >> /etc/resolv.conf
+    RESOLVCONFCHANGED="YES"
+  fi
+done
+fi
+
+if ! grep -q nameserver /etc/resolv.conf;then
   echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
   RESOLVCONFCHANGED="YES"
 fi
@@ -732,7 +808,15 @@ if [[ -n ${RESOLVCONFCHANGED} ]];then
   cd - || return
 fi
 
+
 debuglog "Pulling discovery ISO"
 test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
+
+if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
+  sleep 2
+  docker ps
+  sleep 2
+  docker ps
+fi
 
 debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
