@@ -763,7 +763,7 @@ if [ -f /etc/ssh/ms_banner ];then
   debuglog "update /etc/ssh/ms_banner"
   if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
   dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
-  dcname="$(grep ' DATACENTER_NAME=' /opt/metalsoft/agents/docker-compose.yaml|cut -d= -f2)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
+  dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml|head -1)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
 fi
 
 if [ "$found_os" == "debian" ];then
