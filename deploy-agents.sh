@@ -32,7 +32,7 @@ testOS ()
 {
   if [ -f /etc/os-release ]; then
     source /etc/os-release
-    echo "$ID_LIKE" | grep -i -q rhel &&  found_os=rhel
+    echo "$ID_LIKE" | grep -E -i -q "rhel|fedora" &&  found_os=rhel
     echo "$ID_LIKE" | grep -i -q debian && found_os=debian
   fi
 
@@ -88,6 +88,7 @@ if [ "$found_os" == "debian" ];then
 fi
 
 
+REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 if [ -n "$DOCKERENV" ];then
   IMAGES_TAG_SAVED="$IMAGES_TAG"
   IMAGES_TAG='${TAG}'
@@ -141,7 +142,7 @@ function nc_check_remote_conn {
 }
 
 nc_check_remote_conn repo.metalsoft.io 80 tcp
-nc_check_remote_conn registry.metalsoft.dev 443 tcp
+nc_check_remote_conn ${REG_HOST} 443 tcp
 test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 443 tcp
 test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
@@ -175,7 +176,7 @@ function manageSSL
 }
 
 
-test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && \
+test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && mkdir -p /usr/local/share/ca-certificates/ && \
   cat > /usr/local/share/ca-certificates/metalsoft_ca.crt <<ENDD
 -----BEGIN CERTIFICATE-----
 MIIEBzCCAu+gAwIBAgIUTObwqnwPcZW4sZ5RvTl++4G/4+EwDQYJKoZIhvcNAQEL
@@ -248,26 +249,26 @@ debuglog "Enabling nfs/nfsd kernel modules"
 if [ "$found_os" == "debian" ];then
   if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
     modprobe nfs && \
-      if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
+      if ! grep -qE '^nfs$' /etc/modules 2>/dev/null;then echo nfs >> /etc/modules;fi
     else
       echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
   fi
   if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
     modprobe nfsd && \
-      if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
+      if ! grep -qE '^nfsd$' /etc/modules 2>/dev/null;then echo nfsd >> /etc/modules;fi
     else
       echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
   fi
 else # if rhel
   if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.xz ]];then
     modprobe nfs && \
-      if ! grep -E '^nfs$' /etc/modules > /dev/null;then echo nfs >> /etc/modules;fi
+      if ! grep -qE '^nfs$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfs >> /etc/modules-load.d/nfs.conf;fi
     else
       echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
   fi
   if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.xz ]];then
     modprobe nfsd && \
-      if ! grep -E '^nfsd$' /etc/modules > /dev/null;then echo nfsd >> /etc/modules;fi
+      if ! grep -qE '^nfsd$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfsd >> /etc/modules-load.d/nfs.conf;fi
     else
       echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
   fi
@@ -734,20 +735,21 @@ sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/a
 
 fi
 
-debuglog "Login to docker with Metalsoft provided credentials for registry.metalsoft.dev:"
+debuglog "starting docker containers"
+systemctl enable --now docker.service
+until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done && echo
+debuglog "Login to docker with Metalsoft provided credentials for ${REG_HOST}:"
 mkdir -p "${HOME}/.docker"
-test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"registry.metalsoft.dev\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
+test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"${REG_HOST}\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
 
-docker login registry.metalsoft.dev
+docker login ${REG_HOST}
 
 while [ $? -ne 0 ]; do
-  debuglog "Lets try docker login again:"
-  docker login registry.metalsoft.dev
+  debuglog "Lets try again: docker login ${REG_HOST}:"
+  docker login ${REG_HOST}
   sleep 1
 done
 
-debuglog "starting docker containers"
-systemctl enable --now docker.service
 if [ "$FORCE" == "1" ] || [ "$INBAND" == "1" ] ;then
 debuglog "stopping any running docker containers.." info lightred
 docker ps -qa|xargs -i bash -c 'docker stop {} && docker rm {}' >/dev/null
@@ -776,7 +778,7 @@ if [ "$found_os" == "debian" ];then
   find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
   nameservers="$(yamltojson $netplan_file  | jq .network.ethernets | jq -r '.[].nameservers | .addresses' | jq -sr 'flatten(1) | join(" ")')"
   for nameserver in $nameservers; do
-    debuglog "nameserver $nameserver"
+    debuglog "nameserver ${yellow}$nameserver${nc}"
     if [[ "$nameserver" != "$(grep $nameserver /etc/resolv.conf | cut -d" " -f2)" ]];then
       echo "nameserver $nameserver" >> /etc/resolv.conf
       RESOLVCONFCHANGED="YES"
@@ -787,7 +789,7 @@ else #if rhel
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
   nameservers="$(nmcli d show $(ip r get 1|head -1|awk '{print $5}') 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
   test -n "$nameservers" && for nameserver in $nameservers; do
-  debuglog "nameserver $nameserver"
+  debuglog "nameserver ${yellow}$nameserver${nc}"
   if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
     echo "nameserver $nameserver" >> /etc/resolv.conf
     RESOLVCONFCHANGED="YES"
