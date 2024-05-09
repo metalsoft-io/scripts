@@ -83,8 +83,8 @@ if [ "$found_os" == "debian" ];then
     $os_packager update -qq && \
     $os_packager -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
     else # if rhel
-      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
-        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget >/dev/null; }
+      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
+        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools >/dev/null; }
 fi
 
 
