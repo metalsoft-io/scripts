@@ -1,4 +1,5 @@
 #!/bin/bash
+# vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=sh
 # set -x
 
 nc="\e[00m"
@@ -39,8 +40,8 @@ testOS ()
   if [ -n "$found_os" ]; then
     source /etc/os-release
     if [ "$found_os" == "rhel" ]; then
-        command -v yum > /dev/null && os_packager=yum
-        command -v dnf > /dev/null && os_packager=dnf
+      command -v yum > /dev/null && os_packager=yum
+      command -v dnf > /dev/null && os_packager=dnf
       if echo $ID|grep -qoP '(rocky|almalinux)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^8\.9|^9\.3)"; then
         found_os_ver="rocky"
         test -n $os_packager && os_supported=1
@@ -49,8 +50,8 @@ testOS ()
         test -n $os_packager && os_supported=1
       fi
     elif [ "$found_os" == "debian" ]; then
-        command -v apt > /dev/null && os_packager=apt
-        command -v apt-get > /dev/null && os_packager=apt-get
+      command -v apt > /dev/null && os_packager=apt
+      command -v apt-get > /dev/null && os_packager=apt-get
       if echo $ID|grep -qoP '(ubuntu)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(20\.04|22\.04)"; then
         found_os_ver="ubuntuLTS"
         test -n $os_packager && os_supported=1
@@ -70,12 +71,15 @@ testOS ()
 }
 read NAME VERSION_ID found_os os_packager < <(testOS)
 
-debuglog "OS: $NAME $VERSION_ID / $os_packager for $found_os"
+DOCKERBIN='docker'
+test "$USEPODMAN" == "1" && DOCKERBIN='podman'
+
+debuglog "OS: $NAME $VERSION_ID / $os_packager for $found_os / $DOCKERBIN"
 debuglog "whoami: $(whoami)" bold pink
 if [ "$found_os" == "debian" ];then
-export LC_ALL=C
-export DEBIAN_FRONTEND=noninteractive
-export APT_LISTCHANGES_FRONTEND=none
+  export LC_ALL=C
+  export DEBIAN_FRONTEND=noninteractive
+  export APT_LISTCHANGES_FRONTEND=none
 fi
 
 if [ "$found_os" == "debian" ];then
@@ -86,7 +90,6 @@ if [ "$found_os" == "debian" ];then
       command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
         $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools >/dev/null; }
 fi
-
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 if [ -n "$DOCKERENV" ];then
@@ -120,7 +123,7 @@ function nc_check_remote_conn {
   ip=$1
   port=$2
   protocol=${3:-tcp}
-  comment="$4 "
+  test -n "$4" && comment="$4 "
   test "$protocol" == 'icmp' && port=icmp
 
   echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
@@ -131,11 +134,11 @@ function nc_check_remote_conn {
   test -z "$ip" && echo -e "${lightred}Error: not resolved${nc}" && return
   for ip in $ip;do
     if [ "$protocol" == "tcp" ];then
-      nc -nzw 5 "$ip" "$port" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+      nc -nzw 5 "$ip" "$port" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     elif [ "$protocol" == "icmp" ];then
-      ping -c2 "$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+      ping -c2 "$ip" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     else
-      nc -nzuw 5 "$ip" "$port" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+      nc -nzuw 5 "$ip" "$port" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     fi
     echo -e "$res"
   done
@@ -209,7 +212,7 @@ test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metal
 test "$found_os" == "debian" && test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates >/dev/null
 
 test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && wget -q https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -O /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
-test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && update-ca-trust extract >/dev/null
+test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && cp /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-trust extract >/dev/null
 
 debuglog "Checking for other custom CAs"
 if [ "$found_os" == "debian" ];then
@@ -223,6 +226,8 @@ else # if rhel
     echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
     update-ca-trust extract
   fi
+  # https://stackoverflow.com/a/31334443/2291328
+  chcon -Rt svirt_sandbox_file_t /etc/ssl/certs/
 fi
 
 debuglog "Creating folders"
@@ -240,42 +245,42 @@ if [ -z "$DCCONF" ];then
   echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
-fi
+  fi
 
-debuglog "Pulling DC config URL"
-DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
+  debuglog "Pulling DC config URL"
+  DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
 
-debuglog "Enabling nfs/nfsd kernel modules"
-if [ "$found_os" == "debian" ];then
-  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
-    modprobe nfs && \
-      if ! grep -qE '^nfs$' /etc/modules 2>/dev/null;then echo nfs >> /etc/modules;fi
-    else
-      echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
-  fi
-  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
-    modprobe nfsd && \
-      if ! grep -qE '^nfsd$' /etc/modules 2>/dev/null;then echo nfsd >> /etc/modules;fi
-    else
-      echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
-  fi
-else # if rhel
-  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.xz ]];then
-    modprobe nfs && \
-      if ! grep -qE '^nfs$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfs >> /etc/modules-load.d/nfs.conf;fi
-    else
-      echo "no nfs kernel module found in current kernel modules, needed for docker nfs container" && exit 1
-  fi
-  if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.xz ]];then
-    modprobe nfsd && \
-      if ! grep -qE '^nfsd$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfsd >> /etc/modules-load.d/nfs.conf;fi
-    else
-      echo "no nfsd kernel module found in current kernel modules, needed for docker nfs container" && exit 1
-  fi
-fi
+  debuglog "Enabling nfs/nfsd kernel modules"
+  if [ "$found_os" == "debian" ];then
+    if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.zst ]];then
+      modprobe nfs && \
+        if ! grep -qE '^nfs$' /etc/modules 2>/dev/null;then echo nfs >> /etc/modules;fi
+      else
+        echo "no nfs kernel module found in current kernel modules, needed for $DOCKERBIN nfs container" && exit 1
+    fi
+    if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.zst ]];then
+      modprobe nfsd && \
+        if ! grep -qE '^nfsd$' /etc/modules 2>/dev/null;then echo nfsd >> /etc/modules;fi
+      else
+        echo "no nfsd kernel module found in current kernel modules, needed for $DOCKERBIN nfs container" && exit 1
+    fi
+  else # if rhel
+    if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfs/nfs.ko.xz ]];then
+      modprobe nfs && \
+        if ! grep -qE '^nfs$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfs >> /etc/modules-load.d/nfs.conf;fi
+      else
+        echo "no nfs kernel module found in current kernel modules, needed for $DOCKERBIN nfs container" && exit 1
+    fi
+    if [[ -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko || -f /usr/lib/modules/$(uname -r)/kernel/fs/nfsd/nfsd.ko.xz ]];then
+      modprobe nfsd && \
+        if ! grep -qE '^nfsd$' /etc/modules-load.d/*.conf 2>/dev/null;then echo nfsd >> /etc/modules-load.d/nfs.conf;fi
+      else
+        echo "no nfsd kernel module found in current kernel modules, needed for $DOCKERBIN nfs container" && exit 1
+    fi
+ fi
 
-test -d /usr/share/keyrings && test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
-cat > /tmp/docker-archive-keyring.gpg <<ENDD
+  test -d /usr/share/keyrings && test ! -f /usr/share/keyrings/docker-archive-keyring.gpg && \
+    cat > /tmp/docker-archive-keyring.gpg <<ENDD
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
@@ -342,23 +347,39 @@ ENDD
 
 test -f /tmp/docker-archive-keyring.gpg && test -d /usr/share/keyrings && cat /tmp/docker-archive-keyring.gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
-debuglog "Ensuring Docker is installed"
+debuglog "Ensuring $DOCKERBIN is installed"
 if [ "$found_os" == "debian" ];then
-  command -v docker > /dev/null || { debuglog "Install docker" && \
-    echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-    debuglog "$os_packager update.." && \
-    $os_packager update -qq && \
-    debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
-    $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
-else # if rhel
-  command -v docker > /dev/null || { debuglog "Install docker" && \
-    $os_packager config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null && \
-    debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
-    $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+  if [ "$DOCKERBIN" == "docker" ];then
+    command -v docker > /dev/null || { debuglog "Install docker" && \
+      echo   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+      debuglog "$os_packager update.." && \
+      $os_packager update -qq && \
+      debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
+      $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+        else
+          command -v podman > /dev/null || { debuglog "Install podman" && \
+            $os_packager update -qq && \
+            $os_packager install -y curl podman python3-dotenv >/dev/null && \
+            curl -O http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
+            curl -o /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py >/dev/null && chmod +x /usr/local/bin/podman-compose; }
+  fi
+    else # if rhel
+      if [ "$DOCKERBIN" == "docker" ];then
+        command -v docker > /dev/null || { debuglog "Install docker" && \
+          $os_packager config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null && \
+          debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
+          $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+                else
+      dnf install -y podman python3-pip >/dev/null && python3 -m pip install python-dotenv >/dev/null
+fi
 fi
 
-debuglog "Checking if 'docker compose' is available"
-docker compose >/dev/null 2>&1 || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
+debuglog "Checking if '$DOCKERBIN compose' is available"
+if [ "$DOCKERBIN" == "docker" ];then
+  docker compose &>/dev/null || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
+else
+  podman-compose version &>/dev/null || { debuglog "$os_packager Installing podman-compose" && curl -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+fi
 
 debuglog "Checking provided SSL"
 test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
@@ -401,16 +422,16 @@ ENVVAR_INBAND_HTTP_PROXY=disabled
 ENVVAR_INBAND_FILE_TRANSFER=disabled
 
 if [ "$INBAND" == "1" ]; then
-FORCE=1
-debuglog "INBAND mode" info pink
-ENVVAR_HTTP_PROXY=disabled
-ENVVAR_FILE_TRANSFER=disabled
-ENVVAR_SWITCH_SUBSCRIPTION=disabled
-ENVVAR_COMMAND_EXECUTION=disabled
-ENVVAR_VNC=disabled
-ENVVAR_INBAND_HTTP_PROXY=enabled
-ENVVAR_INBAND_FILE_TRANSFER=enabled
-non_inband_dc=''
+  FORCE=1
+  debuglog "INBAND mode" info pink
+  ENVVAR_HTTP_PROXY=disabled
+  ENVVAR_FILE_TRANSFER=disabled
+  ENVVAR_SWITCH_SUBSCRIPTION=disabled
+  ENVVAR_COMMAND_EXECUTION=disabled
+  ENVVAR_VNC=disabled
+  ENVVAR_INBAND_HTTP_PROXY=enabled
+  ENVVAR_INBAND_FILE_TRANSFER=enabled
+  non_inband_dc=''
 fi
 inband_dc="  ms-agent:
     container_name: ms-agent
@@ -440,6 +461,7 @@ inband_dc="  ms-agent:
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
+      #- /etc/hosts:/etc/hosts:ro
   nfs:
     network_mode: host
     container_name: nfs-server
@@ -448,7 +470,7 @@ inband_dc="  ms-agent:
     privileged: true
     environment:
       - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
-      - NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
+      #- NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
     volumes:
       - /opt/metalsoft/nfs-storage:/data
     ports:
@@ -472,6 +494,7 @@ non_inband_dc="  agents:
       - /etc/ssl/certs:/etc/ssl/certs
       - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
       - /usr/share/ca-certificates:/usr/share/ca-certificates
+      #- /etc/hosts:/etc/hosts:ro
       # Use only if custom CA is needed
       #- /opt/metalsoft/agents/supervisor.conf:/var/vhosts/datacenter-agents-binary-compiled/supervisor.conf
     ports:
@@ -552,6 +575,11 @@ global
     user root
     group root
     daemon
+
+    ## set fd-hard-limit on haproxy 2.6+ to fix start-up error: 'Not enough memory to allocate 1073741816 entries for fdtab'
+    # fd-hard-limit 50000
+    # maxconn 4096
+
     ssl-default-bind-options no-sslv3 no-tls-tickets
     ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
     ssl-default-server-options no-sslv3 no-tls-tickets
@@ -649,14 +677,14 @@ backend bk_repo_443
 backend bk_msagents_8099
     server localhost 127.0.0.1:8099
 ENDD
-fi
+    fi
 
-test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
-if [[ -n $CUSTOM_CA ]]; then
-  cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
+    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+          if [[ -n $CUSTOM_CA ]]; then
+            cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
 [supervisord]
 nodaemon=true
 environment=
@@ -733,31 +761,65 @@ ENDD
 
 sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/agents\/supervisor.conf/g" /opt/metalsoft/agents/docker-compose.yaml
 
+          fi
+
+debuglog "starting $DOCKERBIN containers"
+if [ "$DOCKERBIN" == "docker" ];then
+  systemctl enable --now docker.service
+  until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done && echo
+  else
+  systemctl enable --now podman
+  systemctl enable --now podman.socket
+  cat > /etc/systemd/system/podman-compose-agents.service << EOF
+[Unit]
+Description=Podman-compose-agents.service
+Documentation=man:podman-generate-systemd(1)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/metalsoft/agents
+#Environment=PODMAN_SYSTEMD_UNIT=%n
+Restart=on-failure
+TimeoutStopSec=70
+ExecStart=/usr/local/bin/podman-compose up
+ExecStop=/usr/local/bin/podman-compose down
+Type=simple
+
+[Install]
+WantedBy=default.target
+
+EOF
+    systemctl daemon-reload
+    systemctl enable --now podman-compose-agents.service
+  # until ${DOCKERBIN}-compose ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for $DOCKERBIN service to start.. \033[0K\r";done && echo
 fi
 
-debuglog "starting docker containers"
-systemctl enable --now docker.service
-until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done && echo
-debuglog "Login to docker with Metalsoft provided credentials for ${REG_HOST}:"
+debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
 mkdir -p "${HOME}/.docker"
 test -n "${REGISTRY_LOGIN}" && echo "{\"auths\":{\"${REG_HOST}\":{\"auth\":\"${REGISTRY_LOGIN}\"}}}" > "${HOME}/.docker/config.json"
 
-docker login ${REG_HOST}
+$DOCKERBIN login ${REG_HOST}
 
 while [ $? -ne 0 ]; do
-  debuglog "Lets try again: docker login ${REG_HOST}:"
-  docker login ${REG_HOST}
+  debuglog "Lets try again: $DOCKERBIN login ${REG_HOST}:"
+  $DOCKERBIN login ${REG_HOST}
   sleep 1
 done
 
 if [ "$FORCE" == "1" ] || [ "$INBAND" == "1" ] ;then
-debuglog "stopping any running docker containers.." info lightred
-docker ps -qa|xargs -i bash -c 'docker stop {} && docker rm {}' >/dev/null
+  debuglog "stopping any running $DOCKERBIN containers.." info lightred
+  $DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
 fi
 cd /opt/metalsoft/agents
 debuglog "pulling latest images.."
-docker compose pull
-docker compose up -d
+if [ "$DOCKERBIN" == "docker" ];then
+  $DOCKERBIN compose pull
+  $DOCKERBIN compose up -d
+else
+  ${DOCKERBIN}-compose pull
+  ${DOCKERBIN}-compose up -d
+fi
 
 if [ -f /etc/ssh/ms_banner ];then
   debuglog "update /etc/ssh/ms_banner"
@@ -767,7 +829,7 @@ if [ -f /etc/ssh/ms_banner ];then
 fi
 
 if [ "$found_os" == "debian" ];then
-  debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS docker container"
+  debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS $DOCKERBIN container"
   systemctl disable --now systemd-resolved.service 2>/dev/null || true
   systemctl disable --now rpcbind 2>/dev/null || true
   systemctl disable --now rpcbind.socket 2>/dev/null || true
@@ -794,6 +856,7 @@ else #if rhel
     echo "nameserver $nameserver" >> /etc/resolv.conf
     RESOLVCONFCHANGED="YES"
   fi
+  # setenforce 0 && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
 done
 fi
 
@@ -803,10 +866,15 @@ if ! grep -q nameserver /etc/resolv.conf;then
 fi
 
 if [[ -n ${RESOLVCONFCHANGED} ]];then
-  debuglog "Resolv.conf changed, restarting docker containers"
+  debuglog "Resolv.conf changed, restarting $DOCKERBIN containers"
   cd /opt/metalsoft/agents || return
-  docker compose down
-  docker compose up -d
+  if [ "$DOCKERBIN" == "docker" ];then
+    $DOCKERBIN compose down
+    $DOCKERBIN compose up -d
+  else
+    ${DOCKERBIN}-compose down
+    ${DOCKERBIN}-compose up -d
+  fi
   cd - || return
 fi
 
@@ -816,9 +884,9 @@ test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-stora
 
 if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
   sleep 2
-  docker ps
+  $DOCKERBIN ps
   sleep 2
-  docker ps
+  $DOCKERBIN ps
 fi
 
-debuglog "[ ${SECONDS} sec ] All done. To check containers, use: docker ps" success
+debuglog "[ ${SECONDS} sec ] All done. To check containers, use: $DOCKERBIN ps" success
