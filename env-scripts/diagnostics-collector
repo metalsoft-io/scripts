@@ -24,9 +24,10 @@ function usage {
 }
 
 #auto determine if we are on agent or controller:
-test -d /opt/metalsoft/agents && type docker &>/dev/null && gather='agent'
+test -f /opt/metalsoft/agents/docker-compose.yaml && type docker &>/dev/null && gather='agent' && envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
 type kubectl &>/dev/null && gather='controller' && k='kubectl '
 type microk8s &>/dev/null && gather='controller' && k='microk8s.kubectl '
+test "$gather" == 'controller' && test -n "$ns" && envname="$ns"
 pushfile=
 extended=
 
@@ -56,7 +57,7 @@ if [ -n "$pushfileFromArg" ];then
 fi
 
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
-test -z "$envname" && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
+test -z "$envname" && test "$gather" == 'controller' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
 backupFolder=${backupFolder}/${thedate}_${envname}_${gather}
 
@@ -105,10 +106,10 @@ if [ "$gather" == 'controller' ];then
 	envnamelabel="-${envname}-controller"
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
 	test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-controller"
-	test -n "$envname" && echo -e "[i] Namespace: \e[1;31m${envname}\e[0m"
+	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
 
 	# TODO: in cases where env is not found, we should still collect info on what went wrong
-	if ! $k get ns|grep -q $envname ;then echo -e "[\e[1;31m✗\e[0m] Env $envname not found. Exiting..";exit 1;fi
+	if ! $k get ns|grep -q $envname ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k get ns;exit 1;fi
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
 	get_disks
