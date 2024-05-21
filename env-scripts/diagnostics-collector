@@ -147,6 +147,10 @@ if [ "$gather" == 'controller' ];then
 	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql/mysql_performance_schema.data_locks 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql/mysql_database_version 2>/dev/null|| true
 	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' > ${backupFolder}/mysql/mysql_database_size 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_events_latest 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue 2>/dev/null|| true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
 	timeout 180 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/mysql/mysql_database_schema.sql 2>/dev/null
