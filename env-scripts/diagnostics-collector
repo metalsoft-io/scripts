@@ -19,7 +19,14 @@ backupFolder=/var/backups/metalsoft
 backupFolder="${backupFolder%/}"
 
 function usage {
-	echo -e "[i] $( basename $0) gathers diagnostics for MetalSoft. Optional parameters:\n  ${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}\n  ${bold}-c${nc} ${gray}[ Use for Controller ]${nc}\n  ${bold}-a${nc} ${gray}[ Use for Agent ]${nc}\n  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}\n  ${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}\n  ${bold}-p${nc} ${gray}[ Push the diagnostics to MetalSoft via HTTPS ]${nc}\n  ${bold}-e${nc} ${gray}[ Extended collection of k8s resources and DBs ]${nc}"
+	echo -e "[i] $( basename $0) gathers diagnostics for MetalSoft. Optional parameters:
+  ${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}
+  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}
+  ${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
+  ${bold}-c${nc} ${gray}Flag [ Use for Global Controller ]${nc}
+  ${bold}-a${nc} ${gray}Flag [ Use for Site Controller or Agent ]${nc}
+  ${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
+  ${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}"
 	exit 0
 }
 
@@ -31,7 +38,7 @@ test "$gather" == 'controller' && test -n "$ns" && envname="$ns"
 pushfile=
 extended=
 
-while getopts ":k:n:b:P:capezs" flag
+while getopts ":k:n:b:P:capezsx" flag
 do
 	case "${flag}" in
 		p) pushfile="1" ;;
@@ -44,6 +51,7 @@ do
 		e) extended=1 ;;
 		s) sqlUpgradeLogs=1 ;;
 		z) doNotAutoSend=1 ;;
+		x) debugOn=1 ;;
 		:) echo "Error: -${OPTARG} requires an argument." && exit 1;;
 		h | *) usage;;
 	esac
@@ -67,10 +75,15 @@ function finish {
 	exit 3
 }
 trap finish INT #EXIT
+test -n "$debugOn" && set -x
 mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
 
 function get_disks ()
 {
+	echo -e "\n:: stat diagnostics-collector: $(realpath $0)\n" >> ${backupFolder}/disks_stats.txt
+	stat "$(realpath $0)" >> ${backupFolder}/disks_stats.txt
+	echo -e "\n:: time:\n $(date)\n" >> ${backupFolder}/disks_stats.txt
+	echo -e "\n:: uptime:\n $(uptime)\n" >> ${backupFolder}/disks_stats.txt
 	echo -e "\n:: df -h\n" >> ${backupFolder}/disks_stats.txt
 	df -h 2>&1 >> ${backupFolder}/disks_stats.txt || true
 	echo -e "\n:: lsblk\n" >> ${backupFolder}/disks_stats.txt
@@ -97,9 +110,9 @@ function get_k8s ()
 	$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	echo -e "\n:: kubectl get deploy -A -o wide\n" >> ${backupFolder}/k8s_stats.txt
 	$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
-	$k -n $envname get ingressroute --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroute $z -o yaml > ${backupFolder}/k8s_ingressroute_${z}.yaml;done || true
-	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > ${backupFolder}/k8s_ingressroutetcp_${z}.yaml;done || true
-	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > ${backupFolder}/k8s_ingressrouteudp_${z}.yaml;done || true
+	$k -n $envname get ingressroute --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroute $z -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
+	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
+	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
 }
 
 if [ "$gather" == 'controller' ];then
@@ -139,21 +152,21 @@ if [ "$gather" == 'controller' ];then
 
 	echo "[i] backing up mysql locks.."
 	# get information_schema.innodb_trx
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' > ${backupFolder}/mysql/mysql_show_engine_innodb_status 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'show full processlist' > ${backupFolder}/mysql/mysql_show_full_processlist 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'show global variables\G' > ${backupFolder}/mysql/mysql_show_global_variables 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'show session variables\G' > ${backupFolder}/mysql/mysql_show_session_variables 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' > ${backupFolder}/mysql/mysql_information_schema.innodb_trx 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' > ${backupFolder}/mysql/mysql_performance_schema.data_locks 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' > ${backupFolder}/mysql/mysql_database_version 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' > ${backupFolder}/mysql/mysql_database_size 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_events_latest 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log 2>/dev/null|| true
-	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft > ${backupFolder}/mysql/mysql_metalsoft_afc_queue 2>/dev/null|| true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> ${backupFolder}/mysql/mysql_show_engine_innodb_status || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'show full processlist' &> ${backupFolder}/mysql/mysql_show_full_processlist || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'show global variables\G' &> ${backupFolder}/mysql/mysql_show_global_variables || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'show session variables\G' &> ${backupFolder}/mysql/mysql_show_session_variables || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> ${backupFolder}/mysql/mysql_information_schema.innodb_trx || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> ${backupFolder}/mysql/mysql_performance_schema.data_locks || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' &> ${backupFolder}/mysql/mysql_database_version || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' &> ${backupFolder}/mysql/mysql_database_size || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft &> ${backupFolder}/mysql/mysql_metalsoft_events_latest || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> ${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> ${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log || true
+	$k -n $envname exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> ${backupFolder}/mysql/mysql_metalsoft_afc_queue || true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
-	timeout 180 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft > ${backupFolder}/mysql/mysql_database_schema.sql 2>/dev/null
+	timeout 180 $k -n $envname exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> ${backupFolder}/mysql/mysql_database_schema.sql
 	mysqldump_exitcode="$?"
 	test $mysqldump_exitcode -ne "0" && mysqldump_exitcode_error="${lightred}[mysqldump failed with exit code $mysqldump_exitcode]${nc}"
 	mysql_end="$SECONDS"
