@@ -785,8 +785,8 @@ WorkingDirectory=/opt/metalsoft/agents
 #Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=70
-ExecStart=/usr/local/bin/podman-compose up
-ExecStop=/usr/local/bin/podman-compose down
+ExecStart=/usr/local/bin/podman-compose -f /opt/metalsoft/agents/docker-compose.yaml up
+ExecStop=/usr/local/bin/podman-compose -f /opt/metalsoft/agents/docker-compose.yaml down
 Type=simple
 
 [Install]
