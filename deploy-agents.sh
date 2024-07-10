@@ -686,7 +686,7 @@ ENDD
 
     test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_NAME=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
+    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
       sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
           if [[ -n $CUSTOM_CA ]]; then
             cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
