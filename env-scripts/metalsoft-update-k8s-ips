@@ -15,6 +15,7 @@ mage=$(stat -c%Y $(realpath $0))
 myage=${mage:-0}
 age="$(( $(date +%s) - $myage ))"
 consider_old=$(( 60 * 60 * 24 * 4 ))
+MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 function nextIP ()
 {
         test -n "$1" || return
@@ -179,13 +180,13 @@ if [ -n "$microk8s" ];then
 fi
 fi # end if $3
 
-if [ -d "/root/manifests" ];then
-        cd /root/manifests/
+if [ -d "${MS_MANIFESTS_FOLDER}" ];then
+        cd "${MS_MANIFESTS_FOLDER}/"
         echo "[i] Updating Traefik"
         sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
-        if [ -d "/root/manifests/traefik_charts/traefik" ];then
+        if [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
                 if [ -n "$microk8s" ];then
-                        microk8s helm3 upgrade traefik-demo-metalsoft /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 20.8.0
+                        microk8s helm3 upgrade traefik-demo-metalsoft "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 20.8.0
                 fi
         else
                 echo "!!!! Local Traefik Charts missing, falling back to try to pull from official repository"

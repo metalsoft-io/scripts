@@ -11,6 +11,8 @@ newhostname="$1"
 path_ssl_key="$2"
 path_ssl_crt="$3"
 me="$(basename $0)"
+MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
+
 usage ()
 {
   echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt"
@@ -54,8 +56,8 @@ else
     debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
   fi
 fi
-test -d /root/manifests || { debuglog "Error: /root/manifests is missing. Manifests are needed for this update to work properly " fail; exit 3; }
-test -f /root/manifests/traefik-helm-chart-configvalues.yaml || { debuglog "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
+test -d "${MS_MANIFESTS_FOLDER}" || { debuglog "Error: ${MS_MANIFESTS_FOLDER} is missing. Manifests are needed for this update to work properly " fail; exit 3; }
+test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
 
 ns="$(${micro} kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
@@ -81,28 +83,28 @@ curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/con
   curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 
 debuglog "Updating manifests.."
-test -d /root/manifests && cd /root/manifests && \
+test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
   hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
   grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
   #$k apply -f . >/dev/null
-  find /root/manifests -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+  find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
   echo -ne "applying manifest: $z ... \033[0K\r";
-  $k apply -f $z >/dev/null;done
+  $k apply -f "$z" >/dev/null;done
   echo -ne "\033[0K\r"
 
   debuglog "Reconfiguring traefik.."
-  if [ ! -f /root/manifests/traefik-helm-chart-configvalues.yaml ];then
-    echo "Error: /root/manifests/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+  if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+    echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
     exit 2
   else
-    if [ -d "/root/manifests/traefik_charts/traefik" ];then
-      debuglog "Using local /root/manifests/traefik_charts/traefik"
-      $micro helm upgrade traefik-${ns} /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+    if [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+      debuglog "Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+      $micro helm upgrade traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
     else
       $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
       $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
       $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
-      $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values /root/manifests/traefik-helm-chart-configvalues.yaml -n ${ns} >/dev/null; }
+      $micro helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
     fi
   fi
 
@@ -112,8 +114,8 @@ test -d /root/manifests && cd /root/manifests && \
 
   if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
     debuglog "Applying SSL.."
-    test -n "$path_ssl_key" && test -f $path_ssl_key && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-    test -n "$path_ssl_crt" && test -f $path_ssl_crt && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+    test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+    test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
 
     test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
     test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
