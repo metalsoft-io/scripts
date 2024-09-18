@@ -97,7 +97,7 @@ test -d /root/manifests && cd /root/manifests && \
   else
     if [ -d "/root/manifests/traefik_charts/traefik" ];then
       debuglog "Using local /root/manifests/traefik_charts/traefik"
-      $micro helm3 upgrade traefik-${ns} /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+      $micro helm upgrade traefik-${ns} /root/manifests/traefik_charts/traefik --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
     else
       $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
       $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
