@@ -36,8 +36,9 @@ if [ "$EUID" -ne 0 ];then
 fi
 
 if [ -z $2 ];then
-        echo -e "[\e[1;31m✗\e[0m] Please provide the new 'k8s IP' and 'agents IP' [ optional: http://_proxy_ip_:3128/ ]"
+        echo -e "[\e[1;31m✗\e[0m] Please provide the new 'GlobalController/k8s IP' and 'SiteController/agent IP' [ optional: http://_proxy_ip_:3128/ ]"
         echo "[i] example: ${me} ${_localip:-10.0.0.1} ${_nextip:-10.0.0.2} http://172.18.34.89:3128/"
+        echo -e "${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
         exit 3;
 fi
 
