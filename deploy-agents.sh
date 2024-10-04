@@ -532,7 +532,7 @@ non_inband_dc="  agents:
   haproxy:
     network_mode: host
     container_name: dc-haproxy
-    image: registry.metalsoft.dev/datacenter-agents-compiled/dc-haproxy:latest
+    image: registry.metalsoft.dev/datacenter-agents-compiled/dc-haproxy:3.0.4
     restart: always
     privileged: true
     volumes:
