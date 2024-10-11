@@ -85,7 +85,7 @@ fi
 if [ "$found_os" == "debian" ];then
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
-    $os_packager -y install curl ca-certificates net-tools jq dnsutils >/dev/null; }
+    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 >/dev/null; }
     else # if rhel
       command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
         $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools >/dev/null; }
@@ -424,6 +424,8 @@ ENVVAR_INBAND_HTTP_PROXY=disabled
 ENVVAR_INBAND_FILE_TRANSFER=disabled
 ENVVAR_SITE_CONTROLLER_IP="$(ip r get 1|awk '{print $7}')"
 ENVVAR_NETCONF=enabled
+ENVVAR_DHCP_OOB=disabled
+ENVVAR_DHCP_LISTEN_INTERFACES="$(ip -br a|grep "\b$(ip r get 1|head -1|awk '{print $7}')\b"|awk '{print $1}')"
 
 if [ "$INBAND" == "1" ]; then
   FORCE=1
@@ -466,6 +468,8 @@ inband_dc="  ms-agent:
       - SITE_CONTROLLER_IP=${ENVVAR_SITE_CONTROLLER_IP}
       # - SITE_CONTROLLER_SYSLOG_SERVER_IP=
       # - SITE_CONTROLLER_SYSLOG_SWITCH_IP=
+      # - DHCP_OOB=${ENVVAR_DHCP_OOB}
+      # - DHCP_LISTEN_INTERFACES=${ENVVAR_DHCP_LISTEN_INTERFACES}
       - NETCONF=${ENVVAR_NETCONF}
       - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY}
       - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER}
