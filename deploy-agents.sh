@@ -83,7 +83,7 @@ if [ "$found_os" == "debian" ];then
 fi
 
 if [ "$found_os" == "debian" ];then
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null || { debuglog "Installing required packages" && \
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
     $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 >/dev/null; }
     else # if rhel
