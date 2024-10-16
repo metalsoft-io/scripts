@@ -527,10 +527,12 @@ non_inband_dc="  agents:
       - 69:69/udp
       - 6343:6343/udp
     environment:
+      ## Disable DHCP in agents when DHCP_OOB=enabled on ms-agent
+      #- DHCP_SERVICE_ENABLED=0
       - TZ=Etc/UTC
       - URL=${DCCONF}
       #- NODE_TLS_REJECT_UNAUTHORIZED=0
-      # Use only if custom CA is needed
+      ## Use only if custom CA is needed
       #- NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
     hostname: agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
   haproxy:
