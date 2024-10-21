@@ -447,6 +447,9 @@ inband_dc="  ms-agent:
     image: ${MSAGENT_URL}
     restart: always
     environment:
+      # - HTTP_PROXY=http://proxy_ip_here:3128
+      # - HTTPS_PROXY=http://proxy_ip_here:3128
+      # - NO_PROXY=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16
       - TZ=Etc/UTC
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
@@ -528,12 +531,18 @@ non_inband_dc="  agents:
       - 6343:6343/udp
     environment:
       ## Disable DHCP in agents when DHCP_OOB=enabled on ms-agent
-      #- DHCP_SERVICE_ENABLED=0
+      # - DHCP_SERVICE_ENABLED=0
+      # - http_proxy=http://proxy_ip_here:3128
+      # - https_proxy=http://proxy_ip_here:3128
+      # - no_proxy=localhost,127.0.0.1,::1,192.168.0.0/16
+      # - HTTP_PROXY=http://proxy_ip_here:3128
+      # - HTTPS_PROXY=http://proxy_ip_here:3128
+      # - NO_PROXY=localhost,127.0.0.1,::1,192.168.0.0/16
       - TZ=Etc/UTC
       - URL=${DCCONF}
-      #- NODE_TLS_REJECT_UNAUTHORIZED=0
+      # - NODE_TLS_REJECT_UNAUTHORIZED=0
       ## Use only if custom CA is needed
-      #- NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
+      # - NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
     hostname: agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
   haproxy:
     network_mode: host
