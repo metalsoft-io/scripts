@@ -20,13 +20,13 @@ backupFolder="${backupFolder%/}"
 
 function usage {
 	echo -e "[i] $( basename $0) gathers diagnostics for MetalSoft. Optional parameters:
-  ${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}
-  ${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}
-  ${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
-  ${bold}-c${nc} ${gray}Flag [ Use for Global Controller ]${nc}
-  ${bold}-a${nc} ${gray}Flag [ Use for Site Controller or Agent ]${nc}
-  ${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
-  ${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}"
+	${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}
+	${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}
+	${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
+	${bold}-c${nc} ${gray}Flag [ Use for Global Controller ]${nc}
+	${bold}-a${nc} ${gray}Flag [ Use for Site Controller or Agent ]${nc}
+	${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
+	${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}"
 	exit 0
 }
 
@@ -77,6 +77,9 @@ function finish {
 trap finish INT #EXIT
 test -n "$debugOn" && set -x
 mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
+
+cat /etc/environment 2>/dev/null > ${backupFolder}/etc_environment
+env > ${backupFolder}/env
 
 function get_disks ()
 {
@@ -172,9 +175,12 @@ if [ "$gather" == 'controller' ];then
 	mysql_end="$SECONDS"
 	mysql_elapsed=$((mysql_end-mysql_start))
 	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
-	echo "[i] backing up couchdb.."
 	#backup all couchdb DBs:
-	couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
+	couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
+	echo "[i] backing up couchdb: [${couchdbUrl}]"
+	if ! curl -sS http://${couchdbUrl}/_all_dbs|jq -rce . &>/dev/null; then
+		echo "CouchDB: http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > ${backupFolder}/couchdb/couchdb_pull_failed
+	fi
 	test -n "$couchdbUrl" && mkdir -p ${backupFolder}/couchdb && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/couchdb/couchdb_backup_${z}.gz;done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
