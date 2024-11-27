@@ -45,6 +45,7 @@ test "$list" == "1" && ip -c -br a && exit 0
 setnic=${nic:-$discovered_nic}
 test -z "$setnic" && echo -e "[\e[1;31m✗\e[0m]${lightred} Error: Interface was not set and not discovered, please set: -i NIC_NAME${nc}" && exit 1
 
+chmod 600 /etc/netplan/*.yaml &>/dev/null
 function set_dhcp()
 {
         setnic=${1:-$discovered_nic}
