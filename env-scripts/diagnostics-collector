@@ -25,6 +25,7 @@ function usage {
 	${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
 	${bold}-c${nc} ${gray}Flag [ Use for Global Controller ]${nc}
 	${bold}-a${nc} ${gray}Flag [ Use for Site Controller or Agent ]${nc}
+	${bold}-d${nc} ${gray}Flag [ skip disk latency check ]${nc}
 	${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
 	${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}"
 	exit 0
@@ -38,7 +39,7 @@ test "$gather" == 'controller' && test -n "$ns" && envname="$ns"
 pushfile=
 extended=
 
-while getopts ":k:n:b:P:capezsx" flag
+while getopts ":k:n:b:P:capezsxd" flag
 do
 	case "${flag}" in
 		p) pushfile="1" ;;
@@ -52,6 +53,7 @@ do
 		s) sqlUpgradeLogs=1 ;;
 		z) doNotAutoSend=1 ;;
 		x) debugOn=1 ;;
+		d) SKIP_DISK_LATENCY_CHECK=1 ;;
 		:) echo "Error: -${OPTARG} requires an argument." && exit 1;;
 		h | *) usage;;
 	esac
@@ -129,13 +131,18 @@ if [ "$gather" == 'controller' ];then
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
 	get_disks
-	echo "[i] checking disk latency.."
-	echo -e "\n:: BSI: df -h\n" >> ${backupFolder}/disks_stats.txt
-	$k -n $envname exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> ${backupFolder}/disks_stats.txt
-	echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
-	$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct;rm -f /testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
-	echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
-	$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct;rm -f /var/log/testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
+		echo "[i] checking disk latency [100mb temp file] .."
+		echo -e "\n:: BSI: df -h\n" >> ${backupFolder}/disks_stats.txt
+		$k -n $envname exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
+		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct;rm -f /testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
+		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct;rm -f /var/log/testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+	else
+		echo "[-] Skipping disk latency check"
+		echo "############ disk latency check skipped" >> ${backupFolder}/disks_stats.txt
+	fi
 	get_k8s
 
 	mkdir -p ${backupFolder}/mysql
