@@ -145,6 +145,7 @@ function nc_check_remote_conn {
 }
 
 nc_check_remote_conn repo.metalsoft.io 80 tcp
+nc_check_remote_conn download.docker.com 443 tcp
 nc_check_remote_conn ${REG_HOST} 443 tcp
 test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 443 tcp
 test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 0 icmp
