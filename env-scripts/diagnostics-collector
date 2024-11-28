@@ -135,10 +135,10 @@ if [ "$gather" == 'controller' ];then
 		echo "[i] checking disk latency [100mb temp file] .."
 		echo -e "\n:: BSI: df -h\n" >> ${backupFolder}/disks_stats.txt
 		$k -n $envname exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> ${backupFolder}/disks_stats.txt
-		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
-		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct;rm -f /testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
-		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct\n" >> ${backupFolder}/disks_stats.txt
-		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct;rm -f /var/log/testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> ${backupFolder}/disks_stats.txt
+		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
+		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> ${backupFolder}/disks_stats.txt
+		$k -n $envname exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" 2>/dev/null >> ${backupFolder}/disks_stats.txt
 	else
 		echo "[-] Skipping disk latency check"
 		echo "############ disk latency check skipped" >> ${backupFolder}/disks_stats.txt
