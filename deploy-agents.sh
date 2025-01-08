@@ -484,7 +484,7 @@ inband_dc="  ms-agent:
   nfs:
     network_mode: host
     container_name: nfs-server
-    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:2.2.1
+    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:3
     restart: unless-stopped
     privileged: true
     environment:
