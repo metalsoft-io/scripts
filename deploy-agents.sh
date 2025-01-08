@@ -229,6 +229,14 @@ else # if rhel
   fi
   # https://stackoverflow.com/a/31334443/2291328
   chcon -Rt svirt_sandbox_file_t /etc/ssl/certs/
+  if ! semanage fcontext -l | grep -q -E "^/etc/ssl/certs(/.*)?"; then
+    semanage fcontext -a -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
+  fi
+  # or (This ensures the rule is set correctly, whether it existed before or not.)
+  # semanage fcontext -m -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
+
+  restorecon -R /etc/ssl/certs
+
 fi
 
 debuglog "Creating folders"
@@ -364,15 +372,15 @@ if [ "$found_os" == "debian" ];then
             curl -O http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
             curl -o /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py >/dev/null && chmod +x /usr/local/bin/podman-compose; }
   fi
-    else # if rhel
-      if [ "$DOCKERBIN" == "docker" ];then
-        command -v docker > /dev/null || { debuglog "Install docker" && \
-          $os_packager config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null && \
-          debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
-          $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
-                else
-      dnf install -y podman python3-pip >/dev/null && python3 -m pip install python-dotenv >/dev/null
-fi
+else # if rhel
+  if [ "$DOCKERBIN" == "docker" ];then
+    command -v docker > /dev/null || { debuglog "Install docker" && \
+      $os_packager config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null && \
+      debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
+      $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
+        else
+          dnf install -y podman python3-pip >/dev/null && python3 -m pip install python-dotenv >/dev/null
+  fi
 fi
 
 debuglog "Checking if '$DOCKERBIN compose' is available"
@@ -441,6 +449,7 @@ if [ "$INBAND" == "1" ]; then
   ENVVAR_INBAND_FILE_TRANSFER=enabled
   non_inband_dc=''
 fi
+
 inband_dc="  ms-agent:
     container_name: ms-agent
     network_mode: host
