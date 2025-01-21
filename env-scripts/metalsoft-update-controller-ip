@@ -53,8 +53,10 @@ if [ -z $1 ];then
         exit 1;
 fi
 ip=$1
+test -z "$ip" && exit 1
 echo new Controller IP: $ip
 
+test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${ip}/g" /opt/metalsoft/agents/docker-compose.yaml
 
 if [ -n "$2" ];then
         proxy_url="$2"
@@ -129,6 +131,6 @@ else
         echo "${ip} demo.metalsoft.io" >> /etc/hosts
 fi
 
-cd /opt/metalsoft/agents/ && ${docker_compose} pull && ${docker_compose} down && sleep 2 && ${docker_compose} up -d
+cd /opt/metalsoft/agents/ && ${docker_compose} pull && ${docker_compose} down && sleep 1 && ${docker_compose} up -d
 test -x /etc/ms-pre-login-ips && /etc/ms-pre-login-ips
 echo Done
