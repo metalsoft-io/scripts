@@ -115,6 +115,12 @@ function get_k8s ()
 	$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	echo -e "\n:: kubectl get deploy -A -o wide\n" >> ${backupFolder}/k8s_stats.txt
 	$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get pv -A\n" >> ${backupFolder}/k8s_stats.txt
+	$k get pv -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get pvc -A\n" >> ${backupFolder}/k8s_stats.txt
+	$k get pvc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl get ipaddresspool -A\n" >> ${backupFolder}/k8s_stats.txt
+	$k get ipaddresspool -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	$k -n $envname get ingressroute --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroute $z -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
 	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
 	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
