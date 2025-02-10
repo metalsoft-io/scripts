@@ -124,6 +124,8 @@ function get_k8s ()
 	$k -n $envname get ingressroute --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroute $z -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
 	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
 	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
+
+	$k get $z -A --no-headers|grep -vw Running|while read pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> ${backupFolder}/k8s_pods_not_running.txt || true
 }
 
 if [ "$gather" == 'controller' ];then
