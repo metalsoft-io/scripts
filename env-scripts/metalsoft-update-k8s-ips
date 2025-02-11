@@ -1,4 +1,5 @@
 #!/bin/bash
+# vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=sh
 
 nc="\e[00m"
 bold="\e[1;37m"
@@ -143,7 +144,7 @@ EOFF
 
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
 echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
-        kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml
+kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml
 ec=$?
 kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ "$last_aip" != "$aip" ];then
@@ -155,7 +156,7 @@ test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate 
 echo
 echo "[i] Helm releases:"
 helm list -n ${ns}
-echo 
+echo
 echo "[i] Services:"
 kubectl -n ${ns} get svc|grep traefik
 echo

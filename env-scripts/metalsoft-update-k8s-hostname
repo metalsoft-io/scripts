@@ -1,4 +1,5 @@
 #!/bin/bash
+# vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=sh
 
 if [ "$EUID" -ne 0 ];then
   echo -e "[\e[1;31m✗\e[0m] Please run as root"
@@ -75,9 +76,15 @@ couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
 
 debuglog "Updating CouchDB.."
 # TODO: REVIEW AS OF v7.0.0
-curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
-  cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-  curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+if [ -f "${MS_MANIFESTS_FOLDER}/config-deployment.yaml" ];then
+  curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
+    cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+    curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+    else
+      curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/orchestrator-microservice/bsi > bsi_export && \
+        cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+        curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+fi
 
 debuglog "Updating manifests.."
 test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
@@ -91,44 +98,44 @@ test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
 
   debuglog "Reconfiguring traefik.."
 
-        if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
-                echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-                exit 2
-        else
-                sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
-                if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
-                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
-                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
-                elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
-                else
-                        helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-                        helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                        helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
-                fi
-        fi
-
-# TODO: REVIEW AS OF v7.0.0
-  for pod in license bsi;do
-    $k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
-  done
-
-  if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
-    debuglog "Applying SSL.."
-    test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-    test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
-
-    test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
-    test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
-    $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+  if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+    echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+    exit 2
   else
-    debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
+    sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
+    if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
+      echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+      helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+    elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+      echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+      helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+    else
+      helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+      helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+      helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+    fi
   fi
 
-  findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
-  test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is: ${pink}${findSslSubject}${nc}"
+# TODO: REVIEW AS OF v7.0.0
+for pod in license bsi;do
+  $k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
+done
+
+if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
+  debuglog "Applying SSL.."
+  test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+  test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+
+  test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
+  test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
+  $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+else
+  debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
+fi
+
+findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
+test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is: ${pink}${findSslSubject}${nc}"
 
