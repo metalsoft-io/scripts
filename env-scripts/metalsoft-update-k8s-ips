@@ -8,7 +8,6 @@ lightgreen="\e[1;32m"
 yellow="\e[1;33m"
 pink="\e[1;35m"
 
-which microk8s >/dev/null && microk8s="microk8s" || microk8s=""
 me="$(basename $0)"
 #check if file is old
 mage=$(stat -c%Y $(realpath $0))
@@ -62,55 +61,13 @@ test -n "$last_aip" || last_aip="10.255.146.148"
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
 test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io" >> /etc/hosts
 
-if [ -n "$microk8s" ];then
-        if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
-                if grep -q -- '--advertise-address=' /var/snap/microk8s/current/args/kube-apiserver;then
-                        sed -i "s/--advertise-address=[0-9\.]\+/--advertise-address=${cip}/g" /var/snap/microk8s/current/args/kube-apiserver
-                else
-                        echo "--advertise-address=${cip}" >> /var/snap/microk8s/current/args/kube-apiserver
-                fi
-        fi
-
-        if [ -f /var/snap/microk8s/current/args/kubelet ];then
-                if grep -q -- '--node-ip=' /var/snap/microk8s/current/args/kubelet;then
-                        sed -i "s/--node-ip=[0-9\.]\+/--node-ip=${cip}/g" /var/snap/microk8s/current/args/kubelet
-                else
-                        echo "--node-ip=${cip}" >> /var/snap/microk8s/current/args/kubelet
-                fi
-        fi
-
-        if [ -f /var/snap/microk8s/current/certs/csr.conf.template ];then
-                if grep -q '^IP\.103 = ' /var/snap/microk8s/current/certs/csr.conf.template;then
-                        sed -i "/^IP.103 =.*/c IP.103 = ${cip}" /var/snap/microk8s/current/certs/csr.conf.template
-                else
-                        sed -i "/^#MOREIPS/i IP.103 = ${cip}" /var/snap/microk8s/current/certs/csr.conf.template
-                fi
-        fi
-
-        echo "[i] refresh-certs..."
-        microk8s refresh-certs --cert ca.crt --cert server.crt --cert front-proxy-client.crt
-        sleep 10
-fi
-
 if [ ! -z $3 ];then
         proxy_url="$3"
         echo "[i] setting up proxy via $proxy_url"
         lip="$(echo $cip|cut -d. -f1-3)"
         local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
         no_proxy="localhost,::1,.demo.metalsoft.io,.istio-system.svc,.svc.cluster.local,controller,$local_ips"
-        if [ -f /var/snap/microk8s/current/args/kube-apiserver ];then
-                kubeapiiprange="$(grep -oP '.*service-cluster-ip-range=\K.*' /var/snap/microk8s/current/args/kube-apiserver|head -1)"
-                if [ -n "$kubeapiiprange" ];then
-                        no_proxy="$no_proxy,$kubeapiiprange"
-                fi
-        fi
 
-        if [ -f /var/snap/microk8s/current/args/kube-proxy ];then
-                kubeproxyiprange="$(grep -oP '.*cluster-cidr=\K.*' /var/snap/microk8s/current/args/kube-proxy|head -1)"
-                if [ -n "$kubeproxyiprange" ];then
-                        no_proxy="$no_proxy,$kubeproxyiprange"
-                fi
-        fi
         echo no_proxy line = $no_proxy
         env_file="/etc/environment"
         if grep '^HTTP_PROXY=' $env_file > /dev/null;then
@@ -143,75 +100,35 @@ export HTTP_PROXY="$proxy_url"
 export HTTPS_PROXY="$proxy_url"
 export NO_PROXY="$no_proxy"
 
-contd_file="/var/snap/microk8s/current/args/containerd-env"
-if [ -f $contd_file ];then
-
-        if grep '^HTTP_PROXY=' $contd_file > /dev/null;then
-
-                sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $contd_file
-                sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $contd_file
-                sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $contd_file
-
-                sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $contd_file
-                sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $contd_file
-                sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $contd_file
-        else
-
-                echo "http_proxy=\"$proxy_url\"" >> $contd_file
-                echo "https_proxy=\"$proxy_url\"" >> $contd_file
-                echo "no_proxy=\"$no_proxy\"" >> $contd_file
-
-                echo "HTTP_PROXY=\"$proxy_url\"" >> $contd_file
-                echo "HTTPS_PROXY=\"$proxy_url\"" >> $contd_file
-                echo "NO_PROXY=\"$no_proxy\"" >> $contd_file
-
-        fi
-fi
-
-if [ -n "$microk8s" ];then
-        echo "[i] Waiting for k8s service..."
-        microk8s status --wait-ready -t 600 >/dev/null 2>&1
-        sleep 5
-        echo "[i] restarting microk8s..."
-        microk8s stop
-        sleep 2
-        microk8s start && echo "[i] microk8s started, waiting for k8s service..."
-        microk8s status --wait-ready -t 600 >/dev/null 2>&1
-        sleep 60
-fi
 fi # end if $3
 
 if [ -d "${MS_MANIFESTS_FOLDER}" ];then
         cd "${MS_MANIFESTS_FOLDER}/"
         echo "[i] Updating Traefik"
-        sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
-        if [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-                if [ -n "$microk8s" ];then
-                        microk8s helm3 upgrade traefik-demo-metalsoft "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 20.8.0
-                fi
+
+        if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+                echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+                exit 2
         else
-                echo "!!!! Local Traefik Charts missing, falling back to try to pull from official repository"
-                if [ -n "$microk8s" ];then
-                        microk8s helm3 repo add traefik https://helm.traefik.io/traefik
-                        microk8s helm3 repo update
-                        microk8s helm3 upgrade traefik-demo-metalsoft traefik/traefik --values traefik-helm-chart-configvalues.yaml -n demo-metalsoft --version 20.8.0
+                sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
+                if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+                elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+                else
+                        helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+                        helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
                 fi
         fi
+
 fi
 
-if [ -n "$microk8s" ];then
-cat > /tmp/IPAddressPool.yaml << EOFF
----
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: default-addresspool
-  namespace: metallb-system
-spec:
-  addresses:
-  - ${cip}/32
-EOFF
-else # if not microk8s
 cat > /tmp/IPAddressPool.yaml << EOFF
 ---
 apiVersion: metallb.io/v1beta1
@@ -223,26 +140,23 @@ spec:
   addresses:
   - ${cip}-${cip}
 EOFF
-fi
 
-#microk8s kubectl -n metallb-system get IPAddressPool -o yaml > /tmp/IPAddressPool.yaml
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
 echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
-if [ -n "$microk8s" ];then
-until [ "$($microk8s kubectl  -n metallb-system get pod --no-headers|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do $microk8s kubectl get pod -n metallb-system --no-headers|grep Terminating|awk '{print $1}'|while read z;do $microk8s kubectl delete pod -n metallb-system $z;done; sleep 5;echo -n .; done
-$microk8s kubectl apply -f /tmp/IPAddressPool.yaml -n metallb-system --force=true
-ec=$?
-$microk8s kubectl get pod -n metallb-system --no-headers|awk '{print $1}'|xargs|while read z;do $microk8s kubectl delete pod -n metallb-system $z;done
-else # if not microk8s
         kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml
 ec=$?
-fi
-$microk8s kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
+kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ "$last_aip" != "$aip" ];then
-        $microk8s kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip
+        kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip
 fi
 
 test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
 
+echo
+echo "[i] Helm releases:"
+helm list -n ${ns}
+echo 
+echo "[i] Services:"
+kubectl -n ${ns} get svc|grep traefik
 echo
 echo "[i] Done"

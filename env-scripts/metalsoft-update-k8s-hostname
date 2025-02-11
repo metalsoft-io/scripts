@@ -37,14 +37,10 @@ function debuglog ()
   esac
   echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
-micro=${KUBECTL_ALT:-microk8s}
-if [ "$micro" = 'microk8s' ];then
-  which microk8s &>/dev/null || micro=""
-fi
 if ! [ -n "$newhostname" -a "$(echo -n "$newhostname"|wc -c)" -ge 5 -a "$(echo -n "$newhostname"|grep '\.'|wc -l)" -ge 1 ];then usage; exit 1;fi
 
 
-namespace="$(${micro} kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
+namespace="$(kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
 test -z "$namespace" && namespace='demo-metalsoft'
 
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
@@ -60,8 +56,8 @@ test -d "${MS_MANIFESTS_FOLDER}" || { debuglog "Error: ${MS_MANIFESTS_FOLDER} is
 test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
 
-ns="$(${micro} kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
-k="${micro} kubectl -n ${ns} "
+ns="$(kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
+k="kubectl -n ${ns} "
 
 ingresstraefik80="$($k get ingressroute| grep ingress-traefik-port80|head -1|awk '{print $1}')" || { echo "Error: Ingress for traefik port80 not found"; exit 1; }
 hostname="$($k get ingressroute -o json ${ingresstraefik80}|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
@@ -78,6 +74,7 @@ couchdbIp="$($k get svc | grep couchdb | awk '{print $3}')"
 couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
 
 debuglog "Updating CouchDB.."
+# TODO: REVIEW AS OF v7.0.0
 curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
   cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
   curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
@@ -93,21 +90,29 @@ test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
   echo -ne "\033[0K\r"
 
   debuglog "Reconfiguring traefik.."
-  if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
-    echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-    exit 2
-  else
-    if [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-      debuglog "Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-      $micro helm upgrade traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
-    else
-      $micro helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-      $micro helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-      $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1
-      $micro helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { $micro helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && $micro helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
-    fi
-  fi
 
+        if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+                echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+                exit 2
+        else
+                sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
+                if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+                elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+                else
+                        helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+                        helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+                fi
+        fi
+
+# TODO: REVIEW AS OF v7.0.0
   for pod in license bsi;do
     $k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
   done
