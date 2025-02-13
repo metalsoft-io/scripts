@@ -56,7 +56,8 @@ echo "[i] agents IP: $aip"
 
 # Save last used $aip so that we reference it when doing a new mysql update search/replace
 test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
-test -n "$last_aip" || last_aip="10.255.146.148"
+test -n "$last_aip" || last_aip="10.255.146.149"
+echo -n "$cip" > ${HOME}/.ms_last_cip
 
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
