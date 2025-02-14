@@ -74,8 +74,7 @@ read NAME VERSION_ID found_os os_packager < <(testOS)
 DOCKERBIN='docker'
 test "$USEPODMAN" == "1" && DOCKERBIN='podman'
 
-debuglog "OS: $NAME $VERSION_ID / $os_packager for $found_os / $DOCKERBIN"
-debuglog "whoami: $(whoami)" bold pink
+debuglog "OS: ${yellow}$NAME $VERSION_ID${nc} / ${yellow}$os_packager${nc} for ${yellow}$found_os${nc} / ${lightgreen}$DOCKERBIN${nc} / whoami: ${pink}$(whoami)${nc}"
 if [ "$found_os" == "debian" ];then
   export LC_ALL=C
   export DEBIAN_FRONTEND=noninteractive
@@ -92,22 +91,26 @@ if [ "$found_os" == "debian" ];then
 fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
-if [ -n "$DOCKERENV" ];then
-  IMAGES_TAG_SAVED="$IMAGES_TAG"
+if [ -n "$DOCKERENV" ]; then
+  # Save original IMAGES_TAG value
+  IMAGES_TAG_SAVED="${IMAGES_TAG}"
   IMAGES_TAG='${TAG}'
-  DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-  JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
-  MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+  DCAGENTS_URL="registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}"
+  JUNOSDRIVER_URL="registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}"
+  MSAGENT_URL="registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}"
   ANSIBLE_RINNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
 else
-  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.4.0'
-  test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-  test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
-  test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
-  test -z "$ANSIBLE_RINNER_URL" && ANSIBLE_RINNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
+  # Set default version if IMAGES_TAG not set
+  IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
+  
+  # Set URLs if not already defined, using IMAGES_TAG
+  DCAGENTS_URL=${DCAGENTS_URL:-registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
+  JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}}
+  MSAGENT_URL=${MSAGENT_URL:-registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}}
+  ANSIBLE_RINNER_URL=${ANSIBLE_RINNER_URL:-registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
 fi
 
-test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
+MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
 
 # Env vars set via CLI:
 CLI_DCCONF="$DCCONF"
@@ -120,37 +123,49 @@ test -n "$MAINIP" && NFSIP="$MAINIP"
 test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
 
 
-function nc_check_remote_conn {
-
+function check_remote_conn {
   ip=$1
   port=$2
   protocol=${3:-tcp}
-  test -n "$4" && comment="$4 "
-  test "$protocol" == 'icmp' && port=icmp
+  [ -n "$4" ] && comment="$4 "
+  [ "$protocol" = "icmp" ] && port=icmp
 
   echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
 
-  if [[ ! $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    ip="$(dig +short "$ip"|grep -Po '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' |xargs)"
-  fi
-  test -z "$ip" && echo -e "${lightred}Error: not resolved${nc}" && return
-  for ip in $ip;do
-    if [ "$protocol" == "tcp" ];then
-      nc -nzw 5 "$ip" "$port" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    elif [ "$protocol" == "icmp" ];then
-      ping -c2 "$ip" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    else
-      nc -nzuw 5 "$ip" "$port" &>/dev/null && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    fi
+  # For HTTPS (port 443), use hostname directly without IP resolution
+  if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
+    curl -sk --connect-timeout 10 "https://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     echo -e "$res"
+    return
+  elif [ "$protocol" = "icmp" ]; then
+    ping -c1 "$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+    echo -e "$res"
+    return
+  fi
+
+  # For other protocols, resolve to IP
+  case "$ip" in
+    *[!0-9.]*) ip=$(dig +short "$ip" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | xargs) ;;
+  esac
+
+  [ -z "$ip" ] && echo -e "${lightred}Error: not resolved${nc}" && return
+
+  res=""
+  for ip in $ip; do
+    if [ "$protocol" = "tcp" ]; then
+      (echo >/dev/tcp/"$ip"/"$port") >/dev/null 2>&1 && res+="${lightgreen}$ip=success${nc} " || res+="${lightred}$ip=failure${nc} "
+    else
+      (echo >/dev/udp/"$ip"/"$port") >/dev/null 2>&1 && res+="${lightgreen}$ip=success${nc} " || res+="${lightred}$ip=failure${nc} "
+    fi
   done
+  echo -e "${res% }"
 }
 
-nc_check_remote_conn repo.metalsoft.io 80 tcp
-nc_check_remote_conn download.docker.com 443 tcp
-nc_check_remote_conn ${REG_HOST} 443 tcp
-test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 443 tcp
-test -n "$SSL_HOSTNAME" && nc_check_remote_conn "${SSL_HOSTNAME}" 0 icmp
+check_remote_conn repo.metalsoft.io 80 tcp
+check_remote_conn download.docker.com 443 tcp
+check_remote_conn ${REG_HOST} 443 tcp
+test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
+test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
@@ -172,11 +187,8 @@ function manageSSL
       return 1
 
     fi
-  elif [[ "${NONINTERACTIVE_MODE}" == 1 ]];then
-    echo "Error: You are in noninteractive mode, but have not specified value for SSL_PULL_URL";
-    exit 1
   else
-    echo Error: no valid path provided
+    echo "Error: no valid path provided or missing SSL_PULL_URL"
     return 1
   fi
 }
@@ -253,10 +265,10 @@ if [ -z "$DCCONF" ];then
   echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
   echo
   echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ NONINTERACTIVE_MODE=1 REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
+  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
   echo
   exit 0
-  fi
+fi
 
   debuglog "Pulling DC config URL"
   DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
@@ -424,31 +436,37 @@ TAG=${IMAGES_TAG_SAVED}
 ENDD
 fi
 
-ENVVAR_OOB_HTTP_PROXY=enabled
-ENVVAR_FILE_TRANSFER=enabled
-ENVVAR_SWITCH_SUBSCRIPTION=enabled
-ENVVAR_COMMAND_EXECUTION=enabled
-ENVVAR_VNC=enabled
-ENVVAR_SYSLOG=enabled
-ENVVAR_SPICE=disabled
-ENVVAR_INBAND_HTTP_PROXY=disabled
-ENVVAR_INBAND_FILE_TRANSFER=disabled
-ENVVAR_SITE_CONTROLLER_IP="$(ip r get 1|awk '{print $7}')"
-ENVVAR_NETCONF=enabled
-ENVVAR_DHCP_OOB=disabled
-ENVVAR_DHCP_LISTEN_INTERFACES="$(ip -br a|grep "\b$(ip r get 1|head -1|awk '{print $7}')\b"|awk '{print $1}')"
+# Get network interface information
+default_route=$(ip r get 1 2>/dev/null | head -1)
+interface_ip=$(echo "$default_route" | awk '{print $7}')
+interface_name=$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')
 
-if [ "$INBAND" == "1" ]; then
-  FORCE=1
+# Set default environment variables
+export ENVVAR_OOB_HTTP_PROXY=enabled
+export ENVVAR_FILE_TRANSFER=enabled
+export ENVVAR_SWITCH_SUBSCRIPTION=enabled
+export ENVVAR_COMMAND_EXECUTION=enabled
+export ENVVAR_VNC=enabled
+export ENVVAR_SYSLOG=enabled
+export ENVVAR_SPICE=disabled
+export ENVVAR_INBAND_HTTP_PROXY=disabled
+export ENVVAR_INBAND_FILE_TRANSFER=disabled
+export ENVVAR_NETCONF=enabled
+export ENVVAR_DHCP_OOB=disabled
+export ENVVAR_SITE_CONTROLLER_IP="${interface_ip}"
+export ENVVAR_DHCP_LISTEN_INTERFACES="${interface_name}"
+
+# Handle INBAND mode
+if [ "${INBAND:-0}" = "1" ]; then
   debuglog "INBAND mode" info pink
-  ENVVAR_OOB_HTTP_PROXY=disabled
-  ENVVAR_FILE_TRANSFER=disabled
-  ENVVAR_SWITCH_SUBSCRIPTION=disabled
-  ENVVAR_COMMAND_EXECUTION=disabled
-  ENVVAR_VNC=disabled
-  ENVVAR_SYSLOG=disabled
-  ENVVAR_INBAND_HTTP_PROXY=enabled
-  ENVVAR_INBAND_FILE_TRANSFER=enabled
+  export ENVVAR_OOB_HTTP_PROXY=disabled
+  export ENVVAR_FILE_TRANSFER=disabled
+  export ENVVAR_SWITCH_SUBSCRIPTION=disabled
+  export ENVVAR_COMMAND_EXECUTION=disabled
+  export ENVVAR_VNC=disabled
+  export ENVVAR_SYSLOG=disabled
+  export ENVVAR_INBAND_HTTP_PROXY=enabled
+  export ENVVAR_INBAND_FILE_TRANSFER=enabled
   non_inband_dc=''
 fi
 
@@ -495,7 +513,7 @@ inband_dc="  ms-agent:
   nfs:
     network_mode: host
     container_name: nfs-server
-    image: registry.metalsoft.dev/datacenter-agents-compiled/nfs-server:3
+    image: registry.metalsoft.dev/sc/nfs-server:3
     restart: unless-stopped
     privileged: true
     environment:
@@ -570,7 +588,7 @@ non_inband_dc="  agents:
   haproxy:
     network_mode: host
     container_name: dc-haproxy
-    image: registry.metalsoft.dev/datacenter-agents-compiled/dc-haproxy:3.0.4
+    image: registry.metalsoft.dev/sc/dc-haproxy:3.0.4
     restart: always
     privileged: true
     volumes:
@@ -591,142 +609,132 @@ non_inband_dc="  agents:
     hostname: junos-driver
 "
 
-test "$INBAND" == "1" && non_inband_dc=''
-if [ "$FORCE" == "1" ] ;then
-  backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
-  if [ -f /opt/metalsoft/agents/docker-compose.yaml ];then
-    cp /opt/metalsoft/agents/docker-compose.yaml /opt/metalsoft/agents/${backupPrefix}-docker-compose.yaml.bak
+test "$INBAND" = "1" && non_inband_dc=''
+backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
+# Create backup of config files if they exist
+for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
+  if [ -f "/opt/metalsoft/agents/$file" ]; then
+    cp "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file}.bak"
   fi
-  if [ -f /opt/metalsoft/agents/haproxy.cfg ];then
-    cp /opt/metalsoft/agents/haproxy.cfg /opt/metalsoft/agents/${backupPrefix}-haproxy.cfg.bak
-  fi
-  if [ -f /opt/metalsoft/agents/supervisor.conf ];then
-    cp /opt/metalsoft/agents/supervisor.conf /opt/metalsoft/agents/${backupPrefix}-supervisor.conf.bak
-  fi
-  if [ -f /opt/metalsoft/agents/ssl-cert.pem ];then
-    cp /opt/metalsoft/agents/ssl-cert.pem /opt/metalsoft/agents/${backupPrefix}-ssl-cert.pem.bak
-  fi
-fi
-if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ] || [ "$FORCE" == "1" ] ;then
-  debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
-  cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
+done
+debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
+cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 services:
 $inband_dc
 $non_inband_dc
 ENDD
-fi
 
-if [ ! -f /opt/metalsoft/agents/haproxy.cfg ] || [ "$FORCE" == "1" ] ;then
-  debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
-  cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
+
+debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
+cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
-    chroot /var/lib/haproxy
-    user root
-    group root
-    daemon
+  chroot /var/lib/haproxy
+  user root
+  group root
+  daemon
 
-    ## set fd-hard-limit on haproxy 2.6+ to fix start-up error: 'Not enough memory to allocate 1073741816 entries for fdtab'
-    # fd-hard-limit 50000
-    # maxconn 4096
+  ## set fd-hard-limit on haproxy 2.6+ to fix start-up error: 'Not enough memory to allocate 1073741816 entries for fdtab'
+  # fd-hard-limit 50000
+  # maxconn 4096
 
-    ssl-default-bind-options no-sslv3 no-tls-tickets
-    ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
-    ssl-default-server-options no-sslv3 no-tls-tickets
-    ssl-default-server-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
+  ssl-default-bind-options no-sslv3 no-tls-tickets
+  ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
+  ssl-default-server-options no-sslv3 no-tls-tickets
+  ssl-default-server-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
 defaults
-    mode http
-    log stdout format raw local0
+  mode http
+  log stdout format raw local0
 
-    retries 3
-    timeout connect 10s
-    timeout client 100m
-    timeout server 30m
-    timeout check 10s
-    timeout http-keep-alive 10s
-    timeout queue 10m
-    timeout http-request 30m
-    timeout tunnel 480m
-    maxconn 3000
-    option httpclose
-    option forwardfor except 127.0.0.0/8
-    option redispatch
-    option abortonclose
-    option httplog
-    option dontlognull
-    option http-server-close
+  retries 3
+  timeout connect 10s
+  timeout client 100m
+  timeout server 30m
+  timeout check 10s
+  timeout http-keep-alive 10s
+  timeout queue 10m
+  timeout http-request 30m
+  timeout tunnel 480m
+  maxconn 3000
+  option httpclose
+  option forwardfor except 127.0.0.0/8
+  option redispatch
+  option abortonclose
+  option httplog
+  option dontlognull
+  option http-server-close
 
 frontend ft_local_apache_80
-    mode http
-    bind :80
-    bind 127.0.0.1:80
-    acl host_ws path_beg -i /api-ws
-    acl host_dhcpe path_beg -i /dhcpe
-    acl host_tftp path_beg -i /tftp8069
-    acl host_dhcpe path_beg -i /os-ready
-    acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
-    acl has_special_uri path_beg /remote-console
-    acl has_iso_uri path_beg /iso
-    use_backend bk_local_apache_8080 if host_ws
-    use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-    use_backend bk_fullmetal_tftpe_8069 if host_tftp
-    use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-    use_backend bk_repo_443 if host_repo
-    use_backend bk_guacamole_tomcat_8080 if has_special_uri
-    use_backend bk_msagents_8099 if has_iso_uri
-    default_backend bk_local_apache_81
+  mode http
+  bind :80
+  bind 127.0.0.1:80
+  acl host_ws path_beg -i /api-ws
+  acl host_dhcpe path_beg -i /dhcpe
+  acl host_tftp path_beg -i /tftp8069
+  acl host_dhcpe path_beg -i /os-ready
+  acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
+  acl has_special_uri path_beg /remote-console
+  acl has_iso_uri path_beg /iso
+  use_backend bk_local_apache_8080 if host_ws
+  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
+  use_backend bk_fullmetal_tftpe_8069 if host_tftp
+  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
+  use_backend bk_repo_443 if host_repo
+  use_backend bk_guacamole_tomcat_8080 if has_special_uri
+  use_backend bk_msagents_8099 if has_iso_uri
+  default_backend bk_local_apache_81
 
 frontend ft_local_apache_443
-    mode http
-    bind :443 ssl crt /etc/ssl/certs/poc.metalsoft.io.pem
-    acl host_ws path_beg -i /api-ws
-    acl host_dhcpe path_beg -i /dhcpe
-    acl host_tftp path_beg -i /tftp8069
-    acl host_dhcpe path_beg -i /os-ready
-    acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
-    acl has_special_uri path_beg /remote-console
-    http-response add-header Strict-Transport-Security max-age=157680001
-    use_backend bk_local_apache_8080 if host_ws
-    use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-    use_backend bk_fullmetal_tftpe_8069 if host_tftp
-    use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-    use_backend bk_repo_443 if host_repo
-    use_backend bk_guacamole_tomcat_8080 if has_special_uri
-    default_backend bk_local_apache_81
+  mode http
+  bind :443 ssl crt /etc/ssl/certs/poc.metalsoft.io.pem
+  acl host_ws path_beg -i /api-ws
+  acl host_dhcpe path_beg -i /dhcpe
+  acl host_tftp path_beg -i /tftp8069
+  acl host_dhcpe path_beg -i /os-ready
+  acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
+  acl has_special_uri path_beg /remote-console
+  http-response add-header Strict-Transport-Security max-age=157680001
+  use_backend bk_local_apache_8080 if host_ws
+  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
+  use_backend bk_fullmetal_tftpe_8069 if host_tftp
+  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
+  use_backend bk_repo_443 if host_repo
+  use_backend bk_guacamole_tomcat_8080 if has_special_uri
+  default_backend bk_local_apache_81
 
 backend bk_fullmetal_dhcpe_8067
-    server localhost 127.0.0.1:8067
+  server localhost 127.0.0.1:8067
 
-    http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-    option forwardfor header X-HAPROXY-OUTSIDE-IP
+  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
+  option forwardfor header X-HAPROXY-OUTSIDE-IP
 
 backend bk_fullmetal_tftpe_8069
-    server localhost 127.0.0.1:8069
+  server localhost 127.0.0.1:8069
 
-    http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-    option forwardfor header X-HAPROXY-OUTSIDE-IP
+  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
+  option forwardfor header X-HAPROXY-OUTSIDE-IP
 
 backend bk_local_apache_81
-    server localhost 127.0.0.1:81
+  server localhost 127.0.0.1:81
 
-        http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-    option forwardfor header X-HAPROXY-OUTSIDE-IP
+      http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
+  option forwardfor header X-HAPROXY-OUTSIDE-IP
 
 backend bk_local_apache_8080
-    server localhost 127.0.0.1:8080
+  server localhost 127.0.0.1:8080
 
-    http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-    option forwardfor header X-HAPROXY-OUTSIDE-IP
+  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
+  option forwardfor header X-HAPROXY-OUTSIDE-IP
 
 backend bk_guacamole_tomcat_8080
-    server localhost 127.0.0.1:8081
+  server localhost 127.0.0.1:8081
 
 backend bk_repo_443
-    server repo.poc.metalsoft.io 127.0.0.1:9080
+  server repo.poc.metalsoft.io 127.0.0.1:9080
 
 backend bk_msagents_8099
-    server localhost 127.0.0.1:8099
+  server localhost 127.0.0.1:8099
 ENDD
-    fi
+
 
     test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
@@ -858,10 +866,9 @@ while [ $? -ne 0 ]; do
   sleep 1
 done
 
-if [ "$FORCE" == "1" ] || [ "$INBAND" == "1" ] ;then
-  debuglog "stopping any running $DOCKERBIN containers.." info lightred
-  $DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
-fi
+debuglog "stopping any running $DOCKERBIN containers.." info lightred
+$DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
+
 cd /opt/metalsoft/agents
 debuglog "pulling latest images.."
 if [ "$DOCKERBIN" == "docker" ];then
@@ -933,11 +940,9 @@ fi
 debuglog "Pulling discovery ISO"
 test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
 
-if [[ "${NONINTERACTIVE_MODE}" != 1 ]];then
-  sleep 2
-  $DOCKERBIN ps
-  sleep 2
-  $DOCKERBIN ps
-fi
+sleep 2
+$DOCKERBIN ps
+sleep 2
+$DOCKERBIN ps
 
 debuglog "[ ${SECONDS} sec ] All done. To check containers, use: $DOCKERBIN ps" success
