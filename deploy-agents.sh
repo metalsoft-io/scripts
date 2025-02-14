@@ -98,11 +98,13 @@ if [ -n "$DOCKERENV" ];then
   DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
   JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+  ANSIBLE_RINNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
 else
-  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.2.3'
+  test -z "$IMAGES_TAG" && IMAGES_TAG='v6.4.0'
   test -z "$DCAGENTS_URL" && DCAGENTS_URL="registry.metalsoft.dev/datacenter-agents-compiled/datacenter-agents-compiled-v2:${IMAGES_TAG}"
   test -z "$JUNOSDRIVER_URL" && JUNOSDRIVER_URL="registry.metalsoft.dev/datacenter-agents-compiled/junos-driver:${IMAGES_TAG}"
   test -z "$MSAGENT_URL" && MSAGENT_URL="registry.metalsoft.dev/datacenter-agents-compiled/ms-agent:${IMAGES_TAG}"
+  test -z "$ANSIBLE_RINNER_URL" && ANSIBLE_RINNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
 fi
 
 test -z "$MS_TUNNEL_SECRET" && MS_TUNNEL_SECRET='default'
@@ -240,7 +242,7 @@ else # if rhel
 fi
 
 debuglog "Creating folders"
-mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
 debuglog "Checking DCONF"
 
@@ -506,6 +508,17 @@ inband_dc="  ms-agent:
       - 111:111
       - 32765:32765
       - 32767:32767
+  ansible-runner:
+    container_name: ansible-runner
+    network_mode: host
+    hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${ANSIBLE_RINNER_URL}
+    restart: always
+    environment:
+      - TZ=Etc/UTC
+      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+    volumes:
+      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
 non_inband_dc="  agents:
     network_mode: host
