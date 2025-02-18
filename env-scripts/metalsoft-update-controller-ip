@@ -131,6 +131,11 @@ else
         echo "${ip} demo.metalsoft.io" >> /etc/hosts
 fi
 
-cd /opt/metalsoft/agents/ && ${docker_compose} pull && ${docker_compose} down && sleep 1 && ${docker_compose} up -d
+cd /opt/metalsoft/agents/
+if [ -f docker-compose.yaml ];then
+        registryUrl="$(grep -m 1 -oP 'image:\s+\K[^\/]+' docker-compose.yaml)"
+        curl -sk --connect-timeout 10 "https://${registryUrl}" &>/dev/null && echo -e "${lightgreen}[i] Pulling images from ${registryUrl}${nc}" && ${docker_compose} pull || { echo -e "${lightred}[e] Error pulling docker images from ${registryUrl}${nc}"; }
+fi
+${docker_compose} down && sleep 1 && ${docker_compose} up -d
 test -x /etc/ms-pre-login-ips && /etc/ms-pre-login-ips
 echo Done
