@@ -98,7 +98,7 @@ if [ -n "$DOCKERENV" ]; then
   DCAGENTS_URL="registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}"
   JUNOSDRIVER_URL="registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}"
   MSAGENT_URL="registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}"
-  ANSIBLE_RINNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
+  ANSIBLE_RUNNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
 else
   # Set default version if IMAGES_TAG not set
   IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
@@ -107,7 +107,7 @@ else
   DCAGENTS_URL=${DCAGENTS_URL:-registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
   JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}}
   MSAGENT_URL=${MSAGENT_URL:-registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}}
-  ANSIBLE_RINNER_URL=${ANSIBLE_RINNER_URL:-registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
+  ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
 fi
 
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
@@ -530,11 +530,13 @@ inband_dc="  ms-agent:
     container_name: ansible-runner
     network_mode: host
     hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
-    image: ${ANSIBLE_RINNER_URL}
+    image: ${ANSIBLE_RUNNER_URL}
     restart: always
     environment:
       - TZ=Etc/UTC
+      - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
     volumes:
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
