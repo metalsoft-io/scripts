@@ -243,8 +243,13 @@ else # if gather=agent
 	docker images -a > ${backupFolder}/docker_images.txt || true
 	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-agents-logs && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read z;do echo $z|while read f;do find $f -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} ${backupFolder}/docker-agents-logs/ \;;done;done
 	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p ${backupFolder}/docker-logs && docker ps -a --format '{{.Names}}.{{.ID}}'|while read z;do docker logs ${z%%.*} > "${backupFolder}/docker-logs/${z}.log" 2>&1;done
-
-
+	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect $GCURL:443 -servername $GCURL -tlsextdebug -status -bugs < /dev/null 2>&1 > ${backupFolder}/ssl_to_gc_debug_443.txt
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect $GCURL:9091 -servername $GCURL -tlsextdebug -status -bugs < /dev/null 2>&1 > ${backupFolder}/ssl_to_gc_debug_9091.txt
+	ls -laR /etc/ssl/certs/ &> ${backupFolder}/ssl_ls_etc_ssl_certs.txt || true
+	ls -laR /etc/pki/tls/certs/ &> ${backupFolder}/ssl_ls_etc_pki_tls_certs.txt || true
+	ls -laR /etc/pki/ca-trust/source/anchors/ &> ${backupFolder}/ssl_ls_etc_pki_ca_trust_source_anchors.txt || true
+	ls -laR /usr/local/share/ca-certificates/ &> ${backupFolder}/ssl_ls_usr_local_share_ca_certificates.txt || true
 fi
 
 echo "[i] creating an archive.."
