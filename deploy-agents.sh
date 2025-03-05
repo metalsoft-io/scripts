@@ -29,6 +29,14 @@ yamltojson ()
   python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
 }
 
+verlte() {
+  printf '%s\n' "$1" "$2" | sort -C -V
+}
+
+verlt() {
+  ! verlte "$2" "$1"
+}
+
 testOS ()
 {
   if [ -f /etc/os-release ]; then
@@ -92,17 +100,16 @@ fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 if [ -n "$DOCKERENV" ]; then
-  # Save original IMAGES_TAG value
-  IMAGES_TAG_SAVED="${IMAGES_TAG}"
-  IMAGES_TAG='${TAG}'
-  DCAGENTS_URL="registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}"
-  JUNOSDRIVER_URL="registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}"
-  MSAGENT_URL="registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}"
-  ANSIBLE_RUNNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}"
+  echo "TAG=${IMAGES_TAG}" > /opt/metalsoft/agents/.env
+  IMAGES_TAGENV='${TAG}'
+  DCAGENTS_URL="registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAGENV}"
+  JUNOSDRIVER_URL="registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAGENV}"
+  MSAGENT_URL="registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAGENV}"
+  ANSIBLE_RUNNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
 else
   # Set default version if IMAGES_TAG not set
   IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
-  
+
   # Set URLs if not already defined, using IMAGES_TAG
   DCAGENTS_URL=${DCAGENTS_URL:-registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
   JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}}
@@ -113,22 +120,36 @@ fi
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
 
 # Env vars set via CLI:
+if verlt $IMAGES_TAG v7.0.0; then
 CLI_DCCONF="$DCCONF"
+fi
 CLI_DATACENTERNAME="$DATACENTERNAME"
 
+# Get network interface information
+default_route=$(ip r get 1 2>/dev/null | head -1)
+interface_ip=$(echo "$default_route" | awk '{print $7}')
+interface_name=$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')
+
+
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-test -z "$MAINIP" && MAINIP="$(ip r get 1|head -1|awk '{print $7}')"
+test -z "$MAINIP" && test -n "$interface_ip" && MAINIP="$interface_ip"
+if verlt $IMAGES_TAG v7.0.0; then
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
+else
+test -n "$SSL_HOSTNAME" || { echo -e "${lightred}Error: SSL_HOSTNAME not set${nc}" >&2; exit 11; }
+fi
 test -n "$MAINIP" && NFSIP="$MAINIP"
+
+# keep the NFS_HOST if already set, as it could've been modified manually
 test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
 
 
 function check_remote_conn {
-  ip=$1
-  port=$2
-  protocol=${3:-tcp}
-  [ -n "$4" ] && comment="$4 "
-  [ "$protocol" = "icmp" ] && port=icmp
+  local ip=$1
+  local port=$2
+  local protocol=${3:-tcp}
+  [ -n "$4" ] && local comment="$4 "
+  [ "$protocol" = "icmp" ] && local port=icmp
 
   echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
 
@@ -239,25 +260,36 @@ if [ "$found_os" == "debian" ];then
 else # if rhel
   if [[ -n "$CUSTOM_CA" ]]; then
     echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
+    cp /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} /etc/ssl/certs/
+    restorecon -R /etc/ssl/certs
+    restorecon -R /etc/pki/ca-trust/source/anchors/
+    # https://stackoverflow.com/a/31334443/2291328
+    chcon -Rt svirt_sandbox_file_t /etc/ssl/certs/
+    if ! semanage fcontext -l | grep -q -E "^/etc/ssl/certs(/.*)?"; then
+      semanage fcontext -a -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
+    fi
     update-ca-trust extract
   fi
-  # https://stackoverflow.com/a/31334443/2291328
-  chcon -Rt svirt_sandbox_file_t /etc/ssl/certs/
-  if ! semanage fcontext -l | grep -q -E "^/etc/ssl/certs(/.*)?"; then
-    semanage fcontext -a -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
-  fi
+
   # or (This ensures the rule is set correctly, whether it existed before or not.)
   # semanage fcontext -m -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
-
-  restorecon -R /etc/ssl/certs
 
 fi
 
 debuglog "Creating folders"
-mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
+backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
+# Create backup of config files if they exist
+for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
+  if [ -f "/opt/metalsoft/agents/$file" ]; then
+    cp "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file}.bak"
+  fi
+done
+
+
+if verlt $IMAGES_TAG v7.0.0; then
 debuglog "Checking DCONF"
-
 if [ -z "$DCCONF" ];then
   echo
   echo Help:
@@ -271,7 +303,8 @@ if [ -z "$DCCONF" ];then
 fi
 
   debuglog "Pulling DC config URL"
-  DCCONFDOWNLOADED="$(wget -q --connect-timeout=20 --tries=4 --no-check-certificate -O - "${DCCONF}")"
+  DCCONFDOWNLOADED="$(wget -q --connect-timeout=10 --tries=2 --no-check-certificate -O - "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
+fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
   if [ "$found_os" == "debian" ];then
@@ -420,26 +453,20 @@ if [ -z "$SSL_HOSTNAME" ];then
   debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
 fi
 
-debuglog "Setting DATACENTERNAME"
-DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
-DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
+if verlt $IMAGES_TAG v7.0.0; then
+  debuglog "Setting DATACENTERNAME"
+  DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
+  DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter)"
 
-if [ -z "$DATACENTERNAME" ];then
-  DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
+  if [ -z "$DATACENTERNAME" ];then
+    DATACENTERNAME=$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')
+  fi
+else
+  test -n "$DATACENTERNAME" || { echo -e "${lightred}Error: DATACENTERNAME is not set${nc}" >&2; exit 1; }
 fi
 
-HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 5)
-
-if [ -n "$DOCKERENV" ];then
-  cat > /opt/metalsoft/agents/.env <<ENDD
-TAG=${IMAGES_TAG_SAVED}
-ENDD
-fi
-
-# Get network interface information
-default_route=$(ip r get 1 2>/dev/null | head -1)
-interface_ip=$(echo "$default_route" | awk '{print $7}')
-interface_name=$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')
+HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
+HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/\./-/g')-${HOSTNAMERANDOM}
 
 # Set default environment variables
 export ENVVAR_OOB_HTTP_PROXY=enabled
@@ -469,7 +496,42 @@ if [ "${INBAND:-0}" = "1" ]; then
   export ENVVAR_INBAND_FILE_TRANSFER=enabled
   non_inband_dc=''
 fi
-
+if verlt $IMAGES_TAG v6.4; then
+ansible_runner="#  ansible-runner:
+#    container_name: ansible-runner
+#    network_mode: host
+#    hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
+#    image: ${ANSIBLE_RUNNER_URL}
+#    restart: always
+#    environment:
+#      - TZ=Etc/UTC
+#      - ANSIBLE_RUNNER=enabled
+#      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+#      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+#    volumes:
+#      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+"
+else
+ansible_runner="  ansible-runner:
+    container_name: ansible-runner
+    network_mode: host
+    hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${ANSIBLE_RUNNER_URL}
+    restart: always
+    environment:
+      - TZ=Etc/UTC
+      - ANSIBLE_RUNNER=enabled
+      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+    volumes:
+      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+"
+ms_agent_ansible_runner_mounts="
+      - ANSIBLE_RUNNER=enabled
+      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+"
+fi
 inband_dc="  ms-agent:
     container_name: ms-agent
     network_mode: host
@@ -506,6 +568,7 @@ inband_dc="  ms-agent:
       - NETCONF=${ENVVAR_NETCONF}
       - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY}
       - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER}
+$ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
@@ -526,19 +589,6 @@ inband_dc="  ms-agent:
       - 111:111
       - 32765:32765
       - 32767:32767
-  ansible-runner:
-    container_name: ansible-runner
-    network_mode: host
-    hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
-    image: ${ANSIBLE_RUNNER_URL}
-    restart: always
-    environment:
-      - TZ=Etc/UTC
-      - ANSIBLE_RUNNER=enabled
-      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
-      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
-    volumes:
-      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
 non_inband_dc="  agents:
     network_mode: host
@@ -610,23 +660,21 @@ non_inband_dc="  agents:
       - TZ=Etc/UTC
     hostname: junos-driver
 "
+if ! verlt $IMAGES_TAG v7.0.0; then
+  non_inband_dc=''
+fi
 
 test "$INBAND" = "1" && non_inband_dc=''
-backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
-# Create backup of config files if they exist
-for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
-  if [ -f "/opt/metalsoft/agents/$file" ]; then
-    cp "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file}.bak"
-  fi
-done
+
 debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
 cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 services:
 $inband_dc
+$ansible_runner
 $non_inband_dc
 ENDD
 
-
+if verlt $IMAGES_TAG v7.0.0; then
 debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
 cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
@@ -736,12 +784,15 @@ backend bk_repo_443
 backend bk_msagents_8099
   server localhost 127.0.0.1:8099
 ENDD
+fi
 
-
-    test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
-    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml && \
-      sed -E "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+    test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml
+
+        if verlt $IMAGES_TAG v7.0; then
+          test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
+          test -n "${CLI_DATACENTERNAME}" && sed -iE "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+
           if [[ -n $CUSTOM_CA ]]; then
             cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
 [supervisord]
@@ -821,6 +872,7 @@ ENDD
 sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/agents\/supervisor.conf/g" /opt/metalsoft/agents/docker-compose.yaml
 
           fi
+          fi
 
 dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" $HOME/.bashrc;then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> $HOME/.bashrc && source $HOME/.bashrc;fi
 
@@ -883,7 +935,7 @@ fi
 
 if [ -f /etc/ssh/ms_banner ];then
   debuglog "update /etc/ssh/ms_banner"
-  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $(ip r get 1|head -1|awk '{print $7}')" /etc/ssh/ms_banner;else echo "AgentIP: $(ip r get 1|head -1|awk '{print $7}')" >> /etc/ssh/ms_banner;fi
+  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $interface_ip" /etc/ssh/ms_banner;else echo "AgentIP: $interface_ip" >> /etc/ssh/ms_banner;fi
   dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
   dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml|head -1)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
 fi
@@ -909,7 +961,7 @@ if [ "$found_os" == "debian" ];then
 done
 else #if rhel
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
-  nameservers="$(nmcli d show $(ip r get 1|head -1|awk '{print $5}') 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
+  nameservers="$(nmcli d show $interface_name 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
   test -n "$nameservers" && for nameserver in $nameservers; do
   debuglog "nameserver ${yellow}$nameserver${nc}"
   if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
