@@ -14,7 +14,7 @@ gray=$(tput setaf 8)
 #lightblue=$(tput setaf 12)
 
 #test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
-thedate="$(date +"%F-%H%M%S")"
+thedate="$(date +"%F-%H%M")"
 backupFolder=/var/backups/metalsoft
 backupFolder="${backupFolder%/}"
 
@@ -31,11 +31,11 @@ function usage {
 	exit 0
 }
 
-#auto determine if we are on agent or controller:
-test -f /opt/metalsoft/agents/docker-compose.yaml && type docker &>/dev/null && gather='agent' && envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
-type kubectl &>/dev/null && gather='controller' && k='kubectl '
-type microk8s &>/dev/null && gather='controller' && k='microk8s.kubectl '
-test "$gather" == 'controller' && test -n "$ns" && envname="$ns"
+#auto determine if we are on sc or gc:
+test -f /opt/metalsoft/agents/docker-compose.yaml && type docker &>/dev/null && gather='sc' && envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
+type kubectl &>/dev/null && gather='gc' && k='kubectl '
+type microk8s &>/dev/null && gather='gc' && k='microk8s.kubectl '
+test "$gather" == 'gc' && test -n "$ns" && envname="$ns"
 pushfile=
 extended=
 
@@ -44,8 +44,8 @@ do
 	case "${flag}" in
 		p) pushfile="1" ;;
 		P) pushfileFromArg="${OPTARG}" ;;
-		c) gather='controller' ;;
-		a) gather='agent' ;;
+		c) gather='gc' ;;
+		a) gather='sc' ;;
 		k) k="${OPTARG}" ;;
 		n) envname="${OPTARG}" ;;
 		b) backupFolder="${OPTARG}" ;;
@@ -67,7 +67,7 @@ if [ -n "$pushfileFromArg" ];then
 fi
 
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
-test -z "$envname" && test "$gather" == 'controller' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
+test -z "$envname" && test "$gather" == 'gc' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
 backupFolder=${backupFolder}/${thedate}_${envname}_${gather}
 
@@ -128,10 +128,10 @@ function get_k8s ()
 	$k get $z -A --no-headers|grep -vw Running|while read pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> ${backupFolder}/k8s_pods_not_running.txt || true
 }
 
-if [ "$gather" == 'controller' ];then
-	envnamelabel="-${envname}-controller"
+if [ "$gather" == 'gc' ];then
+	envnamelabel="-${envname}-gc"
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
-	test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-controller"
+	test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-gc"
 	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
 
 	# TODO: in cases where env is not found, we should still collect info on what went wrong
@@ -227,9 +227,9 @@ if [ "$extended" == '1' ];then
 	test -d /var/log/containers && mkdir -p ${backupFolder}/container_logs && rsync -azL /var/log/containers/* ${backupFolder}/container_logs/ || true
 fi
 
-else # if gather=agent
+else # if gather=sc
 	envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
-	envnamelabel="-${envname}-agent"
+	envnamelabel="-${envname}-sc"
 	echo "[i] backing up disk stats.."
 	get_disks
 
