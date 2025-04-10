@@ -125,7 +125,7 @@ function get_k8s ()
 	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
 	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
 
-	$k get $z -A --no-headers|grep -vw Running|while read pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> ${backupFolder}/k8s_pods_not_running.txt || true
+	$k get pod -A --no-headers|grep -vw Running|while read pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> ${backupFolder}/k8s_pods_not_running.txt || true
 }
 
 if [ "$gather" == 'gc' ];then
@@ -192,6 +192,15 @@ if [ "$gather" == 'gc' ];then
 	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
 	#backup all couchdb DBs:
 	couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
+
+    if [ "$(curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
+      couchdb_admin_user="$($k -n $envname get configmap common -o json|jq -r .data.couchdb_admin_user)"
+      couchdb_admin_password="$($k -n $envname get configmap common -o json|jq -r .data.couchdb_admin_password)"
+      if [ -n "$couchdb_admin_user" ] && [ -n "$couchdb_admin_password" ];then
+        couchdbUrl="${couchdb_admin_user}:${couchdb_admin_password}@${couchdbUrl}"
+      fi
+    fi
+
 	echo "[i] backing up couchdb: [${couchdbUrl}]"
 	if ! curl -sS http://${couchdbUrl}/_all_dbs|jq -rce . &>/dev/null; then
 		echo "CouchDB: http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > ${backupFolder}/couchdb/couchdb_pull_failed
