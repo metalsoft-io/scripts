@@ -1,0 +1,5 @@
+#!/bin/bash
+
+\ls|grep -Ev '\.sum$|^update_sha$'| while read z;do
+shasum "${z}" > "${z}".sum
+done
