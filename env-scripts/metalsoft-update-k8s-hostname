@@ -46,8 +46,52 @@ test -z "$namespace" && namespace='demo-metalsoft'
 
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
 if [ -n "$path_ssl_key" ];then
-  test -f "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
-  test -f "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+  test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
+  test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+
+  # test KEY file and crt file
+  key_header=$(head -n 1 "$path_ssl_key")
+  case "$key_header" in
+    "-----BEGIN RSA PRIVATE KEY-----")
+      #echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#1 (RSA) unencrypted${nc}"
+      echo -n '' # key is supported
+      ;;
+    "-----BEGIN PRIVATE KEY-----")
+      #echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#8 unencrypted${nc}"
+      echo -n '' # key is supported
+      ;;
+    "-----BEGIN ENCRYPTED PRIVATE KEY-----")
+      echo -e "${lightred}✘ KEY: $path_ssl_key = Encrypted private key - not supported${nc}"
+      exit 1
+      ;;
+    "-----BEGIN OPENSSH PRIVATE KEY-----")
+      echo -e "${lightred}✘ KEY: $path_ssl_key = OpenSSH private key – not supported${nc}"
+      exit 1
+      ;;
+    *)
+      echo -e "${lightred}✘ KEY: $path_ssl_key = Unknown key format${nc}"
+      exit 1
+      ;;
+  esac
+
+  if ! openssl x509 -in "$path_ssl_crt" -noout >/dev/null 2>&1; then
+    echo -e "${lightred}✘ CRT: $path_ssl_crt = Invalid certificate${nc}"
+    exit 1
+  fi
+
+  cert_mod=$(openssl x509 -noout -modulus -in "$path_ssl_crt" 2>/dev/null | openssl md5)
+  key_mod=$(openssl rsa -noout -modulus -in "$path_ssl_key" 2>/dev/null | openssl md5)
+
+  if [[ "$cert_mod" != "$key_mod" ]]; then
+    echo -e "${lightred}✘ Key does NOT match certificate${nc}"
+    exit 1
+  fi
+
+ssl_sans=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Subject Alternative Name" | tail -n1|xargs)
+ssl_eku=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Extended Key Usage" | tail -n1|xargs)
+echo "SSL SANs: $ssl_sans"
+echo "SSL EKU: $ssl_eku"
+
 else
   if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
     debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
