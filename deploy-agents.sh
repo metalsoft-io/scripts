@@ -92,10 +92,10 @@ fi
 if [ "$found_os" == "debian" ];then
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
-    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 >/dev/null; }
+    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null; }
     else # if rhel
       command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
-        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools >/dev/null; }
+        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null; }
 fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
@@ -253,13 +253,13 @@ test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft
 debuglog "Checking for other custom CAs"
 if [ "$found_os" == "debian" ];then
   if [[ -n "$CUSTOM_CA" ]]; then
-    echo ${CUSTOM_CA_CERT} | base64 --decode > /usr/local/share/ca-certificates/${CUSTOM_CA}
-    echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/ssl/certs/${CUSTOM_CA}
+    echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /usr/local/share/ca-certificates/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /usr/local/share/ca-certificates/${CUSTOM_CA}
+    cp /usr/local/share/ca-certificates/${CUSTOM_CA} /etc/ssl/certs/
     update-ca-certificates
   fi
 else # if rhel
   if [[ -n "$CUSTOM_CA" ]]; then
-    echo ${CUSTOM_CA_CERT} | base64 --decode > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
+    echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
     cp /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} /etc/ssl/certs/
     restorecon -R /etc/ssl/certs
     restorecon -R /etc/pki/ca-trust/source/anchors/
