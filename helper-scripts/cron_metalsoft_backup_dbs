@@ -1,13 +1,13 @@
 #!/bin/bash
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
 
-# make sure the destination folder is created and writable by the user = {{backup_folder}}DR/
+# make sure the destination folder is created and writable by the user = /var/backups/metalsoftDR/
 # set cron:
-# 52 * * * * /usr/local/bin/cron_metalsoft_backup_dbs -u administrator -s 172.17.83.141 -d {{backup_folder}}DR/
+# 52 * * * * /usr/local/bin/cron_metalsoft_backup_dbs -u administrator -s 172.17.83.141 -d /var/backups/metalsoftDR/
 
 if ! which jq > /dev/null;then echo "$0 needs jq installed";exit 1;fi
 
-backupFolder={{backup_folder}}
+backupFolder=/var/backups/metalsoft
 preserveDays=30
 thedate="$(date +"%F-%H%M%S")"
 
@@ -72,10 +72,8 @@ while getopts ":k:e:n:s:u:p:d:g:l:" o; do
 done
 shift $((OPTIND-1))
 
-{% raw -%}
 if [ ${#backupFolder} -le 1 ];then
-  {% endraw %}
-  echo -e "${lightred}backupFolder is set to '$backupFolder', which is suspiciously short path! Exiting..${nc}"
+    echo -e "${lightred}backupFolder is set to '$backupFolder', which is suspiciously short path! Exiting..${nc}"
   exit 11
 fi
 kubectl="kubectl"
