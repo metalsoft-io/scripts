@@ -1,0 +1,206 @@
+#!/bin/bash
+# vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
+
+# make sure the destination folder is created and writable by the user = {{backup_folder}}DR/
+# set cron:
+# 52 * * * * /usr/local/bin/cron_metalsoft_backup_dbs -u administrator -s 172.17.83.141 -d {{backup_folder}}DR/
+
+if ! which jq > /dev/null;then echo "$0 needs jq installed";exit 1;fi
+
+backupFolder={{backup_folder}}
+preserveDays=30
+thedate="$(date +"%F-%H%M%S")"
+
+nc="\e[00m"
+bold="\e[1;37m"
+gray="\e[2;37m"
+lightred="\e[1;31m"
+lightgreen="\e[1;32m"
+yellow="\e[1;33m"
+pink="\e[1;35m"
+
+function usage {
+  echo -e "
+  Usage: $0 -e ${ns:-environment_namespace}
+
+  Available parameters:
+  -e | -n = ${lightred}required${nc} environment namespace
+  -k = ${bold}kubectl${nc} command to use
+  -l = Location of Backup Folder for all backups (default: ${bold}${backupFolder}${nc})
+  -g = GPG email to use for signing the backup (check ${bold}gpg --list-keys${nc})
+  ${bold}GPG_PASS${nc} env variable can be used to specify the GPG passphrase
+  ${bold}GPG_PASS_FILE${nc} env variable can be used to specify the GPG passphrase-file
+  -s = ssh host to rsync to
+  -p = ssh port (default: ${bold}22${nc})
+  -u = ssh user (default: ${bold}root${nc})
+  -d = ssh destination
+  "
+  if type gpg &>/dev/null ;then
+    if [ $(gpg -q --list-keys|wc -l) -le 0 ];then
+      cat <<- EOFF
+## To create a GPG key:
+gpg --batch --gen-key <<EOF
+Key-Type: RSA
+Key-Length: 4096
+Subkey-Type: RSA
+Subkey-Length: 4096
+Name-Real: Metalsoft Backups Key
+Name-Email: backups@metalsoft.io
+Expire-Date: 0
+%no-protection
+%commit
+EOF
+EOFF
+    fi
+  fi
+  exit 0
+}
+
+while getopts ":k:e:n:s:u:p:d:g:l:" o; do
+  case "${o}" in
+    l ) backupFolder=${OPTARG} ;;
+    k ) altk=${OPTARG} ;;
+    e ) env=${OPTARG} ;;
+    n ) env=${OPTARG} ;;
+    s ) sshHost=${OPTARG} ;;
+    p ) sshPortGet=${OPTARG} ;;
+    u ) sshUserGet=${OPTARG} ;;
+    d ) sshDest=${OPTARG} ;;
+    g ) gpg_email=${OPTARG} ;;
+    * ) usage ;;
+  esac
+done
+shift $((OPTIND-1))
+
+{% raw -%}
+if [ ${#backupFolder} -le 1 ];then
+  {% endraw %}
+  echo -e "${lightred}backupFolder is set to '$backupFolder', which is suspiciously short path! Exiting..${nc}"
+  exit 11
+fi
+kubectl="kubectl"
+command -v microk8s > /dev/null && kubectl="microk8s.kubectl"
+k="${altk:-$kubectl}"
+if ! type $k >/dev/null 2>&1 ;then echo "$k was not found"; exit 12;fi
+test -n "$gpg_email" && test type gpg &>/dev/null
+if [ -n "$gpg_email" ];then
+  if ! type gpg >/dev/null 2>&1 ;then echo -e "${yellow}WARNING: 'gpg' was not found but requested. Continuing backup without signing";gpg_email="";fi
+  gpg_account_match="$(gpg -q --list-keys --textmode|grep uid|grep -oP "[\w\.\-\_\+]+\@[\w\.\-\_]+"|grep "\b${gpg_email}\b")"
+  test -z "$gpg_account_match" && { echo -e "${lightred}ERROR: gpg account '$gpg_email' not found. Exiting..${nc}";exit 13; }
+
+fi
+
+if [ -n "$env" ]; then
+  envname="$env"
+elif [ -n "$ns" ];then
+  envname="$ns"
+else
+  envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}')
+fi
+# if [ -n "$1" ];then envname="$1"; fi
+if [ -z "$envname" ];then echo -e "${lightred}No environment namespace is set. Exiting..${nc}";exit 14;fi
+if ! $k get ns|grep -q $envname ;then echo -e "${lightred}Env $envname not found. Exiting..${nc}";exit 15;fi
+k="$k -n $envname"
+
+mkdir -p ${backupFolder} && test -w "${backupFolder}" || { echo -e "${lightred}Unable to create or write to required backup folder '${backupFolder}'. Exiting..${nc}"; exit 16; }
+#cleanup:
+
+# cleanup the new style backupFolder as set below..
+find ${backupFolder} -mindepth 2 -maxdepth 2 -mtime +${preserveDays} -exec rm -rf {} \;
+
+originalBackupFolder=${backupFolder}
+backupFolder=${backupFolder}/${envname}/${thedate}
+mkdir -p $backupFolder
+
+# k8s backups
+test -z "$SKIP_K8S_RESOURCES" && $k api-resources --no-headers|awk '{print $1}'|sort -u|grep -v 'events'|while read -r z;do mkdir -p ${backupFolder}/k8s_api_resources/${z};$k get $z --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get $z $a -o yaml > ${backupFolder}/k8s_api_resources/${z}/${z}_${a}.yaml 2>/dev/null;done;done
+
+echo -e "\n:: kubectl get node -o wide\n" >> ${backupFolder}/k8s_stats.txt
+$k get node -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+echo -e "\n:: kubectl get pod -A\n" >> ${backupFolder}/k8s_stats.txt
+$k get pod -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+echo -e "\n:: kubectl get svc -A\n" >> ${backupFolder}/k8s_stats.txt
+$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+echo -e "\n:: kubectl get deploy -A -o wide\n" >> ${backupFolder}/k8s_stats.txt
+$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+
+if [ -z "$SKIP_COUCHDB" ];then
+  #backup all couchdb DBs:
+  couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
+
+  if [ -n "$couchdbUrl" ];then
+    if [ "$(curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
+      couchdb_admin_user="$($k -n $envname get configmap common -o json|jq -r .data.couchdb_admin_user)"
+      couchdb_admin_password="$($k -n $envname get configmap common -o json|jq -r .data.couchdb_admin_password)"
+      if [ -n "$couchdb_admin_user" ] && [ -n "$couchdb_admin_password" ];then
+        couchdbUrl="${couchdb_admin_user}:${couchdb_admin_password}@${couchdbUrl}"
+      fi
+    fi
+  test -n "$couchdbUrl" && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/${thedate}_couchdb_backup_${z}.gz;done
+
+#create couchdb_restore script:
+cat > ${backupFolder}/.restore_couchdb <<ENDD
+#!/bin/bash
+couchdb="\$(kubectl -n ${envname} get svc|grep couchdb|head -1|awk '{print \$3":"\$5}'|cut -d/ -f1)"
+if [ -z "\$couchdb" ]; then echo couchdb host not found; exit 17;fi
+couchdb_admin_user="$couchdb_admin_user"
+couchdb_admin_password="$couchdb_admin_password"
+if [ -n "\$couchdb_admin_user" ] && [ -n "\$couchdb_admin_password" ];then
+  couchdb="\${couchdb_admin_user}:\${couchdb_admin_password}@\${couchdb}"
+fi
+echo couchdb: \$couchdb
+echo Gunzip everything..
+gunzip --quiet *
+
+ls|grep couchdb|while read -r z;do
+db=\$(echo "\$z"|cut -d _ -f4)
+echo :: File: \$z == DB: \$db
+if [ -n "\$db" ];then
+#curl -s -X DELETE \${couchdb}/\${db}
+test "\$(curl -s \${couchdb}/\${db} -w %{http_code} -o /dev/null 2>/dev/null)" == "404" && curl -X PUT -H "Content-Type: application/json" http://\${couchdb}/\${db} || echo "\$db db already exists. Skiping creation"
+
+echo delete all docs in \${db}:
+curl -sk http://\${couchdb}/\${db}/_all_docs|jq -r '.rows[]| "\(.id) \(.value.rev)"'|while read y;do
+docname="\$(echo \$y|awk '{print \$1}')"
+docrev="\$(echo \$y|awk '{print \$2}')"
+curl -X DELETE http://\${couchdb}/\${db}/\${docname}?rev=\${docrev}
+done
+
+echo importing \$z into  http://\${couchdb}/\$db/_bulk_doc
+ curl -X POST -H "Referer: http://\${couchdb}/" -H "Y-Forwarded-Host: http://\${couchdb}/" -H "Content-Type: application/json" http://\${couchdb}/\$db/_bulk_docs -d @\${z} || echo "\${docs} already exists."
+fi
+
+done
+ENDD
+chmod +x ${backupFolder}/.restore_couchdb
+fi
+
+fi
+
+#backup all mysql DBs:
+# NOT WORKING ON mySQL Cluster
+all_dbs="$($k -n $envname exec deploy/mysql -c bsi-mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+while read -r z;do
+  if [ "$z" == "mysql" ];then
+    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz
+  else
+    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz
+  fi
+done <<< "$all_dbs"
+
+#GPG signing:
+if [ -n "$gpg_email" ];then
+  test -n "$GPG_PASS" && gpg_with_pass="--pinentry-mode loopback --passphrase '${GPG_PASS}'"
+  test -z "$GPG_PASS" && test -n "$GPG_PASS_FILE" && gpg_with_pass="--pinentry-mode loopback --passphrase-file ${GPG_PASS_FILE}"
+  find ${backupFolder} -type f -name '*mysql*.gz' -o -name '*couchdb_*.gz'|while read -r z;do
+  gpg -q --batch --yes $gpg_with_pass --default-key "${gpg_email}" --output ${z}.sig --detach-sign ${z}
+  echo -e "echo :: Verifying ${z}\ngpg --verify ${z}.sig ${z}" >> ${backupFolder}/.gpg_verify
+done
+fi
+
+# rsync to: (if set)
+if [ -n "$sshHost" -a -n "$sshDest" -a -n "$originalBackupFolder" ];then
+  sshPort=${sshPortGet:-22}
+  sshUser=${sshUserGet:-root}
+  rsync -aze "ssh -p $sshPort" --delete ${originalBackupFolder}/ ${sshUser}@${sshHost}:${sshDest}
+fi
