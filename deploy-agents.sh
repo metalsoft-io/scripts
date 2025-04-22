@@ -143,6 +143,9 @@ test -n "$MAINIP" && NFSIP="$MAINIP"
 # keep the NFS_HOST if already set, as it could've been modified manually
 test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
 
+if [ -n "$https_proxy" ];then curl_s_proxy="--proxy $https_proxy"; elif [ -n "$HTTPS_PROXY" ];then curl_s_proxy="--proxy $HTTPS_PROXY"; fi
+if [ -n "$http_proxy" ];then curl_proxy="--proxy $http_proxy"; elif [ -n "$HTTP_PROXY" ];then curl_proxy="--proxy $HTTP_PROXY"; fi
+
 
 function check_remote_conn {
   local ip=$1
@@ -155,7 +158,11 @@ function check_remote_conn {
 
   # For HTTPS (port 443), use hostname directly without IP resolution
   if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
-    curl -sk --connect-timeout 10 "https://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+    curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
+    echo -e "$res"
+    return
+  elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
+    curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
     echo -e "$res"
     return
   elif [ "$protocol" = "icmp" ]; then
@@ -190,7 +197,7 @@ test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
-  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
+  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 $curl_s_proxy "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
   test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
   test -z "${ssl}" && debuglog "Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
@@ -416,8 +423,8 @@ if [ "$found_os" == "debian" ];then
           command -v podman > /dev/null || { debuglog "Install podman" && \
             $os_packager update -qq && \
             $os_packager install -y curl podman python3-dotenv >/dev/null && \
-            curl -O http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
-            curl -o /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py >/dev/null && chmod +x /usr/local/bin/podman-compose; }
+            curl $curl_proxy -O http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
+            curl $curl_s_proxy -o /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py >/dev/null && chmod +x /usr/local/bin/podman-compose; }
   fi
 else # if rhel
   if [ "$DOCKERBIN" == "docker" ];then
@@ -434,7 +441,7 @@ debuglog "Checking if '$DOCKERBIN compose' is available"
 if [ "$DOCKERBIN" == "docker" ];then
   docker compose &>/dev/null || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
 else
-  podman-compose version &>/dev/null || { debuglog "$os_packager Installing podman-compose" && curl -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+  podman-compose version &>/dev/null || { debuglog "$os_packager Installing podman-compose" && curl $curl_s_proxy -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
 fi
 
 debuglog "Checking provided SSL"
