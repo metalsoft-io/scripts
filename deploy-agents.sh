@@ -262,13 +262,13 @@ if [ "$found_os" == "debian" ];then
   if [[ -n "$CUSTOM_CA" ]]; then
     echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /usr/local/share/ca-certificates/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /usr/local/share/ca-certificates/${CUSTOM_CA}
     cp /usr/local/share/ca-certificates/${CUSTOM_CA} /etc/ssl/certs/
-    update-ca-certificates
+    update-ca-certificates >/dev/null
   fi
 else # if rhel
   if [[ -n "$CUSTOM_CA" ]]; then
     echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
     cp /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} /etc/ssl/certs/
-    restorecon -R /etc/ssl/certs
+    restorecon -R /etc/ssl/certs/
     restorecon -R /etc/pki/ca-trust/source/anchors/
     # https://stackoverflow.com/a/31334443/2291328
     chcon -Rt svirt_sandbox_file_t /etc/ssl/certs/
@@ -475,51 +475,89 @@ fi
 HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
 HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/\./-/g')-${HOSTNAMERANDOM}
 
-# Set default environment variables
-export ENVVAR_OOB_HTTP_PROXY=enabled
-export ENVVAR_FILE_TRANSFER=enabled
-export ENVVAR_SWITCH_SUBSCRIPTION=enabled
-export ENVVAR_COMMAND_EXECUTION=enabled
-export ENVVAR_VNC=enabled
-export ENVVAR_SYSLOG=enabled
-export ENVVAR_SPICE=disabled
-export ENVVAR_INBAND_HTTP_PROXY=disabled
-export ENVVAR_INBAND_FILE_TRANSFER=disabled
-export ENVVAR_NETCONF=enabled
-export ENVVAR_DHCP_OOB=disabled
+# Define the list of capabilities
+declare -a CAPABILITIES=(
+    "OOB_HTTP_PROXY"
+    "INBAND_HTTP_PROXY"
+    "FILE_TRANSFER"
+    "INBAND_FILE_TRANSFER"
+    "SWITCH_SUBSCRIPTION"
+    "COMMAND_EXECUTION"
+    "NETCONF"
+    "VNC"
+    "SPICE"
+    "SYSLOG"
+    "DHCP_OOB"
+    "ANSIBLE_RUNNER"
+)
+
+# Default values for non-ACAP variables
 export ENVVAR_SITE_CONTROLLER_IP="${interface_ip}"
 export ENVVAR_DHCP_LISTEN_INTERFACES="${interface_name}"
 
-# Handle INBAND mode
-if [ "${INBAND:-0}" = "1" ]; then
-  debuglog "INBAND mode" info pink
-  export ENVVAR_OOB_HTTP_PROXY=disabled
-  export ENVVAR_FILE_TRANSFER=disabled
-  export ENVVAR_SWITCH_SUBSCRIPTION=disabled
-  export ENVVAR_COMMAND_EXECUTION=disabled
-  export ENVVAR_VNC=disabled
-  export ENVVAR_SYSLOG=disabled
-  export ENVVAR_INBAND_HTTP_PROXY=enabled
-  export ENVVAR_INBAND_FILE_TRANSFER=enabled
-  non_inband_dc=''
-fi
-if verlt $IMAGES_TAG v6.4; then
-ansible_runner="#  ansible-runner:
-#    container_name: ansible-runner
-#    network_mode: host
-#    hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
-#    image: ${ANSIBLE_RUNNER_URL}
-#    restart: always
-#    environment:
-#      - TZ=Etc/UTC
-#      - ANSIBLE_RUNNER=enabled
-#      - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
-#      - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
-#    volumes:
-#      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+# Set capability environment variables based on ACAP_ inputs
+for CAP in "${CAPABILITIES[@]}"; do
+    ACAP_VAR="ACAP_${CAP}"
+    ENVVAR="ENVVAR_${CAP}"
+    if [[ "${!ACAP_VAR:-0}" = "1" ]]; then
+        export "${ENVVAR}=enabled"
+        #debuglog "Capability ${YELLOW}${CAP}${nc} enabled via ${ACAP_VAR}" info green
+    # else
+    #     # Set defaults for specific capabilities if not explicitly enabled
+    #     case "$CAP" in
+    #         "OOB_HTTP_PROXY"|"FILE_TRANSFER"|"SWITCH_SUBSCRIPTION"|"COMMAND_EXECUTION"|"VNC"|"SYSLOG"|"NETCONF")
+    #             export "${ENVVAR}=enabled" # Default enabled
+    #             ;;
+    #         *)
+    #             export "${ENVVAR}=disabled" # Default disabled
+    #             ;;
+    #     esac
+    # #      # Ensure Ansible runner specific vars are disabled if ACAP is not set
+    #     if [[ "$CAP" == "ANSIBLE_RUNNER" ]]; then
+    #         export "${ENVVAR}=disabled"
+    #     fi
+    fi
+done
+
+ # Defaults for v6.x
+  if verlt $IMAGES_TAG v7.0.0; then
+    export ENVVAR_OOB_HTTP_PROXY=enabled
+    export ENVVAR_FILE_TRANSFER=enabled
+    export ENVVAR_SWITCH_SUBSCRIPTION=enabled
+    export ENVVAR_COMMAND_EXECUTION=enabled
+    export ENVVAR_VNC=enabled
+    export ENVVAR_SYSLOG=enabled
+    export ENVVAR_SPICE=disabled
+    export ENVVAR_INBAND_HTTP_PROXY=disabled
+    export ENVVAR_INBAND_FILE_TRANSFER=disabled
+    export ENVVAR_NETCONF=enabled
+    export ENVVAR_DHCP_OOB=disabled
+  fi
+
+# Initialize ansible variables
+ansible_runner=""
+ms_agent_ansible_runner_mounts=""
+
+# Conditionally define ansible-runner service and ms-agent mounts
+if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
+    if verlt $IMAGES_TAG v6.4; then
+        ansible_runner="#  ansible-runner:
+#     container_name: ansible-runner
+#     network_mode: host
+#     hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
+#     image: ${ANSIBLE_RUNNER_URL}
+#     restart: always
+#     environment:
+#       - TZ=Etc/UTC
+#       - ANSIBLE_RUNNER=enabled
+#       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
+#       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+#     volumes:
+#       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
-else
-ansible_runner="  ansible-runner:
+    else
+        #debuglog "ANSIBLE_RUNNER capability enabled" info green
+        ansible_runner="  ansible-runner:
     container_name: ansible-runner
     network_mode: host
     hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
@@ -533,12 +571,20 @@ ansible_runner="  ansible-runner:
     volumes:
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
-ms_agent_ansible_runner_mounts="
+        ms_agent_ansible_runner_mounts="
       - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
 "
+    fi
 fi
+
+# Determine CONTROLLER_TCP_ADDRESS value based on SECOND_IP
+controller_tcp_address_val="${SSL_HOSTNAME}:9091"
+if [[ -n "${SECOND_IP}" && "${SECOND_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    controller_tcp_address_val="${SECOND_IP}:443"
+fi
+
 inband_dc="  ms-agent:
     container_name: ms-agent
     network_mode: host
@@ -556,25 +602,27 @@ inband_dc="  ms-agent:
       - MONITORING_SERVICE_PORT=8099
       - LOG_LEVEL=debug
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
-      - CONTROLLER_TCP_ADDRESS=${SSL_HOSTNAME}:9091
+      - CONTROLLER_TCP_ADDRESS=${controller_tcp_address_val}
       - CONTROLLER_REMOTE_CONSOLE_URI=wss://${SSL_HOSTNAME}/agent-remote-console
-      - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY}
-      - FILE_TRANSFER=${ENVVAR_FILE_TRANSFER}
-      - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION}
-      - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION}
-      - VNC=${ENVVAR_VNC}
-      - SYSLOG=${ENVVAR_SYSLOG}
-      - SPICE=${ENVVAR_SPICE}
       - OS_IMAGES_MOUNT=/iso
       - NFS_HOST=${NFSIP}:/data
       - SITE_CONTROLLER_IP=${ENVVAR_SITE_CONTROLLER_IP}
       # - SITE_CONTROLLER_SYSLOG_SERVER_IP=
       # - SITE_CONTROLLER_SYSLOG_SWITCH_IP=
-      # - DHCP_OOB=${ENVVAR_DHCP_OOB}
-      # - DHCP_LISTEN_INTERFACES=${ENVVAR_DHCP_LISTEN_INTERFACES}
-      - NETCONF=${ENVVAR_NETCONF}
-      - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY}
-      - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER}
+      - DHCP_LISTEN_INTERFACES=${ENVVAR_DHCP_LISTEN_INTERFACES}
+
+      ## Capabilities:
+      - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY:-disabled}
+      - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER:-disabled}
+      - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY:-disabled}
+      - FILE_TRANSFER=${ENVVAR_FILE_TRANSFER:-disabled}
+      - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION:-disabled}
+      - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION:-disabled}
+      - NETCONF=${ENVVAR_NETCONF:-disabled}
+      - VNC=${ENVVAR_VNC:-disabled}
+      - SYSLOG=${ENVVAR_SYSLOG:-disabled}
+      - SPICE=${ENVVAR_SPICE:-disabled}
+      - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
@@ -798,7 +846,7 @@ fi
 
         if verlt $IMAGES_TAG v7.0; then
           test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-          test -n "${CLI_DATACENTERNAME}" && sed -iE "s/(\s+?hostname: agents-)(\S+)(-\w+)/\1${CLI_DATACENTERNAME}\3/gm" /opt/metalsoft/agents/docker-compose.yaml
+          test -n "${CLI_DATACENTERNAME}" && sed -iE "s/^([[:space:]]*hostname: agents-)([^[:space:]]+)(-[[:alnum:]_]+)/\\\\1${CLI_DATACENTERNAME}\\\\3/g" /opt/metalsoft/agents/docker-compose.yaml
 
           if [[ -n $CUSTOM_CA ]]; then
             cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
@@ -883,13 +931,13 @@ sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/a
 
 dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" $HOME/.bashrc;then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> $HOME/.bashrc && source $HOME/.bashrc;fi
 
-debuglog "starting $DOCKERBIN containers"
+debuglog "Starting $DOCKERBIN containers"
 if [ "$DOCKERBIN" == "docker" ];then
-  systemctl enable --now docker.service
+  systemctl enable -q --now docker.service
   until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done && echo
   else
-  systemctl enable --now podman
-  systemctl enable --now podman.socket
+  systemctl enable -q --now podman
+  systemctl enable -q --now podman.socket
   cat > /etc/systemd/system/podman-compose-agents.service << EOF
 [Unit]
 Description=Podman-compose-agents.service
@@ -911,7 +959,7 @@ WantedBy=default.target
 
 EOF
     systemctl daemon-reload
-    systemctl enable --now podman-compose-agents.service
+    systemctl enable -q --now podman-compose-agents.service
   # until ${DOCKERBIN}-compose ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for $DOCKERBIN service to start.. \033[0K\r";done && echo
 fi
 
