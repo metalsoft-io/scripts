@@ -1,6 +1,22 @@
 #!/bin/bash
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=bash
 
+# https://askubuntu.com/a/1001404/1113727
+bash_log=$(mktemp)
+
+# Save original stdout and stderr
+exec 3>&1 4>&2
+
+# Redirect stdout and stderr to the log file AND to the original descriptors
+exec 1> >(cat - > >(cat >> "$bash_log") >&3)
+exec 2> >(cat - > >(cat >> "$bash_log") >&4)
+
+# For trace output
+exec 19> "$bash_log"
+export BASH_XTRACEFD="19"
+set -x
+
+
 # How to install:
 # wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/diagnostics-collector -O /usr/local/bin/diagnostics-collector && chmod +x /usr/local/bin/diagnostics-collector
 
@@ -12,18 +28,6 @@ lightgreen=$(tput setaf 10)
 gray=$(tput setaf 8)
 #yellow=$(tput setaf 11)
 #lightblue=$(tput setaf 12)
-
-# DEBUG:
-which tee &>/dev/null || { echo "ERROR: Please install 'tee'. Exiting..."; exit 1; }
-
-# https://askubuntu.com/a/1001404/1113727
-bash_log=$(mktemp)
-exec 19> $bash_log
-exec   > >(tee -ia $bash_log)
-exec  2> >(tee -ia $bash_log >&19)
-# For trace output
-export BASH_XTRACEFD="19"
-set -x
 
 #test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
 thedate="$(date +"%F-%H%M")"
