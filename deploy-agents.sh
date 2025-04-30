@@ -309,7 +309,7 @@ if [ -z "$DCCONF" ];then
   exit 0
 fi
 
-  debuglog "Pulling DC config URL"
+debuglog "Pulling DC config URL: $(echo $DCCONF|cut -d/ -f1,2,3)"
   DCCONFDOWNLOADED="$(wget -q --connect-timeout=10 --tries=2 --no-check-certificate -O - "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
 fi
 
