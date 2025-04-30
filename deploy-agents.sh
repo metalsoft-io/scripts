@@ -690,7 +690,7 @@ non_inband_dc="  agents:
       - URL=${DCCONF}
       # - NODE_TLS_REJECT_UNAUTHORIZED=0
       ## Use only if custom CA is needed
-      # - NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
+      - NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
     hostname: agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
   haproxy:
     network_mode: host
