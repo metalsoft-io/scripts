@@ -98,6 +98,12 @@ if [ "$found_os" == "debian" ];then
         $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null; }
 fi
 
+debuglog "Creating folders"
+if verlt $IMAGES_TAG v7.0.0; then
+PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
+fi
+mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 if [ -n "$DOCKERENV" ]; then
   echo "TAG=${IMAGES_TAG}" > /opt/metalsoft/agents/.env
@@ -282,9 +288,6 @@ else # if rhel
   # semanage fcontext -m -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
 
 fi
-
-debuglog "Creating folders"
-mkdir -p /opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs /opt/metalsoft/logs_agents /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/.ssh /opt/metalsoft/mon /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 
 backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
 # Create backup of config files if they exist
