@@ -2,8 +2,8 @@
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=sh
 
 if [ "$EUID" -ne 0 ];then
-  echo -e "[\e[1;31m✗\e[0m] Please run as root"
-  exit 1
+	echo -e "[\e[1;31m✗\e[0m] Please run as root"
+	exit 1
 fi
 
 if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
@@ -16,7 +16,7 @@ MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 
 usage ()
 {
-  echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
 }
 
 nc="\e[00m"
@@ -29,14 +29,14 @@ pink="\e[1;35m"
 
 function debuglog ()
 {
-  msg="$1"
-  mtype="${2:-info}"
-  case "$mtype" in
-    'fail') mtypeis="[\e[1;31m✗\e[0m]"; color=${3:-lightred} ;;
-    'success') mtypeis="[\e[1;32m✓\e[0m]"; color=${3:-lightgreen} ;;
-    *) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
-  esac
-  echo -e "${mtypeis} ${!color}${msg}${nc}"
+	msg="$1"
+	mtype="${2:-info}"
+	case "$mtype" in
+		'fail') mtypeis="[\e[1;31m✗\e[0m]"; color=${3:-lightred} ;;
+		'success') mtypeis="[\e[1;32m✓\e[0m]"; color=${3:-lightgreen} ;;
+		*) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
+	esac
+	echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
 if ! [ -n "$newhostname" -a "$(echo -n "$newhostname"|wc -c)" -ge 5 -a "$(echo -n "$newhostname"|grep '\.'|wc -l)" -ge 1 ];then usage; exit 1;fi
 
@@ -46,56 +46,56 @@ test -z "$namespace" && namespace='demo-metalsoft'
 
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
 if [ -n "$path_ssl_key" ];then
-  test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
-  test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+	test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
+	test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
 
-  # test KEY file and crt file
-  key_header=$(head -n 1 "$path_ssl_key")
-  case "$key_header" in
-    "-----BEGIN RSA PRIVATE KEY-----")
-      #echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#1 (RSA) unencrypted${nc}"
-      echo -n '' # key is supported
-      ;;
-    "-----BEGIN PRIVATE KEY-----")
-      #echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#8 unencrypted${nc}"
-      echo -n '' # key is supported
-      ;;
-    "-----BEGIN ENCRYPTED PRIVATE KEY-----")
-      echo -e "${lightred}✘ KEY: $path_ssl_key = Encrypted private key - not supported${nc}"
-      exit 1
-      ;;
-    "-----BEGIN OPENSSH PRIVATE KEY-----")
-      echo -e "${lightred}✘ KEY: $path_ssl_key = OpenSSH private key – not supported${nc}"
-      exit 1
-      ;;
-    *)
-      echo -e "${lightred}✘ KEY: $path_ssl_key = Unknown key format${nc}"
-      exit 1
-      ;;
-  esac
+	# test KEY file and crt file
+	key_header=$(head -n 1 "$path_ssl_key")
+	case "$key_header" in
+		"-----BEGIN RSA PRIVATE KEY-----")
+			#echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#1 (RSA) unencrypted${nc}"
+			echo -n '' # key is supported
+			;;
+		"-----BEGIN PRIVATE KEY-----")
+			#echo -e "${lightgreen}✔ KEY: $path_ssl_key = PKCS#8 unencrypted${nc}"
+			echo -n '' # key is supported
+			;;
+		"-----BEGIN ENCRYPTED PRIVATE KEY-----")
+			echo -e "${lightred}✘ KEY: $path_ssl_key = Encrypted private key - not supported${nc}"
+			exit 1
+			;;
+		"-----BEGIN OPENSSH PRIVATE KEY-----")
+			echo -e "${lightred}✘ KEY: $path_ssl_key = OpenSSH private key – not supported${nc}"
+			exit 1
+			;;
+		*)
+			echo -e "${lightred}✘ KEY: $path_ssl_key = Unknown key format${nc}"
+			exit 1
+			;;
+	esac
 
-  if ! openssl x509 -in "$path_ssl_crt" -noout >/dev/null 2>&1; then
-    echo -e "${lightred}✘ CRT: $path_ssl_crt = Invalid certificate${nc}"
-    exit 1
-  fi
+	if ! openssl x509 -in "$path_ssl_crt" -noout >/dev/null 2>&1; then
+		echo -e "${lightred}✘ CRT: $path_ssl_crt = Invalid certificate${nc}"
+		exit 1
+	fi
 
-  cert_mod=$(openssl x509 -noout -modulus -in "$path_ssl_crt" 2>/dev/null | openssl md5)
-  key_mod=$(openssl rsa -noout -modulus -in "$path_ssl_key" 2>/dev/null | openssl md5)
+	cert_mod=$(openssl x509 -noout -modulus -in "$path_ssl_crt" 2>/dev/null | openssl md5)
+	key_mod=$(openssl rsa -noout -modulus -in "$path_ssl_key" 2>/dev/null | openssl md5)
 
-  if [[ "$cert_mod" != "$key_mod" ]]; then
-    echo -e "${lightred}✘ Key does NOT match certificate${nc}"
-    exit 1
-  fi
+	if [[ "$cert_mod" != "$key_mod" ]]; then
+		echo -e "${lightred}✘ Key does NOT match certificate${nc}"
+		exit 1
+	fi
 
-ssl_sans=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Subject Alternative Name" | tail -n1|xargs)
-ssl_eku=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Extended Key Usage" | tail -n1|xargs)
-echo "SSL SANs: $ssl_sans"
-echo "SSL EKU: $ssl_eku"
+	ssl_sans=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Subject Alternative Name" | tail -n1|xargs)
+	ssl_eku=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Extended Key Usage" | tail -n1|xargs)
+	echo "SSL SANs: $ssl_sans"
+	echo "SSL EKU: $ssl_eku"
 
 else
-  if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
-    debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
-  fi
+	if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
+		debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
+	fi
 fi
 test -d "${MS_MANIFESTS_FOLDER}" || { debuglog "Error: ${MS_MANIFESTS_FOLDER} is missing. Manifests are needed for this update to work properly " fail; exit 3; }
 test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
@@ -115,69 +115,88 @@ $k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update records set name = 
 
 debuglog "Waiting on CouchDB pod.."
 until [ "$($k get pod --no-headers|grep 'couchdb-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
-couchdbIp="$($k get svc | grep couchdb | awk '{print $3}')"
-couchdbPort="$($k get svc | grep couchdb | awk '{print $5}'|cut -d/ -f1)"
+couchdbUrl="$($k get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
 
-debuglog "Updating CouchDB.."
-# TODO: REVIEW AS OF v7.0.0
+if [ "$(curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
+	couchdb_admin_user="$($k get configmap common -o json|jq -r .data.couchdb_admin_user)"
+	couchdb_admin_password="$($k get configmap common -o json|jq -r .data.couchdb_admin_password)"
+	if [ -n "$couchdb_admin_user" ] && [ -n "$couchdb_admin_password" ];then
+		couchdbUrl="${couchdb_admin_user}:${couchdb_admin_password}@${couchdbUrl}"
+	fi
+fi
+
+debuglog "Updating CouchDB: [${couchdbUrl}]"
 if [ -f "${MS_MANIFESTS_FOLDER}/config-deployment.yaml" ];then
-  curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/bsi > bsi_export && \
-    cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-    curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
-    else
-      curl -sH "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/orchestrator-microservice/bsi > bsi_export && \
-        cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-        curl -sX PUT -H "Content-Type: application/json" http://${couchdbIp}:${couchdbPort}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+	curl -sH "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi > bsi_export && \
+		cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+		curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+		else
+			curl -sH "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi > bsi_export && \
+				cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+				curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 fi
 
 debuglog "Updating manifests.."
 test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
-  hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
-  grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
-  #$k apply -f . >/dev/null
-  find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
-  echo -ne "applying manifest: $z ... \033[0K\r";
-  $k apply -f "$z" >/dev/null;done
-  echo -ne "\033[0K\r"
+	hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
+	grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
+	#$k apply -f . >/dev/null
 
-  debuglog "Reconfiguring traefik.."
+	if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
+		current_sc_hostname="$(grep hostAliases: -A3 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep hostnames: -A1|grep -v hostnames:|cut -d'"' -f2)"
+		test -z "$current_sc_hostname" && current_sc_hostname="$(grep CONTROLLER_WS_URI -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep -v CONTROLLER_WS_URI|cut -d'"' -f2|cut -d/ -f3)"
 
-  if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
-    echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-    exit 2
-  else
-    sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
-    if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
-      echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
-      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-      helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
-    elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-      echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-      helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
-    else
-      helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-      helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-      helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-      helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
-    fi
-  fi
+		if [ -n "$current_sc_hostname" ];then
+			echo -e "[i] Updating SC hostname from ${bold}${current_sc_hostname}${nc} to ${bold}${newhostname}${nc} in sc-ms-agent-deployment.yaml"
+			sed -i "s/\b${current_sc_hostname}\b/${newhostname}/g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
+			$k apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
+		fi
+	fi
+
+	find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+	echo -ne "applying manifest: $z ... \033[0K\r";
+	$k apply -f "$z" >/dev/null;done
+	echo -ne "\033[0K\r"
+
+	debuglog "Reconfiguring traefik.."
+
+	if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+		echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+		exit 2
+	else
+		sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
+		if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
+			echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+			helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+		elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+			echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+			helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+		else
+			helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+			helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+			helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+		fi
+	fi
+
 
 # TODO: REVIEW AS OF v7.0.0
 for pod in license bsi;do
-  $k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
+	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
 done
 
 if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
-  debuglog "Applying SSL.."
-  test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-  test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+	debuglog "Applying SSL.."
+	test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+	test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
 
-  test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
-  test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
-  $k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+	test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
+	test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
+	$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
 else
-  debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
+	debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
 fi
 
 findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"

@@ -51,8 +51,8 @@ fi
 # fi
 if [[ $1 =~ ^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))$  ]]; then cip="$1"; else echo "[i] Error: Invalid k8s IP: $1"; exit 1;fi
 if [[ $2 =~ ^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))$  ]]; then aip="$2"; else echo "[i] Error: Invalid agents IP: $2"; exit 1;fi
-echo "[i] k8s IP: $cip"
-echo "[i] agents IP: $aip"
+echo "[i] GC IP: $cip"
+echo "[i] SC IP: $aip"
 
 # Save last used $aip so that we reference it when doing a new mysql update search/replace
 test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
@@ -145,11 +145,29 @@ EOFF
 
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
 echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
-kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml || { echo -e "${yellow}Error: Unable to apply IPAddressPool, trying workaround...${nc}"; kubectl -n metallb-system get validatingwebhookconfiguration --no-headers|awk '{print $1}'|while read v hook age;do kubectl -n metallb-system delete validatingwebhookconfiguration $v;done && kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml; }
+kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null || { echo -e "${yellow}Error: Unable to apply IPAddressPool, trying workaround...${nc}"; kubectl -n metallb-system get validatingwebhookconfiguration --no-headers|awk '{print $1}'|while read v hook age;do kubectl -n metallb-system delete validatingwebhookconfiguration $v;done && kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null; }
 ec=$?
 kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 if [ "$last_aip" != "$aip" ];then
         kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip
+fi
+
+if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
+        # get the currently configured SC IP:
+        current_sc_ip="$(grep hostAliases: -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep ip:|cut -d'"' -f2)"
+        test -z "$current_sc_ip" && current_sc_ip="$(grep SITE_CONTROLLER_IP -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep value:|cut -d'"' -f2)"
+
+        if [ -n "$current_sc_ip" ];then
+                echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ms-agent-deployment.yaml"
+                sed -i "s/\b${current_sc_ip}\b/${aip}/g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
+                kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
+
+                if [ -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" ];then
+                        echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ansible-runner-deployment.yaml"
+                        sed -i "s/\b${current_sc_ip}\b/${aip}/g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
+                        kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
+                fi
+        fi
 fi
 
 test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
