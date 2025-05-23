@@ -148,8 +148,10 @@ echo "[i] Waiting for Metallb pods to start, then the new configuration will be 
 kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null || { echo -e "${yellow}Error: Unable to apply IPAddressPool, trying workaround...${nc}"; kubectl -n metallb-system get validatingwebhookconfiguration --no-headers|awk '{print $1}'|while read v hook age;do kubectl -n metallb-system delete validatingwebhookconfiguration $v;done && kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null; }
 ec=$?
 kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
-if [ "$last_aip" != "$aip" ];then
-        kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${last_aip}','${aip}') where datacenter_name='dc-demo'" && echo -n "$aip" > ${HOME}/.ms_last_aip
+found_dcdemo_aip="$(kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -BNe "select datacenter_config_json from datacenters where datacenter_id=1 and datacenter_name='dc-demo' and datacenter_status='active' and datacenter_hidden=0 and datacenter_is_maintenance=0"|jq -cr .controllerPolicy.subnetAllocation[0]|tr -d '\n\r'|cut -d/ -f1)"
+if [ "$found_dcdemo_aip" != "$aip" ];then
+        echo "[i] Updating dc-demo subnet allocation to $aip"
+        kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
 fi
 
 if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
