@@ -56,7 +56,7 @@ ip=$1
 test -z "$ip" && exit 1
 echo new Controller IP: $ip
 
-test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${ip}/g" /opt/metalsoft/agents/docker-compose.yaml
+test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
 
 if [ -n "$2" ];then
         proxy_url="$2"
