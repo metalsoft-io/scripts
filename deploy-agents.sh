@@ -103,24 +103,25 @@ if verlt $IMAGES_TAG v7.0.0; then
 PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
 fi
 mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 if [ -n "$DOCKERENV" ]; then
   echo "TAG=${IMAGES_TAG}" > /opt/metalsoft/agents/.env
   IMAGES_TAGENV='${TAG}'
-  DCAGENTS_URL="registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAGENV}"
-  JUNOSDRIVER_URL="registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAGENV}"
-  MSAGENT_URL="registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAGENV}"
-  ANSIBLE_RUNNER_URL="registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
+  DCAGENTS_URL="${REG_HOST}/sc/datacenter-agents-compiled-v2:${IMAGES_TAGENV}"
+  JUNOSDRIVER_URL="${REG_HOST}/sc/junos-driver:${IMAGES_TAGENV}"
+  MSAGENT_URL="${REG_HOST}/sc/ms-agent:${IMAGES_TAGENV}"
+  ANSIBLE_RUNNER_URL="${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
 else
   # Set default version if IMAGES_TAG not set
   IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
 
   # Set URLs if not already defined, using IMAGES_TAG
-  DCAGENTS_URL=${DCAGENTS_URL:-registry.metalsoft.dev/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
-  JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-registry.metalsoft.dev/sc/junos-driver:${IMAGES_TAG}}
-  MSAGENT_URL=${MSAGENT_URL:-registry.metalsoft.dev/sc/ms-agent:${IMAGES_TAG}}
-  ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-registry.metalsoft.dev/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
+  DCAGENTS_URL=${DCAGENTS_URL:-${REG_HOST}/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
+  JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-${REG_HOST}/sc/junos-driver:${IMAGES_TAG}}
+  MSAGENT_URL=${MSAGENT_URL:-${REG_HOST}/sc/ms-agent:${IMAGES_TAG}}
+  ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
 fi
 
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
@@ -634,7 +635,7 @@ $ms_agent_ansible_runner_mounts
   nfs:
     network_mode: host
     container_name: nfs-server
-    image: registry.metalsoft.dev/sc/nfs-server:3
+    image: ${REG_HOST}/sc/nfs-server:3
     restart: unless-stopped
     privileged: true
     environment:
@@ -698,7 +699,7 @@ non_inband_dc="  agents:
   haproxy:
     network_mode: host
     container_name: dc-haproxy
-    image: registry.metalsoft.dev/sc/dc-haproxy:3.0.4
+    image: ${REG_HOST}/sc/dc-haproxy:3.0.4
     restart: always
     privileged: true
     volumes:
