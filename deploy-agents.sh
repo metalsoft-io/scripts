@@ -1051,7 +1051,11 @@ fi
 
 
 debuglog "Pulling discovery ISO"
+if verlt $IMAGES_TAG v7.0.0; then
 test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
+else
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && wget -O /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+fi
 
 sleep 2
 $DOCKERBIN ps
