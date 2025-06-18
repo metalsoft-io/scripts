@@ -7,6 +7,7 @@ if [ "$EUID" -ne 0 ];then
 fi
 
 if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
+test -z "$cip" && cip="$(ip r get 1|head -1|awk '{print $7}')"
 
 newhostname="$1"
 path_ssl_key="$2"
