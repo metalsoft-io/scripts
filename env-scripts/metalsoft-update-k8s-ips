@@ -58,10 +58,16 @@ echo "[i] SC IP: $aip"
 test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
 test -n "$last_aip" || last_aip="10.255.146.149"
 echo -n "$cip" > ${HOME}/.ms_last_cip
+echo -n "$aip" > ${HOME}/.ms_last_aip
 
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
-test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io" >> /etc/hosts
+test -f /etc/.ms_hostname && main_domain="$(cat /etc/.ms_hostname 2>/dev/null)"
+test -z "$main_domain" && main_domain="$(grep cookie_domain ${MS_MANIFESTS_FOLDER}/configmaps.yaml 2>/dev/null|head -1|cut -d '"' -f2|sed 's/^\.//g')"
+test -z "$main_domain" && main_domain="$(grep 'match: Host' ${MS_MANIFESTS_FOLDER}/ingressroutes.yaml 2>/dev/null|grep -Ev 'repo\.|registry\.'|cut -d '`' -f2|head -1)"
+test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io $main_domain" >> /etc/hosts
+test -n "$main_domain" && echo "$main_domain" > /etc/.ms_hostname 2>/dev/null
+grep -q " \b$main_domain\b" /etc/hosts || echo "$cip $main_domain" >> /etc/hosts 2>/dev/null
 
 if [ ! -z $3 ];then
         proxy_url="$3"
