@@ -90,11 +90,11 @@ if [ "$found_os" == "debian" ];then
 fi
 
 if [ "$found_os" == "debian" ];then
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
     $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null; }
     else # if rhel
-      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v dig > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
+      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
         $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null; }
 fi
 
@@ -180,7 +180,12 @@ function check_remote_conn {
 
   # For other protocols, resolve to IP
   case "$ip" in
-    *[!0-9.]*) ip=$(dig +short "$ip" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | xargs) ;;
+    *[!0-9.]*)
+      ip=$(getent ahosts "$ip" | awk '/STREAM/ {print $1; exit}')
+      if [ -z "$ip" ] && command -v dig >/dev/null 2>&1; then
+        ip=$(dig +short "$ip" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | xargs)
+      fi
+      ;;
   esac
 
   [ -z "$ip" ] && echo -e "${lightred}Error: not resolved${nc}" && return
