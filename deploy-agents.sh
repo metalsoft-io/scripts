@@ -138,7 +138,11 @@ interface_ip=$(echo "$default_route" | awk '{print $7}')
 interface_name=$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')
 
 
+# Try multiple methods to get main IP address
 MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ -z "$MAINIP" ] && command -v hostname >/dev/null 2>&1; then
+  MAINIP="$(getent ahosts "$(hostname)" 2>/dev/null | awk '/STREAM/ {print $1; exit}')"
+fi
 test -z "$MAINIP" && test -n "$interface_ip" && MAINIP="$interface_ip"
 if verlt $IMAGES_TAG v7.0.0; then
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
@@ -181,7 +185,10 @@ function check_remote_conn {
   # For other protocols, resolve to IP
   case "$ip" in
     *[!0-9.]*)
-      ip=$(getent ahosts "$ip" | awk '/STREAM/ {print $1; exit}')
+      # Try getent first (more portable), fall back to dig if available
+      if command -v getent >/dev/null 2>&1; then
+        ip=$(getent ahosts "$ip" 2>/dev/null | awk '/STREAM/ {print $1; exit}')
+      fi
       if [ -z "$ip" ] && command -v dig >/dev/null 2>&1; then
         ip=$(dig +short "$ip" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | xargs)
       fi
