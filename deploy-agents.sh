@@ -101,6 +101,7 @@ fi
 debuglog "Creating folders"
 if verlt $IMAGES_TAG v7.0.0; then
 PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
+MONITORING_SERVICE_PORT=8099
 fi
 mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
@@ -633,7 +634,7 @@ inband_dc="  ms-agent:
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
       - DATACENTER_ID=${DATACENTERNAME}
-      - MONITORING_SERVICE_PORT=8099
+      - MONITORING_SERVICE_PORT=${MONITORING_SERVICE_PORT:-80}
       - LOG_LEVEL=debug
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
       - CONTROLLER_TCP_ADDRESS=${controller_tcp_address_val}
