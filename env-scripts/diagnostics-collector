@@ -250,6 +250,7 @@ if [ "$gather" == 'gc' ];then
 done <<< "$bsipod"
 
 $k -n $envname get secret --no-headers|awk '{print $1}'|while read z;do echo -e '\n---';$k -n $envname get secret $z -o yaml;done > ${backupFolder}/k8s_secrets
+$k -n $envname get cm --no-headers|awk '{print $1}'|while read z;do echo -e '\n---';$k -n $envname get cm $z -o yaml;done > ${backupFolder}/k8s_configmaps
 
 if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s resources.."
