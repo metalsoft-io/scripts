@@ -134,6 +134,15 @@ function get_k8s ()
 	$k get pvc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
 	echo -e "\n:: kubectl get ipaddresspool -A\n" >> ${backupFolder}/k8s_stats.txt
 	$k get ipaddresspool -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+	echo -e "\n:: kubectl -n metallb-system get pods\n" >> ${backupFolder}/k8s_stats.txt
+	kubectl -n metallb-system get pods >> ${backupFolder}/k8s_stats.txt || true
+
+	kubectl -n metallb-system get pods --no-headers | awk '$3 != "Running" {print $1}' | while read pod
+do
+	echo -e "\n:: Logs for metallb-system $pod\n" >> ${backupFolder}/k8s_stats.txt
+	kubectl -n metallb-system logs "$pod" >> ${backupFolder}/k8s_stats.txt 2>&1 || true
+done
+
 	$k -n $envname get ingressroute --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroute $z -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
 	$k -n $envname get ingressroutetcp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressroutetcp $z -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
 	$k -n $envname get ingressrouteudp --no-headers|awk '{print $1}'|while read z;do $k -n $envname get ingressrouteudp $z -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
