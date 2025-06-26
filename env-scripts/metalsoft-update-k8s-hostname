@@ -48,6 +48,26 @@ grep -q " \b$newhostname\b" /etc/hosts || echo "$cip $newhostname" >> /etc/hosts
 namespace="$(kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
 test -z "$namespace" && namespace='demo-metalsoft'
 
+test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" || { debuglog "Error: ${MS_MANIFESTS_FOLDER} is missing. Manifests are needed for this update to work properly " fail; exit 3; }
+
+if [ -f "${MS_MANIFESTS_FOLDER}/secrets.yaml" ]; then
+	current_b64_crt=$(grep 'tls\.crt:' "${MS_MANIFESTS_FOLDER}/secrets.yaml" | awk '{print $2}')
+	current_b64_key=$(grep 'tls\.key:' "${MS_MANIFESTS_FOLDER}/secrets.yaml" | awk '{print $2}')
+	if [ -n "$current_b64_crt" ]; then
+		secret_cn=$(echo "$current_b64_crt" | base64 -d 2>/dev/null | openssl x509 -subject -noout 2>/dev/null | sed 's/^subject=//g;s/, /\n/g' | grep '^CN' | cut -d'=' -f2 |head -1| xargs)
+		if [ -n "$secret_cn" ]; then
+			secret_backup_crt_path="$HOME/.ms_ssl_${secret_cn}.crt"
+			secret_backup_key_path="$HOME/.ms_ssl_${secret_cn}.key"
+			if [ ! -f "$secret_backup_crt_path" ]; then
+				debuglog "Backing up existing SSL certificate for ${secret_cn} from secrets.yaml..." info
+				echo "$current_b64_crt" | base64 -d > "$secret_backup_crt_path"
+				echo "$current_b64_key" | base64 -d > "$secret_backup_key_path"
+			fi
+		fi
+	fi
+fi
+
+
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
 if [ -n "$path_ssl_key" ];then
 	test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
@@ -93,29 +113,136 @@ if [ -n "$path_ssl_key" ];then
 
 	ssl_sans=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Subject Alternative Name" | tail -n1|xargs)
 	ssl_eku=$(openssl x509 -in "$path_ssl_crt" -noout -text | grep -A1 "Extended Key Usage" | tail -n1|xargs)
-	echo "SSL SANs: $ssl_sans"
-	echo "SSL EKU: $ssl_eku"
+	test -n "$path_ssl_crt" && echo "SSL SANs: $ssl_sans"
+	test -n "$path_ssl_crt" && echo "SSL EKU: $ssl_eku"
 
 else
-	if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" ];then
-		debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
+	if [ -z "$MS_SSL_KEY" -a -z "$MS_SSL_CRT" -a -z "$MS_NO_GEN_SSL" ];then
+		backup_crt_path="$HOME/.ms_ssl_${newhostname}.crt"
+		backup_key_path="$HOME/.ms_ssl_${newhostname}.key"
+		if [ -f "$backup_crt_path" ] && [ -f "$backup_key_path" ]; then
+			debuglog "Found (and will use) existing SSL certificate for $newhostname." success
+			path_ssl_crt="$backup_crt_path"
+			path_ssl_key="$backup_key_path"
+		else
+			if [ ! -f "/etc/.ms_ca.crt" ] || [ ! -f "/etc/.ms_ca.key" ]; then
+				debuglog "CA certificate not found. Attempting to generate a new one..." info
+				openssl req -x509 -nodes -newkey rsa:4096 -sha256 -keyout /etc/.ms_ca.key -out /etc/.ms_ca.crt -days 3650 -subj "/C=US/ST=State/L=City/O=MetalsoftDemo-$(date +%Y%m%d%H%M%S)/OU=IT/CN=MetalSoftDemo-Root-CA" >/dev/null 2>&1
+				if [ $? -ne 0 ]; then
+					debuglog "Failed to generate CA certificate. Continuing without SSL update." fail
+				else
+					debuglog "Successfully generated CA certificate." success
+					# Add CA to local trusted certificates
+					debuglog "Adding CA certificate to local trusted certificates..." info
+					if [ -f /etc/os-release ]; then
+						. /etc/os-release
+						case "$ID" in
+							ubuntu|debian)
+								if [ -d "/usr/local/share/ca-certificates" ]; then
+									cp /etc/.ms_ca.crt /usr/local/share/ca-certificates/metalsoft-demo-ca.crt
+									update-ca-certificates >/dev/null 2>&1
+									# if [ $? -eq 0 ]; then
+									# 	debuglog "CA certificate added to Ubuntu/Debian trusted store." success
+									# else
+									# 	debuglog "Failed to update CA certificates on Ubuntu/Debian." fail
+									# fi
+								fi
+								;;
+							rhel|centos|fedora|rocky|almalinux)
+								if [ -d "/etc/pki/ca-trust/source/anchors" ]; then
+									cp /etc/.ms_ca.crt /etc/pki/ca-trust/source/anchors/metalsoft-demo-ca.crt
+									update-ca-trust >/dev/null 2>&1
+									# if [ $? -eq 0 ]; then
+									# 	debuglog "CA certificate added to RHEL/CentOS trusted store." success
+									# else
+									# 	debuglog "Failed to update CA certificates on RHEL/CentOS." fail
+									# fi
+								fi
+								;;
+							# *)
+							# 	debuglog "Unknown OS distribution. CA certificate not added to trusted store." info
+							# 	;;
+						esac
+					else
+						debuglog "Cannot determine OS distribution. CA certificate not added to trusted store." info
+					fi
+				fi
+			fi
+
+			if [ -f "/etc/.ms_ca.crt" ]; then
+				debuglog "Found CA at /etc/.ms_ca.crt. Generating new SSL certificate for $newhostname." info
+				if [ ! -f "/etc/.ms_ca.key" ]; then
+					debuglog "CA certificate found, but CA key /etc/.ms_ca.key is missing. Cannot generate new certificate." fail
+				else
+					# Generate new SSL cert and key
+					TMP_DIR=$(mktemp -d)
+					path_ssl_key="${TMP_DIR}/${newhostname}.key"
+					path_ssl_crt="${TMP_DIR}/${newhostname}.crt"
+					local_csr_config="${TMP_DIR}/${newhostname}.cnf"
+					local_csr="${TMP_DIR}/${newhostname}.csr"
+
+					# Using a trap to clean up the temp directory on exit
+					trap "rm -rf ${TMP_DIR}" EXIT
+
+					alt_name_field="DNS.1"
+					if [[ $newhostname =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+						alt_name_field="IP.1"
+					fi
+
+					cat > "$local_csr_config" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+[req_distinguished_name]
+CN = ${newhostname}
+[v3_req]
+subjectAltName = @alt_names
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+[alt_names]
+${alt_name_field} = ${newhostname}
+EOF
+					openssl genrsa -out "$path_ssl_key" 2048 >/dev/null 2>&1
+					openssl req -new -key "$path_ssl_key" -out "$local_csr" -config "$local_csr_config" >/dev/null 2>&1
+					openssl x509 -req -in "$local_csr" -CA /etc/.ms_ca.crt -CAkey /etc/.ms_ca.key -CAserial "${TMP_DIR}/ca.srl" -CAcreateserial -out "$path_ssl_crt" -days 365 -sha256 -extfile "$local_csr_config" -extensions v3_req >/dev/null 2>&1
+
+					if [ -s "$path_ssl_crt" ]; then
+						debuglog "Successfully generated new SSL certificate and key." success
+						#timestamp=$(date +%Y%m%d%H%M%S)
+						backup_crt_path="$HOME/.ms_ssl_${newhostname}.crt"
+						backup_key_path="$HOME/.ms_ssl_${newhostname}.key"
+						cp "$path_ssl_crt" "$backup_crt_path"
+						cp "$path_ssl_key" "$backup_key_path"
+						debuglog "Backed up generated SSL certificate to ${backup_crt_path}" info
+						debuglog "Backed up generated SSL key to ${backup_key_path}" info
+					else
+						debuglog "Failed to generate SSL certificate. Continuing without SSL update." fail
+						# unset paths if generation failed
+						path_ssl_key=""
+						path_ssl_crt=""
+					fi
+				fi
+			else
+				debuglog "SSL pem files not provided. Env variables MS_SSL_KEY & MS_SSL_CRT not provided. SSL will not be updated!" info yellow
+			fi
+		fi
 	fi
 fi
-test -d "${MS_MANIFESTS_FOLDER}" || { debuglog "Error: ${MS_MANIFESTS_FOLDER} is missing. Manifests are needed for this update to work properly " fail; exit 3; }
-test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
+test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
 ns="$(kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
 k="kubectl -n ${ns} "
-
 ingresstraefik80="$($k get ingressroute| grep ingress-traefik-port80|head -1|awk '{print $1}')" || { echo "Error: Ingress for traefik port80 not found"; exit 1; }
 hostname="$($k get ingressroute -o json ${ingresstraefik80}|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
 
+debuglog "Hostname: ${hostname} => ${newhostname}" info
 debuglog "Waiting on Mysql pod.."
 until [ "$($k get pod --no-headers|grep 'mysql-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
+
 $k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update domains set name = REPLACE(name,'$hostname','$newhostname') where id=1"
 $k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update records set name = REPLACE(name,'$hostname','$newhostname'), content = REPLACE(content,'$hostname','$newhostname') where domain_id=1"
-
 
 debuglog "Waiting on CouchDB pod.."
 until [ "$($k get pod --no-headers|grep 'couchdb-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
@@ -134,31 +261,62 @@ if [ -f "${MS_MANIFESTS_FOLDER}/config-deployment.yaml" ];then
 	curl -sH "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi > bsi_export && \
 		cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
 		curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
+
 		else
 			curl -sH "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi > bsi_export && \
 				cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
 				curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
-fi
+		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
 
-debuglog "Updating manifests.."
-test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
+fi
+		if [ -n "$check_cookieDomain" ];then
+			debuglog "Cookie domain: ${check_cookieDomain}" info lightgreen
+		else
+			debuglog "Cookie domain not found" fail
+		fi
+
+	if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
+		current_sc_hostname="$(grep CONTROLLER_WS_URI -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep -v CONTROLLER_WS_URI|cut -d'"' -f2|cut -d/ -f3)"
+		test -z "$current_sc_hostname" && current_sc_hostname="$(grep hostAliases: -A3 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep hostnames: -A1|grep -v hostnames:|cut -d'"' -f2)"
+
+		if [ -n "$current_sc_hostname" ] && [ "$current_sc_hostname" != "$newhostname" ];then
+			debuglog "Updating SC hostname from ${bold}${current_sc_hostname}${nc} to ${bold}${newhostname}${nc} in sc-ms-agent-deployment.yaml" info
+			sed -i "s/\b${current_sc_hostname}\b/${newhostname}/g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
+			#$k apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
+		fi
+	fi
+
+	debuglog "Updating manifests.."
 	hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
 	grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
 	#$k apply -f . >/dev/null
 
-	if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
-		current_sc_hostname="$(grep hostAliases: -A3 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep hostnames: -A1|grep -v hostnames:|cut -d'"' -f2)"
-		test -z "$current_sc_hostname" && current_sc_hostname="$(grep CONTROLLER_WS_URI -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"|grep -v CONTROLLER_WS_URI|cut -d'"' -f2|cut -d/ -f3)"
+	# fix search/replace above when newhostname is an IP address
+	find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f -name "*.yaml" -exec grep -l "hostAliases:" {} \; | while read -r manifest_file; do
+		grep -n "\- ip: " "$manifest_file" | cut -d: -f1 | while read -r line_num; do
+			sed -i "${line_num}s/ip: .*/ip: \"${cip}\"/" "$manifest_file"
+		done
+	done
 
-		if [ -n "$current_sc_hostname" ];then
-			echo -e "[i] Updating SC hostname from ${bold}${current_sc_hostname}${nc} to ${bold}${newhostname}${nc} in sc-ms-agent-deployment.yaml"
-			sed -i "s/\b${current_sc_hostname}\b/${newhostname}/g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
-			$k apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
-		fi
+	#debuglog "Applying SSL.."
+	test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
+	test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
+
+	test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
+	test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
+	if [ -f "${MS_MANIFESTS_FOLDER}/secrets.yaml" -a -n "$b64_ssl_key" -a -n "$b64_ssl_crt" ]; then
+		debuglog "Updating secrets.yaml with new SSL data.."
+		sed -i "/tls\.key:/c\  tls.key: ${b64_ssl_key}" "${MS_MANIFESTS_FOLDER}/secrets.yaml"
+		sed -i "/tls\.crt:/c\  tls.crt: ${b64_ssl_crt}" "${MS_MANIFESTS_FOLDER}/secrets.yaml"
+		#$k apply -f "${MS_MANIFESTS_FOLDER}/secrets.yaml" >/dev/null
+	else
+		# Fallback to direct secret modification if secrets.yaml doesn't exist
+		$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
 	fi
 
-	find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
-	echo -ne "applying manifest: $z ... \033[0K\r";
+	test -z "$SKIP_APPLY_M" && find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+	echo -ne "  - applying manifest: $z ... \033[0K\r";
 	$k apply -f "$z" >/dev/null;done
 	echo -ne "\033[0K\r"
 
@@ -185,24 +343,11 @@ test -d "${MS_MANIFESTS_FOLDER}" && cd "${MS_MANIFESTS_FOLDER}" && \
 		fi
 	fi
 
-
-# TODO: REVIEW AS OF v7.0.0
 for pod in license bsi;do
-	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod};done
+	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod} >/dev/null 2>&1;done
 done
-
-if [ -f "$path_ssl_key" -a -f "$path_ssl_crt" ] || [ -n "$MS_SSL_KEY" -a -n "$MS_SSL_CRT" ];then
-	debuglog "Applying SSL.."
-	test -n "$path_ssl_key" && test -f "$path_ssl_key" && b64_ssl_key="$(base64 -w0 "${path_ssl_key}")"
-	test -n "$path_ssl_crt" && test -f "$path_ssl_crt" && b64_ssl_crt="$(base64 -w0 "${path_ssl_crt}")"
-
-	test -n "$MS_SSL_KEY" && b64_ssl_key="$MS_SSL_KEY"
-	test -n "$MS_SSL_CRT" && b64_ssl_crt="$MS_SSL_CRT"
-	$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
-else
-	debuglog "SSL pem files not provided, nor env vars MS_SSL_KEY and MS_SSL_CRT set. SSL will not be updated!" fail
-fi
-
-findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
+findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout 2>/dev/null|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
 test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is: ${pink}${findSslSubject}${nc}"
+
+
 
