@@ -151,6 +151,16 @@ EOFF
 
 #sed -i "s/\(\s\+-\) 10\.0\..*\/32/\1 ${cip}\/32/g" /tmp/IPAddressPool.yaml
 echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
+i=0
+until ! kubectl -n metallb-system get pods --no-headers 2>/dev/null | awk '{print $3}' | grep -qv '^Running$'; do
+        sleep 3
+        ((i++))
+        if (( i % 7 == 0 )); then
+                kubectl -n metallb-system get po --no-headers 2>/dev/null|awk '{print $1}'|while read z;do kubectl -n metallb-system delete po $z &>/dev/null;done
+                kubectl -n metallb-system get pods --no-headers
+        fi
+done
+
 kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null || { echo -e "${yellow}Error: Unable to apply IPAddressPool, trying workaround...${nc}"; kubectl -n metallb-system get validatingwebhookconfiguration --no-headers|awk '{print $1}'|while read v hook age;do kubectl -n metallb-system delete validatingwebhookconfiguration $v;done && kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null; }
 ec=$?
 kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
