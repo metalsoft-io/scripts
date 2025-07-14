@@ -134,10 +134,23 @@ fi
 CLI_DATACENTERNAME="$DATACENTERNAME"
 
 # Get network interface information
-default_route=$(ip r get 1 2>/dev/null | head -1)
-interface_ip=$(echo "$default_route" | awk '{print $7}')
-interface_name=$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')
+# Check for default ipv6 IP and IF
+interface_ip="$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}'|head -1)"
+if [ -z "$interface_ip" ]; then
+    # no default IPv6 found, checking IPv4:
+  default_route="$(ip r get 1 2>/dev/null | head -1)"
+  interface_ip="$(echo "$default_route" | awk '{print $7}')"
+  test -n "$interface_ip" && interface_name="$(ip -br a 2>/dev/null | grep "\b${interface_ip}\b" | awk '{print $1}')"
+else # we have a default IPv6
+  interface_name="$(ip -6 route show default 2>/dev/null | head -1 |awk '{print $5}')"
+fi
 
+interface_name="${ENV_INTERFACE_NAME:-$interface_name}"
+interface_ip="${ENV_INTERFACE_IP:-$interface_ip}"
+test -z "$interface_name" && echo "Error: no interface found. use ENV_INTERFACE_NAME to set one" >&2 && exit 6
+test -z "$interface_ip" && echo "Error: no interface IP found, use ENV_INTERFACE_IP to set one" >&2 && exit 7
+
+debuglog "Using interface ${interface_name} with IP ${interface_ip}"
 
 # Try multiple methods to get main IP address. Prioritize the IP on the default route interface.
 MAINIP="$interface_ip"
