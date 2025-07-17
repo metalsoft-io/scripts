@@ -7,7 +7,11 @@ if [ "$EUID" -ne 0 ];then
 fi
 
 if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
-test -z "$cip" && cip="$(ip r get 1|head -1|awk '{print $7}')"
+test -z "$cip" && cip="$(ip r get 1 2>/dev/null | head -1 | awk '{print $7}')"
+if [ "$(echo "$cip" | wc -m)" -le 3 ]; then
+    # Try IPv6 if IPv4 fails
+    cip="$(ip -6 r get 2001:db8::1 2>/dev/null | head -1 | awk '{print $11}')"
+fi
 
 newhostname="$1"
 path_ssl_key="$2"
@@ -18,6 +22,27 @@ MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 usage ()
 {
 	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+}
+
+function isIPv6() {
+    # More comprehensive IPv6 validation
+    [[ $1 =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]] && return 0
+    [[ $1 =~ ^::1$ ]] && return 0
+    [[ $1 =~ ^::$ ]] && return 0
+    [[ $1 =~ ^::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{0,4}$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,7}:$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}$ ]] && return 0
+    [[ $1 =~ ^([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}$ ]] && return 0
+    [[ $1 =~ ^[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})$ ]] && return 0
+    return 1
+}
+
+function isIPv4() {
+    [[ $1 =~ ^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))$ ]] && return 0
+    return 1
 }
 
 nc="\e[00m"
@@ -246,7 +271,13 @@ $k exec -it deploy/mysql -- mysql -A bsi_powerdns -e "update records set name = 
 
 debuglog "Waiting on CouchDB pod.."
 until [ "$($k get pod --no-headers|grep 'couchdb-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
-couchdbUrl="$($k get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
+couchdbIP="$($k get svc|grep couchdb|awk '{print $3}')"
+couchdbPort="$($k get svc|grep couchdb|awk '{print $5}'|sed 's/ /:/g'|cut -d/ -f1)"
+if isIPv6 $cip;then
+couchdbUrl="\[${couchdbIP}\]:${couchdbPort}"
+else
+couchdbUrl="${couchdbIP}:${couchdbPort}"
+fi
 
 if [ "$(curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
 	couchdb_admin_user="$($k get configmap common -o json|jq -r .data.couchdb_admin_user)"
@@ -292,8 +323,8 @@ fi
 	grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
 	#$k apply -f . >/dev/null
 
-	# fix search/replace above when newhostname is an IP address
-	find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f -name "*.yaml" -exec grep -l "hostAliases:" {} \; | while read -r manifest_file; do
+	# fix search/replace above when newhostname is an IP address (repo hostAliases points to the public IP)
+	find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f -name "*.yaml" ! -name "repo-deployment.yaml" -exec grep -l "hostAliases:" {} \; | while read -r manifest_file; do
 		grep -n "\- ip: " "$manifest_file" | cut -d: -f1 | while read -r line_num; do
 			sed -i "${line_num}s/ip: .*/ip: \"${cip}\"/" "$manifest_file"
 		done
