@@ -158,16 +158,8 @@ if isIPv6 "$cip"; then
         sysctl -p
     fi
 
-    # Checking if we have all the needed components to reinstall k3s
-    test -f scripts/k3s-install.sh && \
-    test -f scripts/k3s && \
-    test -f scripts/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s components. Stopping here."; exit 1; }
-
     # Stop k3s service
     systemctl stop k3s 2>/dev/null || true
-
-    # Backup containerd directory with images
-    mv /var/lib/rancher/k3s/agent/containerd /root/containerd-backup 2>/dev/null || { echo "[i] Error: Could not backup local images"; exit 1; }
 
     test -f /var/lib/rancher/k3s/server/token && old_token="$(cat /var/lib/rancher/k3s/server/token)"
     rm -rf /var/lib/rancher/k3s/server/{db,token,node-token,tls,manifests-staging} 2>/dev/null || true
@@ -177,10 +169,6 @@ if isIPv6 "$cip"; then
     echo "[i] Uninstalling k3s..." && \
     /usr/local/bin/k3s-uninstall.sh >/dev/null 2>&1 || true
     rm -f /usr/local/bin/k3s* 2>/dev/null || true
-
-    # Restore containerd directory with images
-    mkdir -p /var/lib/rancher/k3s/agent && \
-    mv /root/containerd-backup /var/lib/rancher/k3s/agent/containerd 2>/dev/null || { echo "[i] Error: Could not restore local images"; }
 
     echo "[i] Installing k3s..."
     #curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.32.5+k3s1" INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" sh -
@@ -218,18 +206,51 @@ if isIPv6 "$cip"; then
     echo "[i] Applying couchdb-deployment.yaml..." && \
     kubectl -n ${ns} apply -f couchdb-deployment.yaml >/dev/null || { echo "[i] Error: Unable to apply couchdb-deployment.yaml"; exit 1; }
 
-    test -f /root/manifests/scripts/metallb-native.yaml && \
-    echo "[i] Applying metallb-native.yaml..." && \
-    kubectl apply -f /root/manifests/scripts/metallb-native.yaml >/dev/null || { echo "[i] Error: Unable to apply metallb-native.yaml"; exit 1; }
-
     #test -x scripts/traefik_helm_install.sh && \
     #echo "[i] Installing traefik..." && \
     #scripts/traefik_helm_install.sh || { echo "[i] Error: Unable to install traefik"; exit 1; }
 
+    test -f /root/manifests/scripts/metallb-native.yaml && \
+    echo "[i] Applying metallb-native.yaml..." && \
+    kubectl apply -f /root/manifests/scripts/metallb-native.yaml >/dev/null || { echo "[i] Error: Unable to apply metallb-native.yaml"; exit 1; }
+
     echo "[i] Applying remaining manifests..."
-    find . -mindepth 1 -maxdepth 1 -name "*.yaml" ! -name "traefik-helm-chart-configvalues.yaml" ! -name "ingressroutes.yaml"|while read z;do
-    kubectl -n ${ns} apply -f "$z" >/dev/null
+    kubectl apply -f . >/dev/null
+
+#     # Create k3s config directory if it doesn't exist
+#     mkdir -p /etc/rancher/k3s
+#     mkdir -p /var/lib/rancher/k3s/server/manifests
+
+#     test -n "$old_token" && print_old_token="token: \"$old_token\""
+#     # Create k3s config.yaml with IPv6 configuration
+#     cat > /etc/rancher/k3s/config.yaml << EOF
+# ${print_old_token}
+# bind-address: "::"
+# advertise-address: "$cip"
+# node-ip: "$cip"
+# tls-san:
+#   - "$cip"
+# #cluster-cidr: "fd01::/48"
+# #service-cidr: "fd02::/112"
+# #disable:
+# #  - metrics-server
+# EOF
+
+    echo "[i] Starting k3s with IPv6 configuration..."
+    systemctl start k3s
+
+    # Wait for k3s to fully start
+    echo "[i] Waiting for k3s to be ready..."
+    timeout=60
+    while [ $timeout -gt 0 ]; do
+        if systemctl is-active k3s >/dev/null 2>&1 && [ -f /etc/rancher/k3s/k3s.yaml ] && kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes --no-headers >/dev/null 2>&1; then
+            echo "[i] k3s is ready"
+            break
+        fi
+        sleep 2
+        ((timeout-=2))
     done
+
 
     echo "[i] k3s IPv6 configuration procedure completed"
 fi
@@ -286,33 +307,32 @@ export NO_PROXY="$no_proxy"
 fi # end if $3
 
 if [ -d "${MS_MANIFESTS_FOLDER}" ];then
-    cd "${MS_MANIFESTS_FOLDER}/"
-    echo "[i] Updating Traefik"
+        cd "${MS_MANIFESTS_FOLDER}/"
+        echo "[i] Updating Traefik"
 
-    if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
-            echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-            exit 2
-    else
-        # Use different delimiter for sed to handle IPv6 colons
-        sed -Ei "s|^(\s+)loadBalancerIP: \".*\"|\1loadBalancerIP: \"${cip}\"|g" ./traefik-helm-chart-configvalues.yaml
-        if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
-                echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
-        elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-                echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+        if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
+                echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+                exit 2
         else
-                helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-                helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+                # Use different delimiter for sed to handle IPv6 colons
+                sed -Ei "s|^(\s+)loadBalancerIP: \".*\"|\1loadBalancerIP: \"${cip}\"|g" ./traefik-helm-chart-configvalues.yaml
+                if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+                elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
+                        echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+                else
+                        helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+                        helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+                        helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+                        helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+                fi
         fi
-    fi
-fi
 
-test -f ingressroutes.yaml && kubectl -n ${ns} apply -f ingressroutes.yaml || { echo "[i] Error: kubectl could not apply: ingressroutes.yaml"; }
+fi
 
 cat > /tmp/IPAddressPool.yaml << EOFF
 ---
