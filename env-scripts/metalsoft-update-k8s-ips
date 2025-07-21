@@ -170,9 +170,9 @@ if isIPv6 "$cip"; then
     fi
 
     # Checking if we have all the needed components to reinstall k3s
-    test -f scripts/k3s-install.sh && \
-    test -f scripts/k3s && \
-    test -f scripts/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s reinstall components. Stopping here."; exit 1; }
+    test -f /root/k3s/k3s-install.sh && \
+    test -f /root/k3s/k3s && \
+    test -f /root/k3s/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s reinstall components. Stopping here."; exit 1; }
 
     # Stop k3s service
     systemctl stop k3s 2>/dev/null || true
@@ -195,12 +195,12 @@ if isIPv6 "$cip"; then
 
     echo "[i] Installing k3s..."
     #curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.32.5+k3s1" INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" sh -
-    test -f scripts/k3s-install.sh && \
-    test -f scripts/k3s && \
-    cp scripts/k3s /usr/local/bin/k3s && \
+    test -f /root/k3s/k3s-install.sh && \
+    test -f /root/k3s/k3s && \
+    cp /root/k3s/k3s /usr/local/bin/k3s && \
     chmod +x /usr/local/bin/k3s && \
-    test -f scripts/k3s-airgap-images-amd64.tar.zst && \
-    INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" ./scripts/k3s-install.sh
+    test -f /root/k3s/k3s-airgap-images-amd64.tar.zst && \
+    INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" /root/k3s/k3s-install.sh
     echo "[i] Waiting for k3s to be ready..."
     timeout=60
     while [ $timeout -gt 0 ]; do
