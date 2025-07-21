@@ -158,10 +158,21 @@ if isIPv6 "$cip"; then
         sysctl -p
     fi
 
+    # add MASQUERADE for pods to be able to reach public net
+    POD_IPV6_CIDR="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs}' 2>/dev/null|grep -o '"[^"]*:[^"]*"' | sed 's/"//g'|head -1)"
+    if [ -n "$POD_IPV6_CIDR" ];then
+        if ! ip6tables -t nat -nL POSTROUTING 2>/dev/null|grep -P "^MASQUERADE\s+all"|grep -q "$POD_IPV6_CIDR";then
+            echo "[i] Adding POSTROUTING MASQUERADE source: $POD_IPV6_CIDR"
+            ip6tables -t nat -A POSTROUTING -s $POD_IPV6_CIDR -j MASQUERADE
+        fi
+    else
+        echo "[-] Could not determine POD_IPV6_CIDR, pods might not reach public network"
+    fi
+
     # Checking if we have all the needed components to reinstall k3s
     test -f scripts/k3s-install.sh && \
     test -f scripts/k3s && \
-    test -f scripts/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s components. Stopping here."; exit 1; }
+    test -f scripts/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s reinstall components. Stopping here."; exit 1; }
 
     # Stop k3s service
     systemctl stop k3s 2>/dev/null || true
