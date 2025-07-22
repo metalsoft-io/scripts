@@ -158,17 +158,6 @@ if isIPv6 "$cip"; then
         sysctl -p
     fi
 
-    # add MASQUERADE for pods to be able to reach public net
-    POD_IPV6_CIDR="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs}' 2>/dev/null|grep -o '"[^"]*:[^"]*"' | sed 's/"//g'|head -1)"
-    if [ -n "$POD_IPV6_CIDR" ];then
-        if ! ip6tables -t nat -nL POSTROUTING 2>/dev/null|grep -P "^MASQUERADE\s+all"|grep -q "$POD_IPV6_CIDR";then
-            echo "[i] Adding POSTROUTING MASQUERADE source: $POD_IPV6_CIDR"
-            ip6tables -t nat -A POSTROUTING -s $POD_IPV6_CIDR -j MASQUERADE
-        fi
-    else
-        echo "[-] Could not determine POD_IPV6_CIDR, pods might not reach public network"
-    fi
-
     # Checking if we have all the needed components to reinstall k3s
     test -f /root/k3s/k3s-install.sh && \
     test -f /root/k3s/k3s && \
@@ -241,6 +230,17 @@ if isIPv6 "$cip"; then
     find . -mindepth 1 -maxdepth 1 -name "*.yaml" ! -name "traefik-helm-chart-configvalues.yaml" ! -name "ingressroutes.yaml"|while read z;do
     kubectl -n ${ns} apply -f "$z" >/dev/null
     done
+
+    # add MASQUERADE for pods to be able to reach public net
+    POD_IPV6_CIDR="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs}' 2>/dev/null|grep -o '"[^"]*:[^"]*"' | sed 's/"//g'|head -1)"
+    if [ -n "$POD_IPV6_CIDR" ];then
+        if ! ip6tables -t nat -nL POSTROUTING 2>/dev/null|grep -P "^MASQUERADE\s+all"|grep -q "$POD_IPV6_CIDR";then
+            echo "[i] Adding POSTROUTING MASQUERADE source: $POD_IPV6_CIDR"
+            ip6tables -t nat -A POSTROUTING -s $POD_IPV6_CIDR -j MASQUERADE
+        fi
+    else
+        echo "[-] Could not determine POD_IPV6_CIDR, pods might not reach public network"
+    fi
 
     echo "[i] k3s IPv6 configuration procedure completed"
 fi
@@ -344,8 +344,10 @@ until ! kubectl -n metallb-system get pods --no-headers 2>/dev/null | awk '{prin
         sleep 3
         ((i++))
         if (( i % 7 == 0 )); then
-                kubectl -n metallb-system get po --no-headers 2>/dev/null|awk '{print $1}'|while read z;do kubectl -n metallb-system delete po $z &>/dev/null;done
                 kubectl -n metallb-system get pods --no-headers
+        fi
+        if (( i % 20 == 0 )); then
+                kubectl -n metallb-system get po --no-headers 2>/dev/null|awk '{print $1}'|while read z;do kubectl -n metallb-system delete po $z &>/dev/null;done
         fi
 done
 
