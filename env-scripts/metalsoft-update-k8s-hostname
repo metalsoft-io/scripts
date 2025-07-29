@@ -66,7 +66,13 @@ function debuglog ()
 }
 if ! [ -n "$newhostname" -a "$(echo -n "$newhostname"|wc -c)" -ge 5 -a "$(echo -n "$newhostname"|grep '\.'|wc -l)" -ge 1 ];then usage; exit 1;fi
 
-if [ ! -f /etc/.ms_hostname ];then echo "$newhostname" > /etc/.ms_hostname 2>/dev/null;fi
+test -f /etc/metalsoft && source /etc/metalsoft || touch /etc/metalsoft
+if ! grep -q "^MS_HOSTNAME=" /etc/metalsoft; then
+    echo "MS_HOSTNAME=$newhostname" >> /etc/metalsoft
+else
+    sed -i "s/^MS_HOSTNAME=.*/MS_HOSTNAME=$newhostname/" /etc/metalsoft
+fi
+
 test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io $main_domain" >> /etc/hosts
 grep -q " \b$newhostname\b" /etc/hosts || echo "$cip $newhostname" >> /etc/hosts 2>/dev/null
 

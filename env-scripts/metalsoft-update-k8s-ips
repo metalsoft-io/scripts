@@ -54,14 +54,14 @@ function nextIPv6() {
     # Try using python3 first
     if command -v python3 >/dev/null 2>&1; then
         local expanded=$(python3 -c "
-import ipaddress
-try:
-    ip = ipaddress.IPv6Address('$ipv6')
-    next_ip = ip + 1
-    print(str(next_ip))
-except:
-    print('$ipv6')
-" 2>/dev/null)
+        import ipaddress
+        try:
+        ip = ipaddress.IPv6Address('$ipv6')
+        next_ip = ip + 1
+        print(str(next_ip))
+        except:
+        print('$ipv6')
+        " 2>/dev/null)
         echo "$expanded"
     else
         # Fallback: simple increment of last digit (basic approach)
@@ -102,16 +102,16 @@ _nextip="$(nextIP $_localip)"
 test $age -gt $consider_old && echo -e "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
 if [ "$EUID" -ne 0 ];then
-        echo -e "[\e[1;31m✗\e[0m] Please run as root"
-        exit 1
+    echo -e "[\e[1;31m✗\e[0m] Please run as root"
+    exit 1
 fi
 
 if [ -z $2 ];then
-        echo -e "[\e[1;31m✗\e[0m] Please provide the new 'GlobalController/k8s IP' and 'SiteController/agent IP' [ optional: http://_proxy_ip_:3128/ ]"
-        echo "[i] example: ${me} ${_localip:-10.0.0.1} ${_nextip:-10.0.0.2} http://$(nextIP $_nextip):3128/"
-        #echo "[i] IPv6 example: ${me} 2001:db8::1 2001:db8::2 http://[2001:db8::proxy]:3128/"
-        echo -e "${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
-        exit 3;
+    echo -e "[\e[1;31m✗\e[0m] Please provide the new 'GlobalController/k8s IP' and 'SiteController/agent IP' [ optional: http://_proxy_ip_:3128/ ]"
+    echo "[i] example: ${me} ${_localip:-10.0.0.1} ${_nextip:-10.0.0.2} http://$(nextIP $_nextip):3128/"
+    #echo "[i] IPv6 example: ${me} 2001:db8::1 2001:db8::2 http://[2001:db8::proxy]:3128/"
+    echo -e "${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+    exit 3;
 fi
 
 # Validate IP addresses (IPv4 or IPv6)
@@ -133,10 +133,19 @@ echo "[i] GC IP: $cip"
 echo "[i] SC IP: $aip"
 
 # Save last used $aip so that we reference it when doing a new mysql update search/replace
-test -f ${HOME}/.ms_last_aip && last_aip="$(cat ${HOME}/.ms_last_aip|tail -1)"
-test -n "$last_aip" || last_aip="10.255.146.149"
-echo -n "$cip" > ${HOME}/.ms_last_cip
-echo -n "$aip" > ${HOME}/.ms_last_aip
+test -f /etc/metalsoft && source /etc/metalsoft || touch /etc/metalsoft
+
+if ! grep -q "^MS_GC_IP=" /etc/metalsoft; then
+    echo "MS_GC_IP=$cip" >> /etc/metalsoft
+else
+    sed -i "s/^MS_GC_IP=.*/MS_GC_IP=$cip/" /etc/metalsoft
+fi
+
+if ! grep -q "^MS_SC_IP=" /etc/metalsoft; then
+    echo "MS_SC_IP=$aip" >> /etc/metalsoft
+else
+    sed -i "s/^MS_SC_IP=.*/MS_SC_IP=$aip/" /etc/metalsoft
+fi
 
 # add IP with hostname to /etc/hosts
 hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
@@ -146,6 +155,12 @@ test -z "$main_domain" && main_domain="$(grep 'match: Host' ${MS_MANIFESTS_FOLDE
 test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io $main_domain" >> /etc/hosts
 test -n "$main_domain" && echo "$main_domain" > /etc/.ms_hostname 2>/dev/null
 grep -q " \b$main_domain\b" /etc/hosts || echo "$cip $main_domain" >> /etc/hosts 2>/dev/null
+
+if ! grep -q "^MS_HOSTNAME=" /etc/metalsoft; then
+    echo "MS_HOSTNAME=$main_domain" >> /etc/metalsoft
+else
+    sed -i "s/^MS_HOSTNAME=.*/MS_HOSTNAME=$main_domain/" /etc/metalsoft
+fi
 
 cd ${MS_MANIFESTS_FOLDER} || { echo "[i] Error: Unable to cd to manifests folder: ${MS_MANIFESTS_FOLDER}"; exit 1; }
 
@@ -160,8 +175,8 @@ if isIPv6 "$cip"; then
 
     # Checking if we have all the needed components to reinstall k3s
     test -f /root/k3s/k3s-install.sh && \
-    test -f /root/k3s/k3s && \
-    test -f /root/k3s/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s reinstall components. Stopping here."; exit 1; }
+        test -f /root/k3s/k3s && \
+        test -f /root/k3s/k3s-airgap-images-amd64.tar.zst || { echo "[i] Error: Missing k3s reinstall components. Stopping here."; exit 1; }
 
     # Stop k3s service
     systemctl stop k3s 2>/dev/null || true
@@ -174,53 +189,53 @@ if isIPv6 "$cip"; then
     rm -f /etc/rancher/k3s/k3s.yaml
 
     test -x /usr/local/bin/k3s-uninstall.sh && \
-    echo "[i] Uninstalling k3s..." && \
-    /usr/local/bin/k3s-uninstall.sh >/dev/null 2>&1 || true
-    rm -f /usr/local/bin/k3s* 2>/dev/null || true
+        echo "[i] Uninstalling k3s..." && \
+        /usr/local/bin/k3s-uninstall.sh >/dev/null 2>&1 || true
+            rm -f /usr/local/bin/k3s* 2>/dev/null || true
 
     # Restore containerd directory with images
     mkdir -p /var/lib/rancher/k3s/agent && \
-    mv /root/containerd-backup /var/lib/rancher/k3s/agent/containerd 2>/dev/null || { echo "[i] Error: Could not restore local images"; }
+        mv /root/containerd-backup /var/lib/rancher/k3s/agent/containerd 2>/dev/null || { echo "[i] Error: Could not restore local images"; }
 
     echo "[i] Installing k3s..."
     #curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.32.5+k3s1" INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" sh -
     test -f /root/k3s/k3s-install.sh && \
-    test -f /root/k3s/k3s && \
-    cp /root/k3s/k3s /usr/local/bin/k3s && \
-    chmod +x /usr/local/bin/k3s && \
-    test -f /root/k3s/k3s-airgap-images-amd64.tar.zst && \
-    INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" /root/k3s/k3s-install.sh
-    echo "[i] Waiting for k3s to be ready..."
-    timeout=60
-    while [ $timeout -gt 0 ]; do
-        if systemctl is-active k3s >/dev/null 2>&1 && [ -f /etc/rancher/k3s/k3s.yaml ] && kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes --no-headers >/dev/null 2>&1; then
-            echo "[i] k3s is ready"
-            break
-        fi
-        sleep 2
-        ((timeout-=2))
-    done
+        test -f /root/k3s/k3s && \
+        cp /root/k3s/k3s /usr/local/bin/k3s && \
+        chmod +x /usr/local/bin/k3s && \
+        test -f /root/k3s/k3s-airgap-images-amd64.tar.zst && \
+        INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC="--disable=servicelb --disable-cloud-controller --write-kubeconfig-mode=600 --disable=traefik" /root/k3s/k3s-install.sh
+            echo "[i] Waiting for k3s to be ready..."
+            timeout=60
+            while [ $timeout -gt 0 ]; do
+                if systemctl is-active k3s >/dev/null 2>&1 && [ -f /etc/rancher/k3s/k3s.yaml ] && kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes --no-headers >/dev/null 2>&1; then
+                    echo "[i] k3s is ready"
+                    break
+                fi
+                sleep 2
+                ((timeout-=2))
+            done
 
-    if [ $timeout -le 0 ]; then
-        echo "[!] Warning: k3s did not become ready within 60 seconds, continuing anyway..."
-    fi
+            if [ $timeout -le 0 ]; then
+                echo "[!] Warning: k3s did not become ready within 60 seconds, continuing anyway..."
+            fi
 
 
-    test -f namespace.yaml && \
-    echo "[i] Applying namespace.yaml..." && \
-    kubectl apply -f namespace.yaml >/dev/null || { echo "[i] Error: Unable to apply namespace.yaml"; exit 1; }
+            test -f namespace.yaml && \
+                echo "[i] Applying namespace.yaml..." && \
+                kubectl apply -f namespace.yaml >/dev/null || { echo "[i] Error: Unable to apply namespace.yaml"; exit 1; }
 
-    test -f mysql-deployment.yaml && \
-    echo "[i] Applying mysql-deployment.yaml..." && \
-    kubectl -n ${ns} apply -f mysql-deployment.yaml >/dev/null || { echo "[i] Error: Unable to apply mysql-deployment.yaml"; exit 1; }
+            test -f mysql-deployment.yaml && \
+                echo "[i] Applying mysql-deployment.yaml..." && \
+                kubectl -n ${ns} apply -f mysql-deployment.yaml >/dev/null || { echo "[i] Error: Unable to apply mysql-deployment.yaml"; exit 1; }
 
-    test -f couchdb-deployment.yaml && \
-    echo "[i] Applying couchdb-deployment.yaml..." && \
-    kubectl -n ${ns} apply -f couchdb-deployment.yaml >/dev/null || { echo "[i] Error: Unable to apply couchdb-deployment.yaml"; exit 1; }
+            test -f couchdb-deployment.yaml && \
+                echo "[i] Applying couchdb-deployment.yaml..." && \
+                kubectl -n ${ns} apply -f couchdb-deployment.yaml >/dev/null || { echo "[i] Error: Unable to apply couchdb-deployment.yaml"; exit 1; }
 
-    test -f /root/manifests/scripts/metallb-native.yaml && \
-    echo "[i] Applying metallb-native.yaml..." && \
-    kubectl apply -f /root/manifests/scripts/metallb-native.yaml >/dev/null || { echo "[i] Error: Unable to apply metallb-native.yaml"; exit 1; }
+            test -f /root/manifests/scripts/metallb-native.yaml && \
+                echo "[i] Applying metallb-native.yaml..." && \
+                kubectl apply -f /root/manifests/scripts/metallb-native.yaml >/dev/null || { echo "[i] Error: Unable to apply metallb-native.yaml"; exit 1; }
 
     #test -x scripts/traefik_helm_install.sh && \
     #echo "[i] Installing traefik..." && \
@@ -229,7 +244,7 @@ if isIPv6 "$cip"; then
     echo "[i] Applying remaining manifests..."
     find . -mindepth 1 -maxdepth 1 -name "*.yaml" ! -name "traefik-helm-chart-configvalues.yaml" ! -name "ingressroutes.yaml"|while read z;do
     kubectl -n ${ns} apply -f "$z" >/dev/null
-    done
+done
 
     # add MASQUERADE for pods to be able to reach public net
     POD_IPV6_CIDR="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs}' 2>/dev/null|grep -o '"[^"]*:[^"]*"' | sed 's/"//g'|head -1)"
@@ -246,8 +261,8 @@ if isIPv6 "$cip"; then
 fi
 
 if [ ! -z $3 ];then
-        proxy_url="$3"
-        echo "[i] setting up proxy via $proxy_url"
+    proxy_url="$3"
+    echo "[i] setting up proxy via $proxy_url"
 
         # Handle both IPv4 and IPv6 for local network detection
         if isIPv6 "$cip"; then
@@ -266,22 +281,22 @@ if [ ! -z $3 ];then
         env_file="/etc/environment"
         if grep '^HTTP_PROXY=' $env_file > /dev/null;then
 
-                sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $env_file
-                sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $env_file
-                sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $env_file
+            sed -i "/^http_proxy=/chttp_proxy=\"$proxy_url\"" $env_file
+            sed -i "/^https_proxy=/chttps_proxy=\"$proxy_url\"" $env_file
+            sed -i "/^no_proxy=/cno_proxy=\"$no_proxy\"" $env_file
 
-                sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $env_file
-                sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $env_file
-                sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $env_file
+            sed -i "/^HTTP_PROXY=/cHTTP_PROXY=\"$proxy_url\"" $env_file
+            sed -i "/^HTTPS_PROXY=/cHTTPS_PROXY=\"$proxy_url\"" $env_file
+            sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $env_file
         else
 
-                echo "http_proxy=\"$proxy_url\"" >> $env_file
-                echo "https_proxy=\"$proxy_url\"" >> $env_file
-                echo "no_proxy=\"$no_proxy\"" >> $env_file
+            echo "http_proxy=\"$proxy_url\"" >> $env_file
+            echo "https_proxy=\"$proxy_url\"" >> $env_file
+            echo "no_proxy=\"$no_proxy\"" >> $env_file
 
-                echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file
-                echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file
-                echo "NO_PROXY=\"$no_proxy\"" >> $env_file
+            echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file
+            echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file
+            echo "NO_PROXY=\"$no_proxy\"" >> $env_file
 
         fi
 
@@ -301,29 +316,29 @@ if [ -d "${MS_MANIFESTS_FOLDER}" ];then
     echo "[i] Updating Traefik"
 
     if [ ! -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" ];then
-            echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
-            exit 2
+        echo "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik"
+        exit 2
     else
         # Use different delimiter for sed to handle IPv6 colons
         sed -Ei "s|^(\s+)loadBalancerIP: \".*\"|\1loadBalancerIP: \"${cip}\"|g" ./traefik-helm-chart-configvalues.yaml
         if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
-                echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+            echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
+            helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+            helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
         elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
-                echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+            echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
+            helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+            helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
         else
-                helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
-                helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-                helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-                helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+            helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
+            helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
+            helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
+            helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
         fi
     fi
 fi
-
-test -f ingressroutes.yaml && kubectl -n ${ns} apply -f ingressroutes.yaml || { echo "[i] Error: kubectl could not apply: ingressroutes.yaml"; }
+echo "[i] Applying ingressroutes.yaml"
+test -f ingressroutes.yaml && kubectl -n ${ns} apply -f ingressroutes.yaml >/dev/null || { echo "[i] Error: kubectl could not apply: ingressroutes.yaml"; }
 
 cat > /tmp/IPAddressPool.yaml << EOFF
 ---
@@ -341,18 +356,28 @@ EOFF
 echo "[i] Waiting for Metallb pods to start, then the new configuration will be applied"
 i=0
 until ! kubectl -n metallb-system get pods --no-headers 2>/dev/null | awk '{print $3}' | grep -qv '^Running$'; do
-        sleep 3
-        ((i++))
-        if (( i % 7 == 0 )); then
-                kubectl -n metallb-system get pods --no-headers
-        fi
-        if (( i % 20 == 0 )); then
-                kubectl -n metallb-system get po --no-headers 2>/dev/null|awk '{print $1}'|while read z;do kubectl -n metallb-system delete po $z &>/dev/null;done
-        fi
+    sleep 3
+    ((i++))
+    if (( i % 7 == 0 )); then
+        kubectl -n metallb-system get pods --no-headers
+    fi
+    if (( i % 20 == 0 )); then
+        kubectl -n metallb-system get po --no-headers 2>/dev/null|awk '{print $1}'|while read z;do kubectl -n metallb-system delete po $z &>/dev/null;done
+    fi
 done
 
 kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null || { echo -e "${yellow}Error: Unable to apply IPAddressPool, trying workaround...${nc}"; kubectl -n metallb-system get validatingwebhookconfiguration --no-headers|awk '{print $1}'|while read v hook age;do kubectl -n metallb-system delete validatingwebhookconfiguration $v;done && kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null; }
 ec=$?
+echo "[i] Waiting for MySQL to be ready"
+i=0
+until kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "select 1" >/dev/null 2>&1; do
+    sleep 3
+    ((i++))
+    if (( i % 7 == 0 )); then
+        kubectl -n metallb-system get pods --no-headers | grep -i mysql
+    fi
+done
+
 if isIPv6 "$cip"; then
     # Update AAAA record for IPv6
     kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='AAAA' and name='ip.demo.metalsoft.io'"
@@ -362,31 +387,31 @@ else
 fi
 found_dcdemo_aip="$(kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -BNe "select datacenter_config_json from datacenters where datacenter_id=1 and datacenter_name='dc-demo' and datacenter_status='active' and datacenter_hidden=0 and datacenter_is_maintenance=0"|jq -cr .controllerPolicy.subnetAllocation[0]|tr -d '\n\r'|cut -d/ -f1)"
 if [ "$found_dcdemo_aip" != "$aip" ];then
-        echo "[i] Updating dc-demo subnet allocation to $aip"
-        # Use MySQL REPLACE function which handles special characters automatically
-        kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
+    echo "[i] Updating dc-demo subnet allocation to $aip"
+    # Use MySQL REPLACE function which handles special characters automatically
+    kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
 fi
 
 if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
-        # get the currently configured SC IP:
-        current_sc_ip="$(grep hostAliases: -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep ip:|cut -d'"' -f2)"
-        test -z "$current_sc_ip" && current_sc_ip="$(grep SITE_CONTROLLER_IP -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep value:|cut -d'"' -f2)"
+    # get the currently configured SC IP:
+    current_sc_ip="$(grep hostAliases: -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep ip:|cut -d'"' -f2)"
+    test -z "$current_sc_ip" && current_sc_ip="$(grep SITE_CONTROLLER_IP -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep value:|cut -d'"' -f2)"
 
-        if [ -n "$current_sc_ip" ];then
-                echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ms-agent-deployment.yaml"
-                # Use different delimiter for sed to handle IPv6 addresses
-                sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
-                kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
+    if [ -n "$current_sc_ip" ];then
+        echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ms-agent-deployment.yaml"
+        # Use different delimiter for sed to handle IPv6 addresses
+        sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
+        kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
 
-                if [ -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" ];then
-                        echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ansible-runner-deployment.yaml"
-                        sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
-                        kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
-                fi
+        if [ -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" ];then
+            echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ansible-runner-deployment.yaml"
+            sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
+            kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
         fi
+    fi
 fi
 
-test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen} Try to navigate to: https://demo.metalsoft.io/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
+test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen}Navigate to: https://${main_domain}/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
 
 echo
 echo "[i] Helm releases:"
