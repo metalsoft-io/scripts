@@ -296,13 +296,15 @@ fi
 debuglog "Updating CouchDB: [${couchdbUrl}]"
 if [ -f "${MS_MANIFESTS_FOLDER}/config-deployment.yaml" ];then
 	curl -sH "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi > bsi_export && \
-		cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+		#cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+		cat bsi_export|jq --arg newhost "${newhostname}" '.cookieDomain = "."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
 		curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
 
 		else
 			curl -sH "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi > bsi_export && \
-				cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+				#cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+				cat bsi_export|jq --arg newhost "${newhostname}" ' .cookieDomain = "."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
 				curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
 		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
 
