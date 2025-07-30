@@ -287,10 +287,10 @@ dvVIE0i3gwt0+qhni75EgUbufGrVlO5aC1BK
 ENDD
 
 debuglog "Ensuring Metalsoft CA is installed"
-test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
+test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
 test "$found_os" == "debian" && test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates >/dev/null
 
-test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
+test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
 test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && cp /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-trust extract >/dev/null
 
 debuglog "Checking for other custom CAs"
@@ -328,7 +328,7 @@ for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
 done
 
 # Get latest yq version from GitHub API
-YQ_VERSION=$(curl -sSL https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 # Fallback to known working version if API call fails
 YQ_VERSION="${YQ_VERSION:-v4.45.4}"
 
@@ -342,7 +342,7 @@ esac
 YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
 if ! command -v yq >/dev/null; then
     debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
-    curl -sSL -o /usr/local/bin/yq "${YQ_URL}"
+    curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
     chmod +x /usr/local/bin/yq
 fi
 
@@ -360,7 +360,7 @@ if [ -z "$DCCONF" ];then
   exit 0
 fi
 debuglog "Pulling DC config URL: $(echo $DCCONF|cut -d/ -f1,2,3)"
-  DCCONFDOWNLOADED="$(curl -skL --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
+  DCCONFDOWNLOADED="$(curl -skL $curl_s_proxy --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
 fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
@@ -1105,9 +1105,9 @@ fi
 
 debuglog "Pulling discovery ISO"
 if verlt $IMAGES_TAG v7.0.0; then
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
 else
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
 fi
 
 sleep 2
