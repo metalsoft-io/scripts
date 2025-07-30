@@ -16,6 +16,7 @@ myage=${mage:-0}
 age="$(( $(date +%s) - $myage ))"
 consider_old=$(( 60 * 60 * 24 * 4 ))
 MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
+ns=${ns:-demo-metalsoft}
 
 function isIPv6() {
     # More comprehensive IPv6 validation
@@ -85,6 +86,44 @@ function nextIP() {
         nextIPv4 "$1"
     else
         echo "$1"
+    fi
+}
+
+function getIPv6PodCIDR() {
+    # Get pod CIDRs from all nodes and find IPv6 ones
+    local pod_cidrs="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs[*]}' 2>/dev/null)"
+
+    if [ -n "$pod_cidrs" ]; then
+        # Filter for valid IPv6 CIDRs (contains colons and has /prefix)
+        echo "$pod_cidrs" | tr ' ' '\n' | grep -E '^[0-9a-fA-F:]+/[0-9]+$' | head -1
+    fi
+}
+
+function setupIPv6Masquerade() {
+    local pod_cidr="$(getIPv6PodCIDR)"
+
+    if [ -z "$pod_cidr" ]; then
+        echo "[-] Could not determine IPv6 pod CIDR, pods might not reach public network"
+        echo "[i] Available pod CIDRs: $(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs[*]}' 2>/dev/null)"
+        return 1
+    fi
+
+    echo "[i] Found IPv6 pod CIDR: $pod_cidr"
+
+    # Check if MASQUERADE rule already exists
+    if ip6tables -t nat -nL POSTROUTING 2>/dev/null | grep -P "^MASQUERADE\s+all" | grep -q "$pod_cidr"; then
+        echo "[i] MASQUERADE rule already exists for $pod_cidr"
+        return 0
+    fi
+
+    # Add MASQUERADE rule
+    echo "[i] Adding POSTROUTING MASQUERADE rule for: $pod_cidr"
+    if ip6tables -t nat -A POSTROUTING -s "$pod_cidr" -j MASQUERADE 2>/dev/null; then
+        echo "[i] MASQUERADE rule successfully added"
+        return 0
+    else
+        echo "[!] Error: Failed to add MASQUERADE rule"
+        return 1
     fi
 }
 
@@ -246,16 +285,8 @@ if isIPv6 "$cip"; then
     kubectl -n ${ns} apply -f "$z" >/dev/null
 done
 
-    # add MASQUERADE for pods to be able to reach public net
-    POD_IPV6_CIDR="$(kubectl get nodes -o jsonpath='{.items[*].spec.podCIDRs}' 2>/dev/null|grep -o '"[^"]*:[^"]*"' | sed 's/"//g'|head -1)"
-    if [ -n "$POD_IPV6_CIDR" ];then
-        if ! ip6tables -t nat -nL POSTROUTING 2>/dev/null|grep -P "^MASQUERADE\s+all"|grep -q "$POD_IPV6_CIDR";then
-            echo "[i] Adding POSTROUTING MASQUERADE source: $POD_IPV6_CIDR"
-            ip6tables -t nat -A POSTROUTING -s $POD_IPV6_CIDR -j MASQUERADE
-        fi
-    else
-        echo "[-] Could not determine POD_IPV6_CIDR, pods might not reach public network"
-    fi
+    # Setup IPv6 MASQUERADE for pods to reach public network
+    setupIPv6Masquerade
 
     echo "[i] k3s IPv6 configuration procedure completed"
 fi
@@ -370,7 +401,7 @@ kubectl -n metallb-system apply -f /tmp/IPAddressPool.yaml >/dev/null || { echo 
 ec=$?
 echo "[i] Waiting for MySQL to be ready"
 i=0
-until kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "select 1" >/dev/null 2>&1; do
+until kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -e "select 1" >/dev/null 2>&1; do
     sleep 3
     ((i++))
     if (( i % 7 == 0 )); then
@@ -380,16 +411,16 @@ done
 
 if isIPv6 "$cip"; then
     # Update AAAA record for IPv6
-    kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='AAAA' and name='ip.demo.metalsoft.io'"
+    kubectl -n ${ns} exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='AAAA' and name='ip.demo.metalsoft.io'"
 else
     # Update A record for IPv4
-    kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
+    kubectl -n ${ns} exec -it deploy/mysql -- mysql -A bsi_powerdns -e "UPDATE records SET content = '$cip' where domain_id=1 and type='A' and name='ip.demo.metalsoft.io'"
 fi
-found_dcdemo_aip="$(kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -BNe "select datacenter_config_json from datacenters where datacenter_id=1 and datacenter_name='dc-demo' and datacenter_status='active' and datacenter_hidden=0 and datacenter_is_maintenance=0"|jq -cr .controllerPolicy.subnetAllocation[0]|tr -d '\n\r'|cut -d/ -f1)"
+found_dcdemo_aip="$(kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -BNe "select datacenter_config_json from datacenters where datacenter_id=1 and datacenter_name='dc-demo' and datacenter_status='active' and datacenter_hidden=0 and datacenter_is_maintenance=0"|jq -cr .controllerPolicy.subnetAllocation[0]|tr -d '\n\r'|cut -d/ -f1)"
 if [ "$found_dcdemo_aip" != "$aip" ];then
     echo "[i] Updating dc-demo subnet allocation to $aip"
     # Use MySQL REPLACE function which handles special characters automatically
-    kubectl -n demo-metalsoft exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
+    kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
 fi
 
 if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
@@ -401,12 +432,12 @@ if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
         echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ms-agent-deployment.yaml"
         # Use different delimiter for sed to handle IPv6 addresses
         sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
-        kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
+        kubectl -n ${ns} apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
 
         if [ -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" ];then
             echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ansible-runner-deployment.yaml"
             sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
-            kubectl -n demo-metalsoft apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
+            kubectl -n ${ns} apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
         fi
     fi
 fi
