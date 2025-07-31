@@ -94,6 +94,7 @@ mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could 
 
 cat /etc/environment 2>/dev/null > ${backupFolder}/etc_environment
 env > ${backupFolder}/env
+test -f /etc/metalsoft && cp /etc/metalsoft ${backupFolder}/etc_metalsoft 2>/dev/null
 grep -qi _proxy env && echo -e "${lightred}PROXY setup:" && grep -i _proxy env && echo -ne "${nc}"
 
 function get_disks ()
