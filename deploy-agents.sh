@@ -896,7 +896,7 @@ fi
           test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
           test -n "${CLI_DATACENTERNAME}" && sed -iE "s/^([[:space:]]*hostname: agents-)([^[:space:]]+)(-[[:alnum:]_]+)/\\\\1${CLI_DATACENTERNAME}\\\\3/g" /opt/metalsoft/agents/docker-compose.yaml
 
-          if [[ -n $CUSTOM_CA ]]; then
+          if [ -n "$CUSTOM_CA" ]; then
             cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
 [supervisord]
 nodaemon=true
