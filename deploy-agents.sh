@@ -327,23 +327,25 @@ for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
   fi
 done
 
-# Get latest yq version from GitHub API
-YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-# Fallback to known working version if API call fails
-YQ_VERSION="${YQ_VERSION:-v4.45.4}"
+if ! command -v yq >/dev/null; then
+  # Get latest yq version from GitHub API
+  YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+  # Fallback to known working version if API call fails
+  YQ_VERSION="${YQ_VERSION:-v4.45.4}"
 
-YQ_ARCH=$(uname -m)
-case "$YQ_ARCH" in
+  YQ_ARCH=$(uname -m)
+  case "$YQ_ARCH" in
     "x86_64") YQ_ARCH="amd64" ;;
     "aarch64" | "arm64") YQ_ARCH="arm64" ;;
     *) echo "yq installation: Unsupported architecture: $YQ_ARCH"; exit 1 ;;
-esac
+  esac
 
-YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
-if ! command -v yq >/dev/null; then
+  YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
+  if ! command -v yq >/dev/null; then
     debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
     curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
     chmod +x /usr/local/bin/yq
+  fi
 fi
 
 if verlt $IMAGES_TAG v7.0.0; then
