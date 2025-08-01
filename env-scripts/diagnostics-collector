@@ -286,6 +286,7 @@ else # if gather=sc
 	ls -laR /etc/pki/ca-trust/source/anchors/ &> ${backupFolder}/ssl_ls_etc_pki_ca_trust_source_anchors.txt || true
 	ls -laR /usr/local/share/ca-certificates/ &> ${backupFolder}/ssl_ls_usr_local_share_ca_certificates.txt || true
 	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && grep "^# " /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem > ${backupFolder}/ssl_grep_redhat_etc_pki_ca_trust_extracted_pem_tls_ca_bundle.txt || true
+	test -d /etc/ssl/certs/ && tar czf ${backupFolder}/ssl_etc_ssl_certs.tar.gz /etc/ssl/certs/ &>/dev/null
 	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && cp /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem ${backupFolder}/ssl_cp_redhat_tls_ca_bundle.pem || true
 	\ls /etc/pki/ca-trust/source/anchors/|while read z;do echo ":::: $z";openssl x509 -noout -subject -in "/etc/pki/ca-trust/source/anchors/$z";done > ${backupFolder}/ssl_redhat_etc_pki_ca_trust_source_anchors_subjects.txt || true
 	test -f /etc/ssl/certs/ca-certificates.crt && cp /etc/ssl/certs/ca-certificates.crt ${backupFolder}/ssl_cp_debian_ca_certificates.crt || true
