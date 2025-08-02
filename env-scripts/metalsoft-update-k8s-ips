@@ -191,7 +191,11 @@ hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
 test -f /etc/metalsoft && main_domain="$(grep MS_HOSTNAME /etc/metalsoft 2>/dev/null|cut -d '=' -f2)"
 test -z "$main_domain" && main_domain="$(grep cookie_domain ${MS_MANIFESTS_FOLDER}/configmaps.yaml 2>/dev/null|head -1|cut -d '"' -f2|sed 's/^\.//g')"
 test -z "$main_domain" && main_domain="$(grep 'match: Host' ${MS_MANIFESTS_FOLDER}/ingressroutes.yaml 2>/dev/null|grep -Ev 'repo\.|registry\.'|cut -d '`' -f2|head -1)"
-test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io repo.${main_domain} repo-internal.${main_domain} $main_domain" >> /etc/hosts
+if [ -n "$hn" ] && [ "$hn" != "$main_domain" ]; then
+    sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io repo.${main_domain} repo-internal.${main_domain} $main_domain" >> /etc/hosts
+else
+    test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip cluster.demo.metalsoft.io controller-demo.metalsoft.io repo.${main_domain} repo-internal.${main_domain} $main_domain" >> /etc/hosts
+fi
 
 #grep -q " \b$main_domain\b" /etc/hosts || echo "$cip $main_domain" >> /etc/hosts 2>/dev/null
 if ! grep -q "^MS_HOSTNAME=" /etc/metalsoft; then
