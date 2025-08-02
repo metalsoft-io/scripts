@@ -191,7 +191,7 @@ hn="$(hostname -f 2>/dev/null)" ||  hn="$(cat /etc/hostname)"
 test -f /etc/.ms_hostname && main_domain="$(cat /etc/.ms_hostname 2>/dev/null)"
 test -z "$main_domain" && main_domain="$(grep cookie_domain ${MS_MANIFESTS_FOLDER}/configmaps.yaml 2>/dev/null|head -1|cut -d '"' -f2|sed 's/^\.//g')"
 test -z "$main_domain" && main_domain="$(grep 'match: Host' ${MS_MANIFESTS_FOLDER}/ingressroutes.yaml 2>/dev/null|grep -Ev 'repo\.|registry\.'|cut -d '`' -f2|head -1)"
-test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io $main_domain" >> /etc/hosts
+test -n "$hn" && sed -i "/\b${hn}\b/d" /etc/hosts && echo "$cip $hn cluster.demo.metalsoft.io controller-demo.metalsoft.io repo.${main_domain} repo-internal.${main_domain} $main_domain" >> /etc/hosts
 test -n "$main_domain" && echo "$main_domain" > /etc/.ms_hostname 2>/dev/null
 grep -q " \b$main_domain\b" /etc/hosts || echo "$cip $main_domain" >> /etc/hosts 2>/dev/null
 
@@ -432,15 +432,15 @@ if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
     current_sc_ip="$(grep hostAliases: -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep ip:|cut -d'"' -f2)"
     test -z "$current_sc_ip" && current_sc_ip="$(grep SITE_CONTROLLER_IP -A1 "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" 2>/dev/null|grep value:|cut -d'"' -f2)"
 
-    if [ -n "$current_sc_ip" ];then
-        echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ms-agent-deployment.yaml"
+    if [ -n "$current_sc_ip" ] && [ "$current_sc_ip" != "$cip" ];then
+        echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${cip}${nc} in sc-ms-agent-deployment.yaml"
         # Use different delimiter for sed to handle IPv6 addresses
-        sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
+        sed -i "s|\b${current_sc_ip}\b|${cip}|g" "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml"
         kubectl -n ${ns} apply -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" >/dev/null
 
         if [ -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" ];then
-            echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${aip}${nc} in sc-ansible-runner-deployment.yaml"
-            sed -i "s|\b${current_sc_ip}\b|${aip}|g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
+            echo -e "[i] Updating SC IP from ${bold}${current_sc_ip}${nc} to ${bold}${cip}${nc} in sc-ansible-runner-deployment.yaml"
+            sed -i "s|\b${current_sc_ip}\b|${cip}|g" "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml"
             kubectl -n ${ns} apply -f "${MS_MANIFESTS_FOLDER}/sc-ansible-runner-deployment.yaml" >/dev/null
         fi
     fi
