@@ -645,6 +645,9 @@ inband_dc="  ms-agent:
       # - HTTP_PROXY=http://proxy_ip_here:3128
       # - HTTPS_PROXY=http://proxy_ip_here:3128
       # - NO_PROXY=localhost,127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16
+      # - HTTP_PORT=80
+      # - HTTPS_PORT=443
+      # - TLS_PEM_FILE=/etc/ssl/certs/ssl-cert.pem
       - TZ=Etc/UTC
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
@@ -677,7 +680,8 @@ $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
-      #- /etc/hosts:/etc/hosts:ro
+      # - /etc/hosts:/etc/hosts:ro
+      # - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/ssl-cert.pem
   nfs:
     network_mode: host
     container_name: nfs-server
