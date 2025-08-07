@@ -425,9 +425,21 @@ else
 fi
 found_dcdemo_aip="$(kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -BNe "select datacenter_config_json from datacenters where datacenter_id=1 and datacenter_name='dc-demo' and datacenter_status='active' and datacenter_hidden=0 and datacenter_is_maintenance=0"|jq -cr .controllerPolicy.subnetAllocation[0]|tr -d '\n\r'|cut -d/ -f1)"
 if [ "$found_dcdemo_aip" != "$aip" ];then
-    echo "[i] Updating dc-demo subnet allocation to $aip"
+
+    # If found_dcdemo_aip is IPv4 and last octet is 0, replace with network address (X.X.X.0)
+    replacement_aip="$aip"
+    if isIPv4 "$found_dcdemo_aip" && [[ "$found_dcdemo_aip" =~ \.0$ ]]; then
+        # Extract first 3 octets from aip and append .0
+        replacement_aip="$(echo "$aip" | cut -d. -f1-3).0"
+    elif isIPv6 "$found_dcdemo_aip"; then
+        # For IPv6, use a proper network prefix that works with /24 suffix
+        # Extract the first 24 bits (3 groups of 8 bits each) from aip
+        replacement_aip="$(echo "$aip" | cut -d: -f1-2)::"
+    fi
+    echo "[i] Updating dc-demo subnet allocation from $found_dcdemo_aip to $replacement_aip"
+
     # Use MySQL REPLACE function which handles special characters automatically
-    kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${aip}') where datacenter_name='dc-demo'"
+    kubectl -n ${ns} exec -it deploy/mysql -- mysql -A metalsoft -e "update datacenters set datacenter_config_json = REPLACE(datacenter_config_json,'${found_dcdemo_aip}','${replacement_aip}') where datacenter_name='dc-demo'"
 fi
 
 if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
