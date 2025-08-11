@@ -73,29 +73,138 @@ function update_ca_configmap ()
 		debuglog "CA certificate file not found: $ca_cert_path" fail
 		return 1
 	fi
-	
+
 	# Validate CA certificate
 	if ! openssl x509 -in "$ca_cert_path" -noout >/dev/null 2>&1; then
 		debuglog "Invalid CA certificate: $ca_cert_path" fail
 		return 1
 	fi
-	
+
 	# Get CA certificate content
 	ca_cert_content=$(cat "$ca_cert_path")
 	if [ -z "$ca_cert_content" ]; then
 		debuglog "CA certificate file is empty: $ca_cert_path" fail
 		return 1
 	fi
-	
-	# Update or create ca-pemstore ConfigMap
+
+	# Backup configmaps.yaml if it exists
+	configmaps_file="${MS_MANIFESTS_FOLDER}/configmaps.yaml"
+	if [ -f "$configmaps_file" ]; then
+		timestamp=$(date +%Y%m%d_%H%M%S)
+		backup_file="${configmaps_file}.backup_${timestamp}"
+		debuglog "Backing up configmaps.yaml to ${backup_file##*/}" info
+		cp "$configmaps_file" "$backup_file"
+
+		# Update configmaps.yaml with available tools
+		if command -v yq >/dev/null 2>&1; then
+			debuglog "Updating ca-pemstore in configmaps.yaml using yq..." info
+			# Check if ca-pemstore ConfigMap exists in the file (handle multiple documents)
+			if yq eval 'select(.metadata.name == "ca-pemstore") | .metadata.name' "$configmaps_file" 2>/dev/null | grep -q "ca-pemstore" || \
+			   yq eval '.metadata.name' "$configmaps_file" 2>/dev/null | grep -q "ca-pemstore"; then
+				# Update existing ca-pemstore ConfigMap - try different approaches based on file structure
+				escaped_content=$(echo "$ca_cert_content" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g' | sed "s/'/\\'/g")
+
+				# Try multi-document approach first
+				if yq eval '(select(.metadata.name == "ca-pemstore") | .data."metalsoft_CA.crt") = "'"$escaped_content"'"' -i "$configmaps_file" 2>/dev/null; then
+					debuglog "Updated ca-pemstore in configmaps.yaml (multi-doc)" success
+				# Try single document approach
+				elif yq eval '(.metadata.name == "ca-pemstore") and (.data."metalsoft_CA.crt" = "'"$escaped_content"'")' -i "$configmaps_file" 2>/dev/null; then
+					debuglog "Updated ca-pemstore in configmaps.yaml (single-doc)" success
+				# Try simpler approach if structure is different
+				elif yq eval '.data."metalsoft_CA.crt" = "'"$escaped_content"'"' -i "$configmaps_file" 2>/dev/null; then
+					debuglog "Updated metalsoft_CA.crt in configmaps.yaml (direct)" success
+				else
+					debuglog "Failed to update ca-pemstore in configmaps.yaml with yq" fail
+				fi
+			else
+				debuglog "ca-pemstore ConfigMap not found in configmaps.yaml, will update via kubectl only" info
+			fi
+		elif command -v jq >/dev/null 2>&1; then
+			debuglog "yq not available, trying jq for configmaps.yaml update..." info
+			# Convert YAML to JSON, update with jq, convert back to YAML
+			temp_json=$(mktemp)
+			temp_yaml=$(mktemp)
+			trap "rm -f $temp_json $temp_yaml" EXIT
+
+			# Simple YAML to JSON conversion for ConfigMaps (assumes standard YAML structure)
+			if python3 -c "import yaml, json, sys; docs=list(yaml.safe_load_all(open('$configmaps_file'))); json.dump(docs, sys.stdout)" > "$temp_json" 2>/dev/null; then
+				# Update ca-pemstore using jq - pass raw certificate content without escaping newlines
+				if jq --arg cert "$ca_cert_content" 'map(if .metadata.name == "ca-pemstore" then .data."metalsoft_CA.crt" = $cert else . end)' "$temp_json" > "${temp_json}.new" 2>/dev/null; then
+					# Convert back to YAML with proper formatting for certificates
+					if python3 -c "
+import yaml, json, sys
+docs = json.load(open('${temp_json}.new'))
+# Use block literal style for certificate data
+class MyDumper(yaml.SafeDumper):
+    def represent_str(self, data):
+        if 'BEGIN CERTIFICATE' in data:
+            return self.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+        return self.represent_scalar('tag:yaml.org,2002:str', data)
+MyDumper.add_representer(str, MyDumper.represent_str)
+yaml.dump_all(docs, sys.stdout, Dumper=MyDumper, default_flow_style=False, width=1000)
+" > "$temp_yaml" 2>/dev/null; then
+						# Check if ca-pemstore was found and updated
+						if jq -r 'map(select(.metadata.name == "ca-pemstore")) | length' "${temp_json}.new" 2>/dev/null | grep -q "1"; then
+							cp "$temp_yaml" "$configmaps_file"
+							debuglog "Updated ca-pemstore in configmaps.yaml using jq" success
+						else
+							debuglog "ca-pemstore ConfigMap not found in configmaps.yaml, will update via kubectl only" info
+						fi
+					else
+						debuglog "Failed to convert JSON back to YAML" fail
+					fi
+				else
+					debuglog "Failed to update with jq" fail
+				fi
+				rm -f "${temp_json}.new" 2>/dev/null
+			fi
+		else
+			debuglog "Neither yq nor jq available, trying bash fallback..." info
+			# Pure bash fallback when neither yq nor jq are available
+			if grep -q "name: ca-pemstore" "$configmaps_file"; then
+				debuglog "Updating ca-pemstore in configmaps.yaml using bash..." info
+				temp_yaml=$(mktemp)
+				trap "rm -f $temp_yaml" EXIT
+
+				# Use awk to update the ca.crt content
+				awk '
+				/^[[:space:]]*name: ca-pemstore/ { in_ca_pemstore = 1 }
+				/^[[:space:]]*metalsoft_CA\.crt:/ && in_ca_pemstore {
+					print "  metalsoft_CA.crt: |"
+					while ((getline cert_line < "'"$ca_cert_path"'") > 0) {
+						print "    " cert_line
+					}
+					close("'"$ca_cert_path"'")
+					in_ca_pemstore = 0
+					next
+				}
+				/^---/ || (/^[[:space:]]*[a-zA-Z]/ && !/^[[:space:]]*[[:space:]]/ && in_ca_pemstore) {
+					in_ca_pemstore = 0
+				}
+				{ print }
+				' "$configmaps_file" > "$temp_yaml"
+
+				if [ -s "$temp_yaml" ]; then
+					cp "$temp_yaml" "$configmaps_file"
+					debuglog "Updated ca-pemstore in configmaps.yaml using bash" success
+				else
+					debuglog "Failed to update ca-pemstore using bash" fail
+				fi
+			else
+				debuglog "ca-pemstore ConfigMap not found in configmaps.yaml, will update via kubectl only" info
+			fi
+		fi
+	fi
+
+	# Update or create ca-pemstore ConfigMap via kubectl
 	if $k get configmap ca-pemstore >/dev/null 2>&1; then
 		debuglog "Updating existing ca-pemstore ConfigMap with CA certificate..." info
-		$k patch configmap ca-pemstore --patch="{\"data\":{\"ca.crt\":\"$(echo "$ca_cert_content" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')\"}}" >/dev/null 2>&1
+		$k patch configmap ca-pemstore --patch="{\"data\":{\"metalsoft_CA.crt\":\"$(echo "$ca_cert_content" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')\"}}" >/dev/null 2>&1
 	else
 		debuglog "Creating ca-pemstore ConfigMap with CA certificate..." info
-		$k create configmap ca-pemstore --from-file=ca.crt="$ca_cert_path" >/dev/null 2>&1
+		$k create configmap ca-pemstore --from-file=metalsoft_CA.crt="$ca_cert_path" >/dev/null 2>&1
 	fi
-	
+
 	if [ $? -eq 0 ]; then
 		debuglog "Successfully updated ca-pemstore ConfigMap" success
 		return 0
@@ -145,13 +254,13 @@ fi
 # Validate CA certificate if provided
 if [ -n "$path_ca_ssl_crt" ]; then
 	test -r "${path_ca_ssl_crt}" || { debuglog "Error: Path to CA SSL certificate is wrong: '${path_ca_ssl_crt}'" fail; usage; exit 3; }
-	
+
 	# Validate CA certificate format
 	if ! openssl x509 -in "$path_ca_ssl_crt" -noout >/dev/null 2>&1; then
 		debuglog "Error: Invalid CA certificate format: ${path_ca_ssl_crt}" fail
 		exit 3
 	fi
-	
+
 	debuglog "CA certificate validated: ${path_ca_ssl_crt}" success
 fi
 
