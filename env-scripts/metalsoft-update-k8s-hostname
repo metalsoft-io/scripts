@@ -16,12 +16,13 @@ fi
 newhostname="$1"
 path_ssl_key="$2"
 path_ssl_crt="$3"
+path_ca_ssl_crt="$4"
 me="$(basename $0)"
 MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 
 usage ()
 {
-	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}] [${bold}path_to_ca_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
 }
 
 function isIPv6() {
@@ -64,6 +65,45 @@ function debuglog ()
 	esac
 	echo -e "${mtypeis} ${!color}${msg}${nc}"
 }
+
+function update_ca_configmap ()
+{
+	ca_cert_path="$1"
+	if [ ! -f "$ca_cert_path" ]; then
+		debuglog "CA certificate file not found: $ca_cert_path" fail
+		return 1
+	fi
+	
+	# Validate CA certificate
+	if ! openssl x509 -in "$ca_cert_path" -noout >/dev/null 2>&1; then
+		debuglog "Invalid CA certificate: $ca_cert_path" fail
+		return 1
+	fi
+	
+	# Get CA certificate content
+	ca_cert_content=$(cat "$ca_cert_path")
+	if [ -z "$ca_cert_content" ]; then
+		debuglog "CA certificate file is empty: $ca_cert_path" fail
+		return 1
+	fi
+	
+	# Update or create ca-pemstore ConfigMap
+	if $k get configmap ca-pemstore >/dev/null 2>&1; then
+		debuglog "Updating existing ca-pemstore ConfigMap with CA certificate..." info
+		$k patch configmap ca-pemstore --patch="{\"data\":{\"ca.crt\":\"$(echo "$ca_cert_content" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')\"}}" >/dev/null 2>&1
+	else
+		debuglog "Creating ca-pemstore ConfigMap with CA certificate..." info
+		$k create configmap ca-pemstore --from-file=ca.crt="$ca_cert_path" >/dev/null 2>&1
+	fi
+	
+	if [ $? -eq 0 ]; then
+		debuglog "Successfully updated ca-pemstore ConfigMap" success
+		return 0
+	else
+		debuglog "Failed to update ca-pemstore ConfigMap" fail
+		return 1
+	fi
+}
 if ! [ -n "$newhostname" -a "$(echo -n "$newhostname"|wc -c)" -ge 5 -a "$(echo -n "$newhostname"|grep '\.'|wc -l)" -ge 1 ];then usage; exit 1;fi
 
 test -f /etc/metalsoft && source /etc/metalsoft || touch /etc/metalsoft
@@ -101,6 +141,20 @@ fi
 
 
 #test -n "$3" || { debuglog "Error: Not all required parameters were proivided" fail; usage; exit 1; }
+
+# Validate CA certificate if provided
+if [ -n "$path_ca_ssl_crt" ]; then
+	test -r "${path_ca_ssl_crt}" || { debuglog "Error: Path to CA SSL certificate is wrong: '${path_ca_ssl_crt}'" fail; usage; exit 3; }
+	
+	# Validate CA certificate format
+	if ! openssl x509 -in "$path_ca_ssl_crt" -noout >/dev/null 2>&1; then
+		debuglog "Error: Invalid CA certificate format: ${path_ca_ssl_crt}" fail
+		exit 3
+	fi
+	
+	debuglog "CA certificate validated: ${path_ca_ssl_crt}" success
+fi
+
 if [ -n "$path_ssl_key" ];then
 	test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
 	test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
@@ -353,6 +407,25 @@ fi
 	else
 		# Fallback to direct secret modification if secrets.yaml doesn't exist
 		$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+	fi
+
+	# Update CA ConfigMap before applying manifests
+	# debuglog "CA ConfigMap check: path_ca_ssl_crt='$path_ca_ssl_crt', arg2='$2', arg3='$3'" info
+	if [ -n "$path_ca_ssl_crt" ]; then
+		# CA certificate provided as parameter
+		debuglog "Updating ca-pemstore ConfigMap with provided CA certificate..." info
+		update_ca_configmap "$path_ca_ssl_crt"
+	elif [ -z "$2" ] && [ -z "$3" ]; then
+		# No SSL parameters provided as arguments, check for local CA
+		debuglog "No SSL args provided, checking for local CA at /etc/.ms_ca.crt" info
+		if [ -f "/etc/.ms_ca.crt" ]; then
+			debuglog "Updating ca-pemstore ConfigMap with local CA certificate..." info
+			update_ca_configmap "/etc/.ms_ca.crt"
+		else
+			debuglog "No CA certificate found to update ConfigMap" info yellow
+		fi
+	else
+		debuglog "SSL parameters were provided, skipping CA ConfigMap update" info
 	fi
 
 	test -z "$SKIP_APPLY_M" && find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
