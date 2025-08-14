@@ -182,21 +182,52 @@ function check_remote_conn {
   [ -n "$4" ] && local comment="$4 "
   [ "$protocol" = "icmp" ] && local port=icmp
 
-  echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}: "
+  echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}... "
+
+  # Start spinner animation in background
+  local __spinner_pid
+  local __spinner_chars='/-\|'
+  {
+    local i=0
+    while true; do
+      printf "\b%s" "${__spinner_chars:$((i % 4)):1}"
+      sleep 0.1
+      i=$((i + 1))
+    done
+  } &
+  __spinner_pid=$!
 
   # For HTTPS (port 443), use hostname directly without IP resolution
   if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
-    curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    echo -e "$res"
-    return
+    if curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1; then
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightgreen}success${nc}"
+      return 0
+    else
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightred}failure${nc}"
+      return 1
+    fi
   elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
-    curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    echo -e "$res"
-    return
+    if curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1; then
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightgreen}success${nc}"
+      return 0
+    else
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightred}failure${nc}"
+      return 1
+    fi
   elif [ "$protocol" = "icmp" ]; then
-    ping -c1 "$ip" >/dev/null 2>&1 && res="${lightgreen}success${nc}" || res="${lightred}failure${nc}"
-    echo -e "$res"
-    return
+    if ping -c1 "$ip" >/dev/null 2>&1; then
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightgreen}success${nc}"
+      return 0
+    else
+      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      echo -e "${lightred}failure${nc}"
+      return 1
+    fi
   fi
 
   # For other protocols, resolve to IP
@@ -212,22 +243,43 @@ function check_remote_conn {
       ;;
   esac
 
-  [ -z "$ip" ] && echo -e "${lightred}Error: not resolved${nc}" && return
+  if [ -z "$ip" ]; then
+    kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+    echo -e "${lightred}Error: not resolved${nc}"
+    return 1
+  fi
 
+  local success_count=0
+  local total_count=0
   res=""
   for ip in $ip; do
+    total_count=$((total_count + 1))
     if [ "$protocol" = "tcp" ]; then
-      (echo >/dev/tcp/"$ip"/"$port") >/dev/null 2>&1 && res+="${lightgreen}$ip=success${nc} " || res+="${lightred}$ip=failure${nc} "
+      if (echo >/dev/tcp/"$ip"/"$port") >/dev/null 2>&1; then
+        res+="${lightgreen}$ip=success${nc} "
+        success_count=$((success_count + 1))
+      else
+        res+="${lightred}$ip=failure${nc} "
+      fi
     else
-      (echo >/dev/udp/"$ip"/"$port") >/dev/null 2>&1 && res+="${lightgreen}$ip=success${nc} " || res+="${lightred}$ip=failure${nc} "
+      if (echo >/dev/udp/"$ip"/"$port") >/dev/null 2>&1; then
+        res+="${lightgreen}$ip=success${nc} "
+        success_count=$((success_count + 1))
+      else
+        res+="${lightred}$ip=failure${nc} "
+      fi
     fi
   done
+  kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
   echo -e "${res% }"
+
+  # Return success only if all connections succeeded
+  [ "$success_count" -eq "$total_count" ] && return 0 || return 1
 }
 
 check_remote_conn repo.metalsoft.io 80 tcp
-check_remote_conn download.docker.com 443 tcp
-check_remote_conn ${REG_HOST} 443 tcp
+#check_remote_conn download.docker.com 443 tcp
+check_remote_conn ${REG_HOST} 443 tcp || REG_HOST_CONN_FAILED=1
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
@@ -988,7 +1040,7 @@ dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yam
 debuglog "Starting $DOCKERBIN containers"
 if [ "$DOCKERBIN" == "docker" ];then
   systemctl enable -q --now docker.service
-  until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done && echo
+  until docker ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for docker service to start.. \033[0K\r";done #&& echo
   else
   systemctl enable -q --now podman
   systemctl enable -q --now podman.socket
@@ -1017,7 +1069,6 @@ EOF
   # until ${DOCKERBIN}-compose ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for $DOCKERBIN service to start.. \033[0K\r";done && echo
 fi
 
-debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
 mkdir -p "${HOME}/.docker"
 if [ -n "${REGISTRY_LOGIN}" ]; then
     # Check if REGISTRY_LOGIN is valid base64
@@ -1028,6 +1079,8 @@ if [ -n "${REGISTRY_LOGIN}" ]; then
     fi
 fi
 
+if [ -z "$REG_HOST_CONN_FAILED" ];then
+debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
 $DOCKERBIN login ${REG_HOST}
 
 while [ $? -ne 0 ]; do
@@ -1035,6 +1088,7 @@ while [ $? -ne 0 ]; do
   $DOCKERBIN login ${REG_HOST}
   sleep 1
 done
+
 
 debuglog "stopping any running $DOCKERBIN containers.." info lightred
 $DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
@@ -1047,6 +1101,10 @@ if [ "$DOCKERBIN" == "docker" ];then
 else
   ${DOCKERBIN}-compose pull
   ${DOCKERBIN}-compose up -d
+fi
+
+else
+  debuglog "Registry connection to ${REG_HOST} failed, skipping docker login and image pull" info yellow
 fi
 
 if [ -f /etc/ssh/ms_banner ];then
@@ -1070,7 +1128,7 @@ if [ "$found_os" == "debian" ];then
     # redundancy, also the only dependenscy that needs jq and yamltojson
     test -z "$nameservers" && nameservers="$(yamltojson $netplan_file 2>/dev/null | jq .network.ethernets 2>/dev/null | jq -r '.[].nameservers | .addresses' 2>/dev/null | jq -sr 'flatten(1) | join(" ")' 2>/dev/null)"
     for nameserver in $nameservers; do
-      debuglog "nameserver ${yellow}$nameserver${nc}"
+      debuglog "netplan nameserver ${yellow}$nameserver${nc}"
       if [[ "$nameserver" != "$(grep $nameserver /etc/resolv.conf | cut -d" " -f2)" ]];then
         echo "nameserver $nameserver" >> /etc/resolv.conf
         RESOLVCONFCHANGED="YES"
@@ -1081,7 +1139,7 @@ else #if rhel
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
   nameservers="$(nmcli d show $interface_name 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
   test -n "$nameservers" && for nameserver in $nameservers; do
-  debuglog "nameserver ${yellow}$nameserver${nc}"
+  debuglog "nmcli nameserver ${yellow}$nameserver${nc}"
   if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
     echo "nameserver $nameserver" >> /etc/resolv.conf
     RESOLVCONFCHANGED="YES"
