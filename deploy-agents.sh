@@ -103,7 +103,7 @@ if verlt $IMAGES_TAG v7.0.0; then
 PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
 MONITORING_SERVICE_PORT=8099
 fi
-mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
