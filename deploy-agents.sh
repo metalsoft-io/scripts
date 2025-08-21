@@ -639,6 +639,7 @@ done
 # Initialize ansible variables
 ansible_runner=""
 ms_agent_ansible_runner_mounts=""
+ms_agent_ansible_runner_volumes=""
 
 # Conditionally define ansible-runner service and ms-agent mounts
 if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
@@ -677,6 +678,9 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+"
+        ms_agent_ansible_runner_volumes="
+      - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
 "
     fi
 fi
@@ -732,6 +736,7 @@ $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
       - /etc/ssl/certs:/etc/ssl/certs
+$ms_agent_ansible_runner_volumes
       # - /etc/hosts:/etc/hosts:ro
       # - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/ssl-cert.pem
   nfs:
