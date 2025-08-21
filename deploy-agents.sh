@@ -728,6 +728,17 @@ inband_dc="  ms-agent:
       - SYSLOG=${ENVVAR_SYSLOG:-disabled}
       - SPICE=${ENVVAR_SPICE:-disabled}
       - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
+
+#  pdns-auth-recursor:
+#    container_name: pdns-auth-recursor
+#    network_mode: host
+#    hostname: pdns-auth-recursor
+#    image: registry.metalsoft.dev/sc/sc-pdns-auth-recursor:${IMAGES_TAG}
+#    restart: always
+#    environment:
+#      - TZ=Etc/UTC
+#    volumes:
+#      - /opt/metalsoft/pdns:/appdata
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
