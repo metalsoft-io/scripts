@@ -733,7 +733,7 @@ inband_dc="  ms-agent:
 #    container_name: pdns-auth-recursor
 #    network_mode: host
 #    hostname: pdns-auth-recursor
-#    image: registry.metalsoft.dev/sc/sc-pdns-auth-recursor:${IMAGES_TAG}
+#    image: registry.metalsoft.dev/sc/sc-pdns-auth-recursor:main
 #    restart: always
 #    environment:
 #      - TZ=Etc/UTC
