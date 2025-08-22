@@ -151,6 +151,8 @@ done
 	$k get pod -A --no-headers|grep -vw Running|while read pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> ${backupFolder}/k8s_pods_not_running.txt || true
 }
 
+command -v iptables &>/dev/null && iptables -t filter -vxnL > ${backupFolder}/iptables.txt || true
+
 if [ "$gather" == 'gc' ];then
 	envnamelabel="-${envname}-gc"
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
