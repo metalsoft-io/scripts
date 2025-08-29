@@ -14,15 +14,28 @@ if [ "$(echo "$cip" | wc -m)" -le 3 ]; then
 fi
 
 newhostname="$1"
-path_ssl_key="$2"
-path_ssl_crt="$3"
-path_ca_ssl_crt="$4"
+# Convert relative paths to absolute paths for SSL files
+if [ -n "$2" ]; then
+	path_ssl_key="$(realpath "$2" 2>/dev/null || echo "$2")"
+else
+	path_ssl_key="$2"
+fi
+if [ -n "$3" ]; then
+	path_ssl_crt="$(realpath "$3" 2>/dev/null || echo "$3")"
+else
+	path_ssl_crt="$3"
+fi
+if [ -n "$4" ]; then
+	path_ca_ssl_crt="$(realpath "$4" 2>/dev/null || echo "$4")"
+else
+	path_ca_ssl_crt="$4"
+fi
 me="$(basename $0)"
 MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 
 usage ()
 {
-	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}] [${bold}path_to_ca_ssl_crt.pem${nc}]\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}] [${bold}path_to_ca_ssl_crt.pem${nc}]\n${lightred}Note: All certificate files must be in PEM format${nc}\n\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt (must decode to PEM format)\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests\n"
 }
 
 function isIPv6() {
@@ -261,6 +274,11 @@ if [ -n "$path_ca_ssl_crt" ]; then
 		exit 3
 	fi
 
+	if ! grep -q "-----BEGIN CERTIFICATE-----" "$path_ca_ssl_crt" || ! grep -q "-----END CERTIFICATE-----" "$path_ca_ssl_crt"; then
+		debuglog "Error: CA certificate not in PEM format: ${path_ca_ssl_crt}" fail
+		exit 3
+	fi
+
 	debuglog "CA certificate validated: ${path_ca_ssl_crt}" success
 fi
 
@@ -295,6 +313,11 @@ if [ -n "$path_ssl_key" ];then
 
 	if ! openssl x509 -in "$path_ssl_crt" -noout >/dev/null 2>&1; then
 		echo -e "${lightred}✘ CRT: $path_ssl_crt = Invalid certificate${nc}"
+		exit 1
+	fi
+
+	if ! grep -q "-----BEGIN CERTIFICATE-----" "$path_ssl_crt" || ! grep -q "-----END CERTIFICATE-----" "$path_ssl_crt"; then
+		echo -e "${lightred}✘ CRT: $path_ssl_crt = Not in PEM format${nc}"
 		exit 1
 	fi
 
