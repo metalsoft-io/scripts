@@ -274,7 +274,7 @@ if [ -n "$path_ca_ssl_crt" ]; then
 		exit 3
 	fi
 
-	if ! grep -q "-----BEGIN CERTIFICATE-----" "$path_ca_ssl_crt" || ! grep -q "-----END CERTIFICATE-----" "$path_ca_ssl_crt"; then
+	if ! grep -q "\-\-\-\-\-BEGIN CERTIFICATE\-\-\-\-\-" "$path_ca_ssl_crt" || ! grep -q "\-\-\-\-\-END CERTIFICATE\-\-\-\-\-" "$path_ca_ssl_crt"; then
 		debuglog "Error: CA certificate not in PEM format: ${path_ca_ssl_crt}" fail
 		exit 3
 	fi
@@ -315,8 +315,7 @@ if [ -n "$path_ssl_key" ];then
 		echo -e "${lightred}✘ CRT: $path_ssl_crt = Invalid certificate${nc}"
 		exit 1
 	fi
-
-	if ! grep -q "-----BEGIN CERTIFICATE-----" "$path_ssl_crt" || ! grep -q "-----END CERTIFICATE-----" "$path_ssl_crt"; then
+	if ! grep -q "\-\-\-\-\-BEGIN CERTIFICATE\-\-\-\-\-" "$path_ssl_crt" || ! grep -q "\-\-\-\-\-END CERTIFICATE\-\-\-\-\-" "$path_ssl_crt"; then
 		echo -e "${lightred}✘ CRT: $path_ssl_crt = Not in PEM format${nc}"
 		exit 1
 	fi
