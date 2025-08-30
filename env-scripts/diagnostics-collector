@@ -95,7 +95,7 @@ mkdir -p ${backupFolder} || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could 
 cat /etc/environment 2>/dev/null > ${backupFolder}/etc_environment
 env > ${backupFolder}/env
 test -f /etc/metalsoft && cp /etc/metalsoft ${backupFolder}/etc_metalsoft 2>/dev/null
-env|grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy && echo -ne "${nc}"
+env | grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy && echo -ne "${nc}"
 
 function get_disks ()
 {
@@ -228,11 +228,12 @@ if [ "$gather" == 'gc' ];then
       fi
     fi
 
+	mkdir -p ${backupFolder}/couchdb
 	echo "[i] backing up couchdb: [${couchdbUrl}]"
-	if ! $curl_no_proxy curl -sS http://${couchdbUrl}/_all_dbs|jq -rce . &>/dev/null; then
+	if ! $curl_no_proxy curl -sS http://${couchdbUrl}/_all_dbs | jq -rce . &>/dev/null; then
 		echo "CouchDB: $curl_no_proxy http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > ${backupFolder}/couchdb/couchdb_pull_failed
 	fi
-	test -n "$couchdbUrl" && mkdir -p ${backupFolder}/couchdb && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/couchdb/couchdb_backup_${z}.gz;done || true
+	test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/couchdb/couchdb_backup_${z}.gz;done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
 	$k -n $envname get pod --no-headers|awk '{print $1}'|while read z;do $k -n $envname logs $z > ${backupFolder}/logs_pod_${z} 2>&1; $k -n $envname describe pod $z >  ${backupFolder}/describe_pod_${z} 2>&1;done
