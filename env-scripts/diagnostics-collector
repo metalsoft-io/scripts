@@ -217,8 +217,8 @@ if [ "$gather" == 'gc' ];then
 	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
 	#backup all couchdb DBs:
 	couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
-	test -n "$HTTP_PROXY" && test -n "$couchdbUrl" && curl_no_proxy="env NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
-	test -n "$http_proxy" && test -n "$couchdbUrl" && curl_no_proxy="env no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
+	test -n "$HTTP_PROXY" && test -n "$couchdbUrl" && curl_no_proxy="NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
+	test -n "$http_proxy" && test -n "$couchdbUrl" && curl_no_proxy="no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 
     if [ "$($curl_no_proxy curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
       couchdb_admin_user="$($k -n $envname get configmap common -o json|jq -r .data.couchdb_admin_user)"
