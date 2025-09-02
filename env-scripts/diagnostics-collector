@@ -121,22 +121,24 @@ function get_disks ()
 
 function get_k8s ()
 {
-	echo -e "\n:: kubectl get node -o wide\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get node -o wide 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get pod -A\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get pod -A -o wide 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get svc -A\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get svc -A 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get deploy -A -o wide\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get deploy -A -o wide 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get pv -A\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get pv -A 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get pvc -A\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get pvc -A 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl get ipaddresspool -A\n" >> "${backupFolder}/k8s_stats.txt"
-	$k get ipaddresspool -A 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
-	echo -e "\n:: kubectl -n metallb-system get pods\n" >> "${backupFolder}/k8s_stats.txt"
-	kubectl -n metallb-system get pods >> "${backupFolder}/k8s_stats.txt" || true
+	{
+		echo -e "\n:: kubectl get node -o wide\n"
+		$k get node -o wide 2>&1 || true
+		echo -e "\n:: kubectl get pod -A\n"
+		$k get pod -A -o wide 2>&1 || true
+		echo -e "\n:: kubectl get svc -A\n"
+		$k get svc -A 2>&1 || true
+		echo -e "\n:: kubectl get deploy -A -o wide\n"
+		$k get deploy -A -o wide 2>&1 || true
+		echo -e "\n:: kubectl get pv -A\n"
+		$k get pv -A 2>&1 || true
+		echo -e "\n:: kubectl get pvc -A\n"
+		$k get pvc -A 2>&1 || true
+		echo -e "\n:: kubectl get ipaddresspool -A\n"
+		$k get ipaddresspool -A 2>&1 || true
+		echo -e "\n:: kubectl -n metallb-system get pods\n"
+		$k -n metallb-system get pods 2>&1 || true
+	} >> "${backupFolder}/k8s_stats.txt"
 
 	kubectl -n metallb-system get pods --no-headers | awk '$3 != "Running" {print $1}' | while read -r pod
 do
@@ -144,9 +146,9 @@ do
 	kubectl -n metallb-system logs "$pod" >> "${backupFolder}/k8s_stats.txt" 2>&1 || true
 done
 
-	$k -n "$envname" get ingressroute --no-headers|awk '{print $1}'|while read -r z;do $k -n "$envname" get ingressroute "$z" -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
-	$k -n "$envname" get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k -n "$envname" get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
-	$k -n "$envname" get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k -n "$envname" get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
+	$k get ingressroute --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroute "$z" -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
+	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
+	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
 
 	$k get pod -A --no-headers|grep -vw Running|while read -r pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> "${backupFolder}/k8s_pods_not_running.txt" || true
 }
@@ -156,22 +158,27 @@ command -v iptables &>/dev/null && iptables -t filter -vxnL > "${backupFolder}/i
 if [ "$gather" == 'gc' ];then
 	envnamelabel="-${envname}-gc"
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
-	test -z "$envname" && envname=$($k get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-gc"
+	# Store original k for operations that don't need namespace
+	k_orig="$k"
+	test -z "$envname" && envname=$($k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-gc"
 	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
+	
+	# Update k to include namespace
+	k="$k -n $envname"
 
 	# TODO: in cases where env is not found, we should still collect info on what went wrong
-	if ! $k get ns|grep -q "$envname" ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k get ns;exit 1;fi
+	if ! $k_orig get ns|grep -q "$envname" ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k_orig get ns;exit 1;fi
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
 	get_disks
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
 		echo "[i] checking disk latency [100mb temp file] .."
 		echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disks_stats.txt"
-		$k -n "$envname" exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
+		$k exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
 		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disks_stats.txt"
-		$k -n "$envname" exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
+		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
 		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disks_stats.txt"
-		$k -n "$envname" exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
+		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
 	else
 		echo "[-] Skipping disk latency check"
 		echo "############ disk latency check skipped" >> "${backupFolder}/disks_stats.txt"
@@ -183,46 +190,46 @@ if [ "$gather" == 'gc' ];then
 		echo "[i] backing up mysql databases.."
 		#backup all mysql DBs:
 		mysqldump_opts='--skip-comments'
-		all_dbs="$($k -n "$envname" exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+		all_dbs="$($k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read -r z;do
 			if [ "$z" == "mysql" ];then
-				$k -n "$envname" exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
+				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
 			else
-				$k -n "$envname" exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
+				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
 			fi
 		done <<< "$all_dbs"
 	fi
 
 	echo "[i] backing up mysql locks.."
 	# get information_schema.innodb_trx
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'show global variables\G' &> "${backupFolder}/mysql/mysql_show_global_variables" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'show session variables\G' &> "${backupFolder}/mysql/mysql_show_session_variables" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> "${backupFolder}/mysql/mysql_information_schema.innodb_trx" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> "${backupFolder}/mysql/mysql_performance_schema.data_locks" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' &> "${backupFolder}/mysql/mysql_database_version" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' &> "${backupFolder}/mysql/mysql_database_size" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_events_latest" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log" || true
-	$k -n "$envname" exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue" || true
+	$k exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
+	$k exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
+	$k exec deploy/mysql -- mysql -Ae 'show global variables\G' &> "${backupFolder}/mysql/mysql_show_global_variables" || true
+	$k exec deploy/mysql -- mysql -Ae 'show session variables\G' &> "${backupFolder}/mysql/mysql_show_session_variables" || true
+	$k exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> "${backupFolder}/mysql/mysql_information_schema.innodb_trx" || true
+	$k exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> "${backupFolder}/mysql/mysql_performance_schema.data_locks" || true
+	$k exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' &> "${backupFolder}/mysql/mysql_database_version" || true
+	$k exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' &> "${backupFolder}/mysql/mysql_database_size" || true
+	$k exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_events_latest" || true
+	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history" || true
+	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log" || true
+	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue" || true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
-	timeout 180 $k -n "$envname" exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
+	timeout 180 $k exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
 	mysqldump_exitcode="$?"
 	test $mysqldump_exitcode -ne "0" && mysqldump_exitcode_error="${lightred}[mysqldump failed with exit code $mysqldump_exitcode]${nc}"
 	mysql_end="$SECONDS"
 	mysql_elapsed=$((mysql_end-mysql_start))
 	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
 	#backup all couchdb DBs:
-	couchdbUrl="$($k -n "$envname" get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
+	couchdbUrl="$($k get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
 	test -n "$HTTP_PROXY" && test -n "$couchdbUrl" && curl_no_proxy="NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 	test -n "$http_proxy" && test -n "$couchdbUrl" && curl_no_proxy="no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 
     if [ "$($curl_no_proxy curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
-      couchdb_admin_user="$($k -n "$envname" get configmap common -o json|jq -r .data.couchdb_admin_user)"
-      couchdb_admin_password="$($k -n "$envname" get configmap common -o json|jq -r .data.couchdb_admin_password)"
+      couchdb_admin_user="$($k get configmap common -o json|jq -r .data.couchdb_admin_user)"
+      couchdb_admin_password="$($k get configmap common -o json|jq -r .data.couchdb_admin_password)"
       if [ -n "$couchdb_admin_user" ] && [ -n "$couchdb_admin_password" ];then
         couchdbUrl="${couchdb_admin_user}:${couchdb_admin_password}@${couchdbUrl}"
       fi
@@ -236,25 +243,25 @@ if [ "$gather" == 'gc' ];then
 	test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz";done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
-	$k -n "$envname" get pod --no-headers|awk '{print $1}'|while read -r z;do $k -n "$envname" logs "$z" > "${backupFolder}/logs_pod_${z}" 2>&1; $k -n "$envname" describe pod "$z" >  "${backupFolder}/describe_pod_${z}" 2>&1;done
-	$k -n "$envname" exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/logs_pod_bsi_supervisorctl_status_all" 2>&1
+	$k get pod --no-headers|awk '{print $1}'|while read -r z;do $k logs "$z" > "${backupFolder}/logs_pod_${z}" 2>&1; $k describe pod "$z" >  "${backupFolder}/describe_pod_${z}" 2>&1;done
+	$k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/logs_pod_bsi_supervisorctl_status_all" 2>&1
 	mkdir -p "${backupFolder}/k8s_pod_bsi_varlog"
-	bsipod="$($k -n "$envname" get pod --no-headers|grep ^bsi|awk '{print $1}')"
+	bsipod="$($k get pod --no-headers|grep ^bsi|awk '{print $1}')"
 	test -n "$bsipod" && while read -r bsi;do
 	if [ -z "$sqlUpgradeLogs" ];then
-		varlogs="$($k -n "$envname" exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
+		varlogs="$($k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
 	else
-		varlogs="$($k -n "$envname" exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
+		varlogs="$($k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
 	fi
 
-	test -n "$varlogs" && while read -r z;do $k -n "$envname" cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
+	test -n "$varlogs" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
 
-	varlogsbsi="$($k -n "$envname" exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
-	test -n "$varlogsbsi" && while read -r z;do $k -n "$envname" cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
+	varlogsbsi="$($k exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
+	test -n "$varlogsbsi" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
 done <<< "$bsipod"
 
-$k -n "$envname" get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k -n "$envname" get secret "$z" -o yaml;done > "${backupFolder}/k8s_secrets"
-$k -n "$envname" get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k -n "$envname" get cm "$z" -o yaml;done > "${backupFolder}/k8s_configmaps"
+$k get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get secret "$z" -o yaml;done > "${backupFolder}/k8s_secrets"
+$k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get cm "$z" -o yaml;done > "${backupFolder}/k8s_configmaps"
 
 if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s resources.."
