@@ -461,7 +461,7 @@ if [ -f "${MS_MANIFESTS_FOLDER}/sc-ms-agent-deployment.yaml" ];then
     fi
 fi
 
-test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen}Navigate to: https://${hn}/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
+test ${ec} -eq 0 && echo -e "\n[\e[1;32m✓\e[0m] ${lightgreen}Navigate to: https://${main_domain}/${nc} \nIf you get connection reset errors, you can rerun the script with same parameters:\n${me} $@\n" || echo -e "\n[\e[1;31m✗\e[0m][${ec}]${lightred}Some errors were seen. Please rerun this script again, once all pods have started:\n${me} $@ ${nc}\n"
 
 echo
 echo "[i] Helm releases:"
