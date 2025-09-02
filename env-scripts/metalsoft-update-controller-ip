@@ -11,11 +11,11 @@ lightred=$(tput setaf 9)
 lightgreen=$(tput setaf 10)
 
 #check if file is old
-mage=$(stat -c%Y $(realpath $0))
+mage=$(stat -c%Y "$(realpath "$0")")
 myage=${mage:-0}
-age="$(( $(date +%s) - $myage ))"
+age="$(( $(date +%s) - myage ))"
 consider_old=$(( 60 * 60 * 24 * 4 ))
-test $age -gt $consider_old && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
+test "$age" -gt "$consider_old" && echo "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
 
 if [ "$EUID" -ne 0 ];then
         echo -e "[\e[1;31m✗\e[0m] Please run as root"
@@ -41,7 +41,7 @@ fi
 aip="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
 
-if [ -z $1 ];then
+if [ -z "$1" ];then
         echo Please provide the new Controller IP [ and_optional_proxy_host ]
         echo example: $(basename $0) 10.0.0.2 [ http://1.2.3.4:3128/ ]
         echo
@@ -54,21 +54,21 @@ if [ -z $1 ];then
 fi
 ip=$1
 test -z "$ip" && exit 1
-echo new Controller IP: $ip
+echo new Controller IP: "$ip"
 
 test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
 
 if [ -n "$2" ];then
         proxy_url="$2"
-        echo setting up proxy via $proxy_url
+        echo "setting up proxy via $proxy_url"
 
         mkdir -p /etc/systemd/system/docker.service.d
 
-        lip="$(echo $ip|cut -d. -f1-3)"
+        lip="$(echo "$ip"|cut -d. -f1-3)"
 
         local_ips="$(ip -o -4 a|grep -v "$lip"|awk '{print $4}'|xargs |sed 's/ /,/g')"
         no_proxy="localhost,::1,.demo.metalsoft.io,$local_ips"
-        echo no_proxy line = $no_proxy
+        echo "no_proxy line = $no_proxy"
 
         env_file="/etc/environment"
 
@@ -83,21 +83,25 @@ if [ -n "$2" ];then
                 sed -i "/^NO_PROXY=/cNO_PROXY=\"$no_proxy\"" $env_file
         else
 
-                echo "http_proxy=\"$proxy_url\"" >> $env_file
-                echo "https_proxy=\"$proxy_url\"" >> $env_file
-                echo "no_proxy=\"$no_proxy\"" >> $env_file
+                {
+                        echo "http_proxy=\"$proxy_url\""
+                        echo "https_proxy=\"$proxy_url\""
+                        echo "no_proxy=\"$no_proxy\""
 
-                echo "HTTP_PROXY=\"$proxy_url\"" >> $env_file
-                echo "HTTPS_PROXY=\"$proxy_url\"" >> $env_file
-                echo "NO_PROXY=\"$no_proxy\"" >> $env_file
+                        echo "HTTP_PROXY=\"$proxy_url\""
+                        echo "HTTPS_PROXY=\"$proxy_url\""
+                        echo "NO_PROXY=\"$no_proxy\""
+                } >> "$env_file"
 
         fi
 
         docker_env_file="/etc/systemd/system/docker.service.d/http-proxy.conf"
-        echo "[Service]" > $docker_env_file
-        echo "Environment=\"HTTP_PROXY=$proxy_url\"" >> $docker_env_file
-        echo "Environment=\"HTTPS_PROXY=$proxy_url\"" >> $docker_env_file
-        echo "Environment=\"NO_PROXY=$no_proxy\"" >> $docker_env_file
+        echo "[Service]" > "$docker_env_file"
+        {
+            echo "Environment=\"HTTP_PROXY=$proxy_url\""
+            echo "Environment=\"HTTPS_PROXY=$proxy_url\""
+            echo "Environment=\"NO_PROXY=$no_proxy\""
+        } >> "$docker_env_file"
 
         systemctl daemon-reload
         systemctl restart docker
@@ -106,15 +110,15 @@ fi
 
 sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
 if [ -n "$DCURL" ];then
-        echo Reconfiguring URL=${DCURL}
+        echo "Reconfiguring URL=${DCURL}"
         sed -i "s,\(- URL=\).*,\1${DCURL},g" /opt/metalsoft/agents/docker-compose.yaml
 fi
 if [ -n "$DATACENTERS_SECRET" ];then
-        echo Reconfiguring DATACENTERS_SECRET=${DATACENTERS_SECRET}
+        echo "Reconfiguring DATACENTERS_SECRET=${DATACENTERS_SECRET}"
         sed -i "s/\(- DATACENTERS_SECRET\)=.*/\1=${DATACENTERS_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
 fi
 if [ -n "$SSL_PULL_URL" ];then
-        echo Reconfiguring SSL_PULL_URL=${SSL_PULL_URL}
+        echo "Reconfiguring SSL_PULL_URL=${SSL_PULL_URL}"
         test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" > /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && cp -f /root/agents-ssl.pem.tmp /opt/metalsoft/agents/ssl-cert.pem && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate or not a valid PEM certificate"; }
 fi
 
