@@ -50,7 +50,7 @@ function set_dhcp()
 {
         setnic=${1:-$discovered_nic}
         echo -e "[i] Setting Interface: ${lightgreen}$setnic${nc} to DHCP mode."
-        netplan set ethernets.${setnic}.dhcp4=true
+        netplan set "ethernets.${setnic}.dhcp4=true"
         netplan apply && echo -e "[\e[1;32m✓\e[0m] Netplan updated" || echo -e "[\e[1;31m✗\e[0m] Netplan update failed"
         exit 0
 }
@@ -60,7 +60,7 @@ function calculate_gw()
         _gwip="$1"
         IP=${_gwip%%/*}
         PREFIX=${_gwip##*/}
-        IFS=. read -r i1 i2 i3 i4 <<< $IP
+        IFS=. read -r i1 i2 i3 i4 <<< "$IP"
         IFS=. read -r xx m1 m2 m3 m4 <<< $(for a in $(seq 1 32); do if [ $(((a - 1) % 8)) -eq 0 ]; then echo -n .; fi; if [ $a -le $PREFIX ]; then echo -n 1; else echo -n 0; fi; done)
         gw="$(printf "%d.%d.%d.%d\n" "$((i1 & (2#$m1)))" "$((i2 & (2#$m2)))" "$((i3 & (2#$m3)))" "$(((i4 & (2#$m4)) + 1))")"
 }
@@ -83,8 +83,7 @@ function set_static()
         else
                 echo -e "[\e[1;31m✗\e[0m] ${lightred} Error: Cannot set static IP as not all parameters are specified correctly${nc}"
                 usage
-                exit 1
         fi
 }
-test "$dhcp" == 'true' && set_dhcp $nic && exit 0
+test "$dhcp" == 'true' && set_dhcp "$nic" && exit 0
 test "$dhcp" != 'true' && set_static && exit 0
