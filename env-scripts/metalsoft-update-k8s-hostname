@@ -8,7 +8,7 @@ fi
 
 if ! type jq > /dev/null 2>&1;then echo Error: Please install package: jq; exit 1;fi
 test -z "$cip" && cip="$(ip r get 1 2>/dev/null | head -1 | awk '{print $7}')"
-if [ "$(echo "$cip" | wc -m)" -le 3 ]; then
+if [ "${#cip}" -le 3 ]; then
     # Try IPv6 if IPv4 fails
     cip="$(ip -6 r get 2001:db8::1 2>/dev/null | head -1 | awk '{print $11}')"
 fi
@@ -30,7 +30,7 @@ if [ -n "$4" ]; then
 else
 	path_ca_ssl_crt="$4"
 fi
-me="$(basename $0)"
+me="$(basename "$0")"
 MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 
 usage ()
@@ -266,7 +266,7 @@ fi
 
 # Validate CA certificate if provided
 if [ -n "$path_ca_ssl_crt" ]; then
-	test -r "${path_ca_ssl_crt}" || { debuglog "Error: Path to CA SSL certificate is wrong: '${path_ca_ssl_crt}'" fail; usage; exit 3; }
+	test -r "${path_ca_ssl_crt}" || { debuglog "Error: Path to CA SSL certificate is wrong: '${path_ca_ssl_crt}'" fail; exit 3; }
 
 	# Validate CA certificate format
 	if ! openssl x509 -in "$path_ca_ssl_crt" -noout >/dev/null 2>&1; then
@@ -283,8 +283,8 @@ if [ -n "$path_ca_ssl_crt" ]; then
 fi
 
 if [ -n "$path_ssl_key" ];then
-	test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; usage; exit 3; }
-	test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; usage; exit 3; }
+	test -r "${path_ssl_key}" || { debuglog "Error: Path to SSL key is wrong: '${path_ssl_key}'" fail; exit 3; }
+	test -r "${path_ssl_crt}" || { debuglog "Error: Path to SSL crt is wrong: '${path_ssl_crt}'" fail; exit 3; }
 
 	# test KEY file and crt file
 	key_header=$(head -n 1 "$path_ssl_key")
@@ -449,10 +449,10 @@ fi
 
 test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debuglog "Error: ${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml not found! Not updating traefik" fail; exit 3; }
 
-ns="$(kubectl get ns --no-headers|grep $namespace|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
+ns="$(kubectl get ns --no-headers|grep "$namespace"|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
 k="kubectl -n ${ns} "
 ingresstraefik80="$($k get ingressroute| grep ingress-traefik-port80|head -1|awk '{print $1}')" || { echo "Error: Ingress for traefik port80 not found"; exit 1; }
-hostname="$($k get ingressroute -o json ${ingresstraefik80}|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
+hostname="$($k get ingressroute -o json "${ingresstraefik80}"|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
 
 debuglog "Hostname: ${hostname} => ${newhostname}" info
 debuglog "Waiting on Mysql pod.."
@@ -465,7 +465,7 @@ debuglog "Waiting on CouchDB pod.."
 until [ "$($k get pod --no-headers|grep 'couchdb-'|grep -v '\bRunning\b'|wc -l)" -eq "0" ];do sleep 5;echo -n .; done
 couchdbIP="$($k get svc|grep couchdb|awk '{print $3}')"
 couchdbPort="$($k get svc|grep couchdb|awk '{print $5}'|sed 's/ /:/g'|cut -d/ -f1)"
-if isIPv6 $cip;then
+if isIPv6 "$cip";then
 couchdbUrl="\[${couchdbIP}\]:${couchdbPort}"
 else
 couchdbUrl="${couchdbIP}:${couchdbPort}"
@@ -481,18 +481,16 @@ fi
 
 debuglog "Updating CouchDB: [${couchdbUrl}]"
 if [ -f "${MS_MANIFESTS_FOLDER}/config-deployment.yaml" ];then
-	curl -sH "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi > bsi_export && \
-		#cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+	curl -sH "Content-Type: application/json" "http://${couchdbUrl}/config-microservice/bsi"	 > bsi_export && \
 		cat bsi_export|jq --arg newhost "${newhostname}" '.cookieDomain = "."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-		curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
-		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/config-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
+		curl -sX PUT -H "Content-Type: application/json" "http://${couchdbUrl}/config-microservice/bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+		check_cookieDomain=$(curl -s -H "Content-Type: application/json" "http://${couchdbUrl}/config-microservice/bsi" 2>/dev/null | jq -r .cookieDomain)
 
 		else
-			curl -sH "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi > bsi_export && \
-				#cat bsi_export|jq --arg newhost "${newhostname}" '.DNS.dns_domain_root = $newhost | .DNS.primary_name_server = "ns1." + $newhost | .DNS.in_addr_domains_ns_record_subdomains = ["ns3." + $newhost,"ns4." + $newhost] | .BSIAdminURLRoot = "https://"+$newhost+"/cloudv1/" | .couchbaseCacheServer.bucketName = "api."+$newhost+"_cache" | .cookieDomain = "."+$newhost | .whiteLabel.production_franchise_application_hostname = "api."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
+			curl -sH "Content-Type: application/json" "http://${couchdbUrl}/orchestrator-microservice/bsi" > bsi_export && \
 				cat bsi_export|jq --arg newhost "${newhostname}" ' .cookieDomain = "."+$newhost | .mailClient.strSubjectPrefix = "["+$newhost+"]"' > bsi_export_modified && \
-				curl -sX PUT -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/"bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
-		check_cookieDomain=$(curl -s -H "Content-Type: application/json" http://${couchdbUrl}/orchestrator-microservice/bsi 2>/dev/null | jq -r .cookieDomain)
+				curl -sX PUT -H "Content-Type: application/json" "http://${couchdbUrl}/orchestrator-microservice/bsi" -d @bsi_export_modified >/dev/null && rm -f bsi_export_modified bsi_export
+		check_cookieDomain=$(curl -s -H "Content-Type: application/json" "http://${couchdbUrl}/orchestrator-microservice/bsi" 2>/dev/null | jq -r .cookieDomain)
 
 fi
 		if [ -n "$check_cookieDomain" ];then
@@ -514,7 +512,7 @@ fi
 
 	debuglog "Updating manifests.."
 	hostnameSed="$(echo "$hostname"|sed -r 's/\./\\./g')" && \
-	grep "$hostname" *.yaml -l|while read z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
+	grep "$hostname" ./*.yaml -l|while read -r z;do sed -i "s/$hostnameSed/$newhostname/g" "$z";done
 	#$k apply -f . >/dev/null
 
 	# fix search/replace above when newhostname is an IP address (repo hostAliases points to the public IP)
@@ -537,7 +535,7 @@ fi
 		#$k apply -f "${MS_MANIFESTS_FOLDER}/secrets.yaml" >/dev/null
 	else
 		# Fallback to direct secret modification if secrets.yaml doesn't exist
-		$k get secret ${ns}-ssl -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
+		$k get secret "${ns}-ssl" -o json|jq --arg key "$b64_ssl_key" --arg crt "$b64_ssl_crt" '.data."tls.key"=$key | .data."tls.crt"=$crt' | $k apply -f - >/dev/null
 	fi
 
 	# Update CA ConfigMap before applying manifests
@@ -559,7 +557,7 @@ fi
 		debuglog "SSL parameters were provided, skipping CA ConfigMap update" info
 	fi
 
-	test -z "$SKIP_APPLY_M" && find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read z;do
+	test -z "$SKIP_APPLY_M" && find "${MS_MANIFESTS_FOLDER}" -maxdepth 1 -type f \( -name "*.yaml" ! -name traefik-helm-chart-configvalues.yaml \) -size +1|while read -r z;do
 	echo -ne "  - applying manifest: $z ... \033[0K\r";
 	$k apply -f "$z" >/dev/null;done
 	echo -ne "\033[0K\r"
@@ -573,24 +571,24 @@ fi
 		sed -Ei "s/^(\s+)loadBalancerIP: \".*\"/\1loadBalancerIP: \"${cip}\"/g" ./traefik-helm-chart-configvalues.yaml
 		if [ -d "${MS_MANIFESTS_FOLDER}/traefik-helmchart" ];then
 			echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik-helmchart"
-			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-			helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n ${ns}
+			helm uninstall "traefik-${ns}" -n "${ns}" >/dev/null 2>&1
+			helm upgrade --install "traefik-${ns}" "${MS_MANIFESTS_FOLDER}/traefik-helmchart" --values traefik-helm-chart-configvalues.yaml -n "${ns}"
 		elif [ -d "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" ];then
 			echo "[i] Using local ${MS_MANIFESTS_FOLDER}/traefik_charts/traefik"
-			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-			helm upgrade --install traefik-${ns} "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n ${ns} --version 20.8.0
+			helm uninstall "traefik-${ns}" -n "${ns}" >/dev/null 2>&1
+			helm upgrade --install "traefik-${ns}" "${MS_MANIFESTS_FOLDER}/traefik_charts/traefik" --values traefik-helm-chart-configvalues.yaml -n "${ns}" --version 20.8.0
 		else
 			helm repo add traefik https://helm.traefik.io/traefik >/dev/null || { echo "Error: Unable to add helm repo traefik"; }
 			helm repo update >/dev/null || { echo "Error: Unable to update helm repo"; }
-			helm uninstall traefik-${ns} -n ${ns} >/dev/null 2>&1
-			helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null || { helm uninstall traefik-${ns} traefik/traefik -n ${ns} >/dev/null 2>&1 && helm upgrade --install traefik-${ns} traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n ${ns} >/dev/null; }
+			helm uninstall "traefik-${ns}" -n "${ns}" >/dev/null 2>&1
+			helm upgrade --install "traefik-${ns}" traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n "${ns}" >/dev/null || { helm uninstall "traefik-${ns}" traefik/traefik -n "${ns}" >/dev/null 2>&1 && helm upgrade --install "traefik-${ns}" traefik/traefik --values "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" -n "${ns}" >/dev/null; }
 		fi
 	fi
 
 for pod in license bsi;do
-	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read z;do debuglog "Restarting pod ${pod}.."; $k rollout restart deploy/${pod} >/dev/null 2>&1;done
+	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read -r z;do debuglog "Restarting pod ${pod}.."; $k rollout restart "deploy/${pod}" >/dev/null 2>&1;done
 done
-findSslSubject="$($k get secret ${ns}-ssl -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout 2>/dev/null|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
+findSslSubject="$($k get secret "${ns}-ssl" -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout 2>/dev/null|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
 test -n "${findSslSubject}" && debuglog "SSL from secret '${ns}-ssl' is: ${pink}${findSslSubject}${nc}"
 
 
