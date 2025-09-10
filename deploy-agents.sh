@@ -657,6 +657,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
 #       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
 #     volumes:
 #       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+#       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
 "
     else
         #debuglog "ANSIBLE_RUNNER capability enabled" info green
@@ -673,6 +674,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
     volumes:
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+      - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
 "
         ms_agent_ansible_runner_mounts="
       - ANSIBLE_RUNNER=enabled
@@ -681,6 +683,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
 "
         ms_agent_ansible_runner_volumes="
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
+      - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
 "
     fi
 fi
