@@ -81,7 +81,7 @@ fi
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 test -z "$envname" && test "$gather" == 'gc' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
-backupFolder=${backupFolder}/${thedate}_${envname}_${gather}
+backupFolder=${backupFolder}/${thedate}_${envname}__${gather}
 
 function finish {
 	echo "[i] cleaning up.."
@@ -156,11 +156,27 @@ done
 command -v iptables &>/dev/null && iptables -t filter -vxnL > "${backupFolder}/iptables.txt" || true
 
 if [ "$gather" == 'gc' ];then
-	envnamelabel="-${envname}-gc"
+	# Extract hostname from configuration files
+	config_hostname=""
+	if [ -f /root/manifests/configmaps.yaml ]; then
+		config_hostname="$(grep -oP 'cookie_domain: "\.\K.*[^"]' /root/manifests/configmaps.yaml 2>/dev/null | head -1)"
+	fi
+	if [ -z "$config_hostname" ] && [ -f /root/manifests/ingressroutes.yaml ]; then
+		config_hostname="$(grep replacement: /root/manifests/ingressroutes.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
+	fi
+	
+	# Use extracted hostname if available, otherwise fall back to envname
+	if [ -n "$config_hostname" ]; then
+		envnamelabel="-${envname}-${config_hostname}-gc"
+	else
+		envnamelabel="-${envname}-gc"
+	fi
+    test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}-/")"
+	
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
 	# Store original k for operations that don't need namespace
 	k_orig="$k"
-	test -z "$envname" && envname=$($k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && envnamelabel="-${envname}-gc"
+	test -z "$envname" && envname=$($k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && test -z "$config_hostname" && envnamelabel="-${envname}-gc"
 	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
 	
 	# Update k to include namespace
@@ -274,7 +290,27 @@ fi
 
 else # if gather=sc
 	envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
-	envnamelabel="-${envname}-sc"
+	
+	# Extract hostname from docker-compose.yaml
+	config_hostname=""
+	if [ -f /opt/metalsoft/agents/docker-compose.yaml ]; then
+		config_hostname="$(grep CONTROLLER_WS_URI= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
+		if [ -z "$config_hostname" ]; then
+			config_hostname="$(grep CONTROLLER_REMOTE_CONSOLE_URI= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
+		fi
+		if [ -z "$config_hostname" ]; then
+			config_hostname="$(grep CONTROLLER_TCP_ADDRESS= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d= -f2 | cut -d: -f1 | head -1)"
+		fi
+	fi
+	
+	# Use extracted hostname if available, otherwise fall back to envname
+	if [ -n "$config_hostname" ]; then
+		envnamelabel="${envname}-${config_hostname}-sc"
+	else
+		envnamelabel="-${envname}-sc"
+	fi
+	test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}/")"
+
 	echo "[i] backing up disk stats.."
 	get_disks
 
@@ -306,7 +342,8 @@ fi
 echo "[i] creating an archive.."
 test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log_${thedate}.txt" &>/dev/null
 resultFilename="${originalBackupFolder}/ms-diagnostics-${thedate}${envnamelabel}.tar.gz"
-tar czf "${resultFilename}" -C "$(dirname "${backupFolder%*/}")" "${backupFolder##*/}" >/dev/null 2>&1 && \
+mv "${backupFolder}" "${newbackupFolder}"
+tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackupFolder##*/}" >/dev/null 2>&1 && \
 	rm -rf "$backupFolder" && \
 	filesize="$(du -h "${resultFilename}" | awk '{print $1}')"
 	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}" || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
