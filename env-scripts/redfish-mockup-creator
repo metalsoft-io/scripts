@@ -1,0 +1,54 @@
+#!/bin/bash
+image_name="registry.metalsoft.dev/hub_docker_com/dmtf/redfish-mockup-creator"
+if ! docker ps > /dev/null 2>&1;then
+    echo "Docker is not running"
+    exit 1
+fi
+
+if docker ps | grep -q "redfish-mockup-creator";then
+    echo "Redfish mockup creator is already running"
+    exit 1
+fi
+
+#check if image is present
+if ! docker images | grep -q "$image_name";then
+    echo "Image $image_name is not present. trying to pull it..."
+    docker pull $image_name
+    if ! docker images | grep -q "$image_name";then
+        echo "Image $image_name is not present. Exiting..."
+        exit 1
+    fi
+fi
+
+usage() {
+    echo "Usage: $0 -r <redfish_host> -u <username> -p <password> -f <folder> -h <help> -a '<other_redfish-mockup-creator_args>'"
+    exit 1
+}
+
+while getopts "r:u:p:f:a:h" o; do
+    case "${o}" in
+        r) redfish_host=${OPTARG};;
+        u) username=${OPTARG};;
+        p) password=${OPTARG};;
+        f) folder=${OPTARG};;
+        a) other_args="${other_args} ${OPTARG}";; # other_redfish-mockup-creator_args
+        :) echo "Error: -${OPTARG} requires an argument." && exit 1;;
+        *) echo "Unknown argument: ${OPTARG}" && usage;;
+        h) usage;;
+    esac
+done
+shift $((OPTIND-1))
+other_args=${other_args:-$*}
+#echo "other_args: $other_args"
+
+f=${folder:-$(pwd)/mockup_$(date +%Y%m%d%H%M%S)_${redfish_host}}
+
+if [ -z "$redfish_host" ] || [ -z "$username" ] || [ -z "$password" ] || [ -z "$f" ];then
+    usage
+fi
+
+echo "[+]Executing:"
+echo "docker run --rm --name redfish-mockup-creator -v "$f:/mockup" $image_name -S --rhost "$redfish_host" --user "$username" --password "$password" "$other_args""
+
+docker rm -f redfish-mockup-creator > /dev/null 2>&1
+docker run --rm --name redfish-mockup-creator -v "$f:/mockup" $image_name -S --rhost "$redfish_host" --user "$username" --password "$password" "$other_args"
