@@ -81,7 +81,7 @@ fi
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 test -z "$envname" && test "$gather" == 'gc' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 originalBackupFolder=${backupFolder}
-backupFolder=${backupFolder}/${thedate}_${envname}__${gather}
+backupFolder=${backupFolder}/ms-diagnostics-${thedate}_${envname}__${gather}
 
 function finish {
 	echo "[i] cleaning up.."
@@ -325,8 +325,8 @@ else # if gather=sc
 	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p "${backupFolder}/docker-agents-logs" && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read -r z;do echo "$z"|while read -r f;do find "$f" -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} "${backupFolder}/docker-agents-logs/" \;;done;done
 	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p "${backupFolder}/docker-logs" && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do docker logs "${z%%.*}" > "${backupFolder}/docker-logs/${z}.log" 2>&1;done
 	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null 2>&1 > "${backupFolder}/ssl_to_gc_debug_443.txt"
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:9091" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null 2>&1 > "${backupFolder}/ssl_to_gc_debug_9091.txt"
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl_to_gc_debug_443.txt" 2>&1
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:9091" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl_to_gc_debug_9091.txt" 2>&1
 	ls -laR /etc/ssl/certs/ &> "${backupFolder}/ssl_ls_etc_ssl_certs.txt" || true
 	test -d /etc/pki/tls/certs/ && ls -laR /etc/pki/tls/certs/ &> "${backupFolder}/ssl_ls_etc_pki_tls_certs.txt" || true
 	test -d /etc/pki/ca-trust/source/anchors/ && ls -laR /etc/pki/ca-trust/source/anchors/ &> "${backupFolder}/ssl_ls_etc_pki_ca_trust_source_anchors.txt" || true
@@ -335,7 +335,7 @@ else # if gather=sc
 	test -d /etc/ssl/certs/ && tar czf "${backupFolder}/ssl_etc_ssl_certs.tar.gz" /etc/ssl/certs/ &>/dev/null
 	test -d /opt/metalsoft/ansible-jobs && tar czf "${backupFolder}/ansible-jobs.tar.gz" /opt/metalsoft/ansible-jobs &>/dev/null
 	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && cp /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem "${backupFolder}/ssl_cp_redhat_tls_ca_bundle.pem" || true
-	\ls /etc/pki/ca-trust/source/anchors/|while read -r z;do echo ":::: $z";openssl x509 -noout -subject -in "/etc/pki/ca-trust/source/anchors/$z";done > "${backupFolder}/ssl_redhat_etc_pki_ca_trust_source_anchors_subjects.txt" || true
+	test -d /etc/pki/ca-trust/source/anchors/ && \ls /etc/pki/ca-trust/source/anchors/|while read -r z;do echo ":::: $z";openssl x509 -noout -subject -in "/etc/pki/ca-trust/source/anchors/$z";done > "${backupFolder}/ssl_redhat_etc_pki_ca_trust_source_anchors_subjects.txt" || true
 	test -f /etc/ssl/certs/ca-certificates.crt && cp /etc/ssl/certs/ca-certificates.crt "${backupFolder}/ssl_cp_debian_ca_certificates.crt" || true
 fi
 
