@@ -6,7 +6,7 @@ if ! docker ps > /dev/null 2>&1;then
 fi
 
 if docker ps | grep -q "redfish-mockup-creator";then
-    echo "Redfish mockup creator is already running"
+    echo "Redfish-mockup-creator is already running"
     exit 1
 fi
 
@@ -32,9 +32,9 @@ while getopts "r:u:p:f:a:h" o; do
         p) password=${OPTARG};;
         f) folder=${OPTARG};;
         a) other_args="${other_args} ${OPTARG}";; # other_redfish-mockup-creator_args
+        h) usage;;
         :) echo "Error: -${OPTARG} requires an argument." && exit 1;;
         *) echo "Unknown argument: ${OPTARG}" && usage;;
-        h) usage;;
     esac
 done
 shift $((OPTIND-1))
@@ -48,7 +48,8 @@ if [ -z "$redfish_host" ] || [ -z "$username" ] || [ -z "$password" ] || [ -z "$
 fi
 
 echo "[+]Executing:"
-echo "docker run --rm --name redfish-mockup-creator -v "$f:/mockup" $image_name -S --rhost "$redfish_host" --user "$username" --password "$password" "$other_args""
+echo "docker run --rm --name redfish-mockup-creator -v "$f:/mockup" $image_name -S --rhost $redfish_host --user $username --password $password $other_args"
 
 docker rm -f redfish-mockup-creator > /dev/null 2>&1
 docker run --rm --name redfish-mockup-creator -v "$f:/mockup" $image_name -S --rhost "$redfish_host" --user "$username" --password "$password" "$other_args"
+test -d "$f" && echo "[+] Creating archive of $f..." && { tar czf "$f.tar.gz" "$f" 2>/dev/null && rm -rf "$f" || echo "[!] Error: Unable to create archive of $f"; }
