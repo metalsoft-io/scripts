@@ -838,7 +838,7 @@ other_services="
 #    container_name: pdns-auth-recursor
 #    network_mode: host
 #    hostname: pdns-auth-recursor
-#    image: registry.metalsoft.dev/sc/sc-pdns-auth-recursor:main
+#    image: ${REG_HOST}/sc/sc-pdns-auth-recursor:main
 #    restart: always
 #    environment:
 #      - TZ=Etc/UTC
