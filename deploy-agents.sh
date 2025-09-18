@@ -50,19 +50,19 @@ testOS ()
     if [ "$found_os" == "rhel" ]; then
       command -v yum > /dev/null && os_packager=yum
       command -v dnf > /dev/null && os_packager=dnf
-      if echo $ID|grep -qoP '(rocky|almalinux)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^8\.9|^9\.3)"; then
+      if echo "$ID"|grep -qoP '(rocky|almalinux)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^8\.9|^9\.3)"; then
         found_os_ver="rocky"
-        test -n $os_packager && os_supported=1
-      elif echo $ID|grep -qoP '(rhel|centos)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^9)"; then
+        test -n "$os_packager" && os_supported=1
+      elif echo "$ID"|grep -qoP '(rhel|centos)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(^9)"; then
         found_os_ver="rhel9"
-        test -n $os_packager && os_supported=1
+        test -n "$os_packager" && os_supported=1
       fi
     elif [ "$found_os" == "debian" ]; then
       command -v apt > /dev/null && os_packager=apt
       command -v apt-get > /dev/null && os_packager=apt-get
-      if echo $ID|grep -qoP '(ubuntu)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(20\.04|22\.04)"; then
+      if echo "$ID"|grep -qoP '(ubuntu)' && echo "$VERSION_ID"|grep -Po '\d+\.\d+'|grep -Pq "(20\.04|22\.04)"; then
         found_os_ver="ubuntuLTS"
-        test -n $os_packager && os_supported=1
+        test -n "$os_packager" && os_supported=1
       fi
     fi
     _all="$ID $VERSION_ID $found_os $os_packager"
@@ -77,7 +77,7 @@ testOS ()
     exit 2
   fi
 }
-read NAME VERSION_ID found_os os_packager < <(testOS)
+read -r NAME VERSION_ID found_os os_packager < <(testOS)
 
 DOCKERBIN='docker'
 test "$USEPODMAN" == "1" && DOCKERBIN='podman'
@@ -128,7 +128,7 @@ fi
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
 
 # Env vars set via CLI:
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
 CLI_DCCONF="$DCCONF"
 fi
 CLI_DATACENTERNAME="$DATACENTERNAME"
@@ -161,7 +161,7 @@ if [ -z "$MAINIP" ] && command -v getent >/dev/null 2>&1 && command -v hostname 
   MAINIP="$(getent ahosts "$(hostname)" 2>/dev/null | awk '/STREAM/ {print $1; exit}')"
 fi
 
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 else
 test -n "$SSL_HOSTNAME" || { echo -e "${lightred}Error: SSL_HOSTNAME not set${nc}" >&2; exit 11; }
@@ -199,7 +199,7 @@ function check_remote_conn {
 
   # For HTTPS (port 443), use hostname directly without IP resolution
   if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
-    if curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1; then
+    if curl -sk --connect-timeout 10 --max-time 11 "$curl_s_proxy" "https://$ip" >/dev/null 2>&1; then
       kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
       echo -e "${lightgreen}success${nc}"
       return 0
@@ -209,7 +209,7 @@ function check_remote_conn {
       return 1
     fi
   elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
-    if curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1; then
+    if curl -sk --connect-timeout 10 --max-time 11 "$curl_proxy" "http://$ip" >/dev/null 2>&1; then
       kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
       echo -e "${lightgreen}success${nc}"
       return 0
@@ -279,13 +279,13 @@ function check_remote_conn {
 
 check_remote_conn repo.metalsoft.io 80 tcp
 #check_remote_conn download.docker.com 443 tcp
-check_remote_conn ${REG_HOST} 443 tcp || REG_HOST_CONN_FAILED=1
+check_remote_conn "${REG_HOST}" 443 tcp || REG_HOST_CONN_FAILED=1
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
-  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 $curl_s_proxy "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
+  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "$curl_s_proxy" "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
   test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
   test -z "${ssl}" && debuglog "Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
@@ -339,23 +339,23 @@ dvVIE0i3gwt0+qhni75EgUbufGrVlO5aC1BK
 ENDD
 
 debuglog "Ensuring Metalsoft CA is installed"
-test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
+test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL "$curl_s_proxy" https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
 test "$found_os" == "debian" && test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates >/dev/null
 
-test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
+test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL "$curl_s_proxy" https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
 test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && cp /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-trust extract >/dev/null
 
 debuglog "Checking for other custom CAs"
 if [ "$found_os" == "debian" ];then
   if [[ -n "$CUSTOM_CA" ]]; then
-    echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /usr/local/share/ca-certificates/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /usr/local/share/ca-certificates/${CUSTOM_CA}
-    cp /usr/local/share/ca-certificates/${CUSTOM_CA} /etc/ssl/certs/
+    echo "${CUSTOM_CA_CERT}" | base64 -d| gunzip -c 2>/dev/null > "/usr/local/share/ca-certificates/${CUSTOM_CA}" || echo "${CUSTOM_CA_CERT}" | base64 -d > "/usr/local/share/ca-certificates/${CUSTOM_CA}"
+    cp "/usr/local/share/ca-certificates/${CUSTOM_CA}" /etc/ssl/certs/
     update-ca-certificates >/dev/null
   fi
 else # if rhel
   if [[ -n "$CUSTOM_CA" ]]; then
-    echo ${CUSTOM_CA_CERT} | base64 -d| gunzip -c 2>/dev/null > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} || echo ${CUSTOM_CA_CERT} | base64 -d > /etc/pki/ca-trust/source/anchors/${CUSTOM_CA}
-    cp /etc/pki/ca-trust/source/anchors/${CUSTOM_CA} /etc/ssl/certs/
+    echo "${CUSTOM_CA_CERT}" | base64 -d| gunzip -c 2>/dev/null > "/etc/pki/ca-trust/source/anchors/${CUSTOM_CA}" || echo "${CUSTOM_CA_CERT}" | base64 -d > "/etc/pki/ca-trust/source/anchors/${CUSTOM_CA}"
+    cp "/etc/pki/ca-trust/source/anchors/${CUSTOM_CA}" /etc/ssl/certs/
     restorecon -R /etc/ssl/certs/
     restorecon -R /etc/pki/ca-trust/source/anchors/
     # https://stackoverflow.com/a/31334443/2291328
@@ -381,7 +381,7 @@ done
 
 if ! command -v yq >/dev/null; then
   # Get latest yq version from GitHub API
-  YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+  YQ_VERSION=$(curl -sSL "$curl_s_proxy" https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
   # Fallback to known working version if API call fails
   YQ_VERSION="${YQ_VERSION:-v4.45.4}"
 
@@ -395,12 +395,12 @@ if ! command -v yq >/dev/null; then
   YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
   if ! command -v yq >/dev/null; then
     debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
-    curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
+    curl -sSL "$curl_s_proxy" -o /usr/local/bin/yq "${YQ_URL}"
     chmod +x /usr/local/bin/yq
   fi
 fi
 
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
 debuglog "Checking DCONF"
 if [ -z "$DCCONF" ];then
   echo
@@ -413,8 +413,8 @@ if [ -z "$DCCONF" ];then
   echo
   exit 0
 fi
-debuglog "Pulling DC config URL: $(echo $DCCONF|cut -d/ -f1,2,3)"
-  DCCONFDOWNLOADED="$(curl -skL $curl_s_proxy --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
+debuglog "Pulling DC config URL: $(echo "$DCCONF"|cut -d/ -f1,2,3)"
+  DCCONFDOWNLOADED="$(curl -skL "$curl_s_proxy" --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
 fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
@@ -527,8 +527,8 @@ if [ "$found_os" == "debian" ];then
           command -v podman > /dev/null || { debuglog "Install podman" && \
             $os_packager update -qq && \
             $os_packager install -y curl podman python3-dotenv >/dev/null && \
-            curl $curl_proxy -sSO http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
-            curl $curl_s_proxy -sSo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+            curl "$curl_proxy" -sSO http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
+            curl "$curl_s_proxy" -sSo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
   fi
 else # if rhel
   if [ "$DOCKERBIN" == "docker" ];then
@@ -545,7 +545,7 @@ debuglog "Checking if '$DOCKERBIN compose' is available"
 if [ "$DOCKERBIN" == "docker" ];then
   docker compose &>/dev/null || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
 else
-  podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl $curl_s_proxy -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+  podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl "$curl_s_proxy" -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
 fi
 
 debuglog "Checking provided SSL"
@@ -559,12 +559,12 @@ if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
 fi
 
 if [ -z "$SSL_HOSTNAME" ];then
-  read -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
+  read -r -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
   SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
   debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
 fi
 
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
   debuglog "Setting DATACENTERNAME"
   DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
   test -z "$DATACENTERNAME" && command -v yq &>/dev/null && DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | yq -p json .currentDatacenter 2>/dev/null|grep -v '\bnull\b')"
@@ -591,6 +591,7 @@ declare -a CAPABILITIES=(
     "SYSLOG"
     "DHCP_OOB"
     "ANSIBLE_RUNNER"
+    "HTTP_REQUEST"
 )
 
 # Default values for non-ACAP variables
@@ -622,7 +623,7 @@ for CAP in "${CAPABILITIES[@]}"; do
 done
 
  # Defaults for v6.x
-  if verlt $IMAGES_TAG v7.0.0; then
+  if verlt "$IMAGES_TAG" v7.0.0; then
     export ENVVAR_OOB_HTTP_PROXY=enabled
     export ENVVAR_FILE_TRANSFER=enabled
     export ENVVAR_SWITCH_SUBSCRIPTION=enabled
@@ -634,6 +635,7 @@ done
     export ENVVAR_INBAND_FILE_TRANSFER=disabled
     export ENVVAR_NETCONF=enabled
     export ENVVAR_DHCP_OOB=disabled
+    export ENVVAR_HTTP_REQUEST=disabled
   fi
 
 # Initialize ansible variables
@@ -643,7 +645,7 @@ ms_agent_ansible_runner_volumes=""
 
 # Conditionally define ansible-runner service and ms-agent mounts
 if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
-    if verlt $IMAGES_TAG v6.4; then
+    if verlt "$IMAGES_TAG" v6.4; then
         ansible_runner="#  ansible-runner:
 #     container_name: ansible-runner
 #     network_mode: host
@@ -735,6 +737,7 @@ inband_dc="  ms-agent:
       - SYSLOG=${ENVVAR_SYSLOG:-disabled}
       - SPICE=${ENVVAR_SPICE:-disabled}
       - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
+      - HTTP_REQUEST=${ENVVAR_HTTP_REQUEST:-disabled}
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
@@ -842,7 +845,7 @@ other_services="
 #    volumes:
 #      - /opt/metalsoft/pdns:/appdata
 "
-if ! verlt $IMAGES_TAG v7.0.0; then
+if ! verlt "$IMAGES_TAG" v7.0.0; then
   non_inband_dc=''
 fi
 
@@ -857,7 +860,7 @@ $non_inband_dc
 $other_services
 ENDD
 
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
 debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
 cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
 global
@@ -972,7 +975,7 @@ fi
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml
 
-        if verlt $IMAGES_TAG v7.0; then
+        if verlt "$IMAGES_TAG" v7.0; then
           test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
           test -n "${CLI_DATACENTERNAME}" && sed -iE "s/^([[:space:]]*hostname: agents-)([^[:space:]]+)(-[[:alnum:]_]+)/\\\\1${CLI_DATACENTERNAME}\\\\3/g" /opt/metalsoft/agents/docker-compose.yaml
 
@@ -1057,7 +1060,7 @@ sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/a
           fi
           fi
 
-dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" $HOME/.bashrc;then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> $HOME/.bashrc && source $HOME/.bashrc;fi
+dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" "$HOME/.bashrc";then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> "$HOME/.bashrc" && source "$HOME/.bashrc";fi
 
 debuglog "Starting $DOCKERBIN containers"
 if [ "$DOCKERBIN" == "docker" ];then
@@ -1103,11 +1106,11 @@ fi
 
 if [ -z "$REG_HOST_CONN_FAILED" ];then
 debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
-$DOCKERBIN login ${REG_HOST}
+$DOCKERBIN login "${REG_HOST}"
 
 while [ $? -ne 0 ]; do
   debuglog "Lets try again: $DOCKERBIN login ${REG_HOST}:"
-  $DOCKERBIN login ${REG_HOST}
+  $DOCKERBIN login "${REG_HOST}"
   sleep 1
 done
 
@@ -1148,10 +1151,10 @@ if [ "$found_os" == "debian" ];then
   find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
     nameservers=$(yq e '.network.ethernets[].nameservers.addresses[]' "$netplan_file" 2>/dev/null)
     # redundancy, also the only dependenscy that needs jq and yamltojson
-    test -z "$nameservers" && nameservers="$(yamltojson $netplan_file 2>/dev/null | jq .network.ethernets 2>/dev/null | jq -r '.[].nameservers | .addresses' 2>/dev/null | jq -sr 'flatten(1) | join(" ")' 2>/dev/null)"
+    test -z "$nameservers" && nameservers="$(yamltojson "$netplan_file" 2>/dev/null | jq .network.ethernets 2>/dev/null | jq -r '.[].nameservers | .addresses' 2>/dev/null | jq -sr 'flatten(1) | join(" ")' 2>/dev/null)"
     for nameserver in $nameservers; do
       debuglog "netplan nameserver ${yellow}$nameserver${nc}"
-      if [[ "$nameserver" != "$(grep $nameserver /etc/resolv.conf | cut -d" " -f2)" ]];then
+      if [[ "$nameserver" != "$(grep "$nameserver" /etc/resolv.conf | cut -d" " -f2)" ]];then
         echo "nameserver $nameserver" >> /etc/resolv.conf
         RESOLVCONFCHANGED="YES"
       fi
@@ -1159,10 +1162,10 @@ if [ "$found_os" == "debian" ];then
   done
 else #if rhel
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
-  nameservers="$(nmcli d show $interface_name 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
+  nameservers="$(nmcli d show "$interface_name" 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
   test -n "$nameservers" && for nameserver in $nameservers; do
   debuglog "nmcli nameserver ${yellow}$nameserver${nc}"
-  if [[ $nameserver != $(grep $nameserver /etc/resolv.conf | cut -d" " -f2) ]];then
+  if [[ $nameserver != $(grep "$nameserver" /etc/resolv.conf | cut -d" " -f2) ]];then
     echo "nameserver $nameserver" >> /etc/resolv.conf
     RESOLVCONFCHANGED="YES"
   fi
@@ -1190,10 +1193,10 @@ fi
 
 
 debuglog "Pulling discovery ISO"
-if verlt $IMAGES_TAG v7.0.0; then
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
+if verlt "$IMAGES_TAG" v7.0.0; then
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl "$curl_s_proxy" -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
 else
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl "$curl_s_proxy" -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
 fi
 
 sleep 2
