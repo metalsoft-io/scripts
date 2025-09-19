@@ -199,7 +199,7 @@ function check_remote_conn {
 
   # For HTTPS (port 443), use hostname directly without IP resolution
   if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
-    if curl -sk --connect-timeout 10 --max-time 11 "$curl_s_proxy" "https://$ip" >/dev/null 2>&1; then
+    if curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1; then
       kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
       echo -e "${lightgreen}success${nc}"
       return 0
@@ -209,7 +209,7 @@ function check_remote_conn {
       return 1
     fi
   elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
-    if curl -sk --connect-timeout 10 --max-time 11 "$curl_proxy" "http://$ip" >/dev/null 2>&1; then
+    if curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1; then
       kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
       echo -e "${lightgreen}success${nc}"
       return 0
@@ -285,7 +285,7 @@ test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
 function manageSSL
 {
-  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "$curl_s_proxy" "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
+  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 $curl_s_proxy "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
   test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
   test -z "${ssl}" && debuglog "Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
   if [ -r "$ssl" ];then
@@ -339,10 +339,10 @@ dvVIE0i3gwt0+qhni75EgUbufGrVlO5aC1BK
 ENDD
 
 debuglog "Ensuring Metalsoft CA is installed"
-test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL "$curl_s_proxy" https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
+test "$found_os" == "debian" && test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /usr/local/share/ca-certificates/metalsoft_ca.crt
 test "$found_os" == "debian" && test ! -f /etc/ssl/certs/metalsoft_ca.crt && cp /usr/local/share/ca-certificates/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-certificates >/dev/null
 
-test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL "$curl_s_proxy" https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
+test "$found_os" == "rhel" && test ! -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && curl -skL $curl_s_proxy https://repo.metalsoft.io/.tftp/metalsoft_ca.crt -o /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt
 test "$found_os" == "rhel" && test -f /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt && cp /etc/pki/ca-trust/source/anchors/metalsoft_ca.crt /etc/ssl/certs/ && update-ca-trust extract >/dev/null
 
 debuglog "Checking for other custom CAs"
@@ -381,7 +381,7 @@ done
 
 if ! command -v yq >/dev/null; then
   # Get latest yq version from GitHub API
-  YQ_VERSION=$(curl -sSL "$curl_s_proxy" https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+  YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
   # Fallback to known working version if API call fails
   YQ_VERSION="${YQ_VERSION:-v4.45.4}"
 
@@ -395,7 +395,7 @@ if ! command -v yq >/dev/null; then
   YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
   if ! command -v yq >/dev/null; then
     debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
-    curl -sSL "$curl_s_proxy" -o /usr/local/bin/yq "${YQ_URL}"
+    curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
     chmod +x /usr/local/bin/yq
   fi
 fi
@@ -414,7 +414,7 @@ if [ -z "$DCCONF" ];then
   exit 0
 fi
 debuglog "Pulling DC config URL: $(echo "$DCCONF"|cut -d/ -f1,2,3)"
-  DCCONFDOWNLOADED="$(curl -skL "$curl_s_proxy" --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
+  DCCONFDOWNLOADED="$(curl -skL $curl_s_proxy --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
 fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
@@ -527,8 +527,8 @@ if [ "$found_os" == "debian" ];then
           command -v podman > /dev/null || { debuglog "Install podman" && \
             $os_packager update -qq && \
             $os_packager install -y curl podman python3-dotenv >/dev/null && \
-            curl "$curl_proxy" -sSO http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
-            curl "$curl_s_proxy" -sSo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+            curl $curl_proxy -sSO http://archive.ubuntu.com/ubuntu/pool/universe/g/golang-github-containernetworking-plugins/containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb && dpkg -i containernetworking-plugins_1.1.1+ds1-3build1_amd64.deb >/dev/null && \
+            curl $curl_s_proxy -sSo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
   fi
 else # if rhel
   if [ "$DOCKERBIN" == "docker" ];then
@@ -545,7 +545,7 @@ debuglog "Checking if '$DOCKERBIN compose' is available"
 if [ "$DOCKERBIN" == "docker" ];then
   docker compose &>/dev/null || { debuglog "$os_packager Installing docker-compose-plugin" && $os_packager update -qy && $os_packager -y install docker-compose-plugin; }
 else
-  podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl "$curl_s_proxy" -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
+  podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl $curl_s_proxy -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
 fi
 
 debuglog "Checking provided SSL"
@@ -1194,9 +1194,9 @@ fi
 
 debuglog "Pulling discovery ISO"
 if verlt "$IMAGES_TAG" v7.0.0; then
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl "$curl_s_proxy" -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
 else
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl "$curl_s_proxy" -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
 fi
 
 sleep 2
