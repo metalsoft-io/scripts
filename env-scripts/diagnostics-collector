@@ -352,7 +352,7 @@ tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackup
 		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
 	else
 		if timeout 3 bash -c "</dev/tcp/176.223.248.10/443" 2>/dev/null; then
-			test -z "$doNotAutoSend" && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" -F diag=@"${resultFilename}" &>/dev/null
+			test -z "$doNotAutoSend" && curl --connect-timeout 10 -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" -F diag=@"${resultFilename}" &>/dev/null
 		fi
 		if [ -z "$doNotAutoSend" ];then
 			read -r -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
