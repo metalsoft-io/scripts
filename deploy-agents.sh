@@ -709,6 +709,7 @@ inband_dc="  ms-agent:
       # - HTTP_PORT=80
       # - HTTPS_PORT=443
       # - TLS_PEM_FILE=/etc/ssl/certs/ssl-cert.pem
+      # - GC_NOVERIFY_SSL=true
       - TZ=Etc/UTC
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
