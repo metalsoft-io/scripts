@@ -1,0 +1,539 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Test Plan">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">0</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+          <collectionProp name="Arguments.arguments">
+            <elementProp name="METALCLOUD_ENDPOINT" elementType="Argument">
+              <stringProp name="Argument.name">METALCLOUD_ENDPOINT</stringProp>
+              <stringProp name="Argument.value">us08.metalsoft.io</stringProp>
+              <stringProp name="Argument.desc">The endpoint to call</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+            </elementProp>
+            <elementProp name="METALCLOUD_API_KEY" elementType="Argument">
+              <stringProp name="Argument.name">METALCLOUD_API_KEY</stringProp>
+              <stringProp name="Argument.value"></stringProp>
+              <stringProp name="Argument.desc">The API key</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+            </elementProp>
+            <elementProp name="SITE_ID" elementType="Argument">
+              <stringProp name="Argument.name">SITE_ID</stringProp>
+              <stringProp name="Argument.value">1</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+            </elementProp>
+            <elementProp name="USER_ID" elementType="Argument">
+              <stringProp name="Argument.name">USER_ID</stringProp>
+              <stringProp name="Argument.value">3</stringProp>
+              <stringProp name="Argument.desc">the user who will own the infrastructure</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+            </elementProp>
+            <elementProp name="OS_TEMPLATE_ID" elementType="Argument">
+              <stringProp name="Argument.name">OS_TEMPLATE_ID</stringProp>
+              <stringProp name="Argument.value">3</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+              <stringProp name="Argument.desc">the ID of the operating system  template to deploy on the servers</stringProp>
+            </elementProp>
+            <elementProp name="LOGICAL_NETWORK_ID" elementType="Argument">
+              <stringProp name="Argument.name">LOGICAL_NETWORK_ID</stringProp>
+              <stringProp name="Argument.value">65</stringProp>
+              <stringProp name="Argument.desc">the ID of thelogical network to attach the servers to</stringProp>
+              <stringProp name="Argument.metadata">=</stringProp>
+            </elementProp>
+          </collectionProp>
+        </Arguments>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Find random available server">
+          <stringProp name="TestPlan.comments">lists all servers</stringProp>
+          <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/api/v2/servers?page=1&amp;limit=100&amp;filter.serverStatus=available</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree/>
+          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server id">
+            <stringProp name="JSONPostProcessor.referenceNames">serverID</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[*].serverId</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+          </JSONPostProcessor>
+          <hashTree/>
+          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server type id">
+            <stringProp name="JSONPostProcessor.referenceNames">serverTypeID</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[?(@.serverId==${serverID})].serverTypeId</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+          </JSONPostProcessor>
+          <hashTree/>
+          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server status">
+            <stringProp name="JSONPostProcessor.referenceNames">serverStatus</stringProp>
+            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[?(@.serverId==${serverID})].serverStatus</stringProp>
+            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+          </JSONPostProcessor>
+          <hashTree/>
+        </hashTree>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="If available">
+          <stringProp name="IfController.condition">${__jexl3(&quot;${serverStatus}&quot;==&quot;available&quot;,)}</stringProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+        </IfController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Create infrastructure">
+            <stringProp name="TestPlan.comments">Create a new infrastructure</stringProp>
+            <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.contentEncoding">ascii</stringProp>
+            <stringProp name="HTTPSampler.path">/api/v2/infrastructures</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{&#xd;
+    &quot;siteId&quot;: 1,&#xd;
+    &quot;customVariables&quot;: {},&#xd;
+    &quot;userIdOwner&quot;: 3,&#xd;
+    &quot;meta&quot;: {&#xd;
+        &quot;name&quot;: &quot;test-infra-${__RandomString(5,abcdefg)}&quot;,&#xd;
+        &quot;description&quot;: &quot;JMeter infra&quot;&#xd;
+    },&#xd;
+    &quot;label&quot;: &quot;test-infra-${__RandomString(5,abcdefg)}&quot;&#xd;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+              <collectionProp name="HeaderManager.headers">
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Authorization</stringProp>
+                  <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+                </elementProp>
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Content-type</stringProp>
+                  <stringProp name="Header.value">application/json</stringProp>
+                </elementProp>
+              </collectionProp>
+            </HeaderManager>
+            <hashTree/>
+            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor">
+              <stringProp name="JSONPostProcessor.referenceNames">infraID</stringProp>
+              <stringProp name="JSONPostProcessor.jsonPathExprs">$.id</stringProp>
+              <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+            </JSONPostProcessor>
+            <hashTree/>
+          </hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Create server instance group">
+            <stringProp name="TestPlan.comments">Retrieves all server instance groups of an infrastructure</stringProp>
+            <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.contentEncoding">ascii</stringProp>
+            <stringProp name="HTTPSampler.path">/api/v2/infrastructures/${infraID}/server-instance-groups</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{&#xd;
+  &quot;label&quot;: &quot;srv01&quot;,&#xd;
+  &quot;serverGroupName&quot;: &quot;srv01&quot;,&#xd;
+  &quot;instanceCount&quot;: 1,&#xd;
+  &quot;hostname&quot;: &quot;srv01&quot;,&#xd;
+  &quot;defaultServerTypeId&quot;: ${serverTypeID},&#xd;
+  &quot;osTemplateId&quot;: ${OS_TEMPLATE_ID}&#xd;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+              <collectionProp name="HeaderManager.headers">
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Authorization</stringProp>
+                  <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+                </elementProp>
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Content-type</stringProp>
+                  <stringProp name="Header.value">application/json</stringProp>
+                </elementProp>
+              </collectionProp>
+            </HeaderManager>
+            <hashTree/>
+            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor">
+              <stringProp name="JSONPostProcessor.referenceNames">serverInstanceGroupID</stringProp>
+              <stringProp name="JSONPostProcessor.jsonPathExprs">$.id</stringProp>
+              <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+            </JSONPostProcessor>
+            <hashTree/>
+          </hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Attach to logical network">
+            <stringProp name="TestPlan.comments">Attach to the provided logical network</stringProp>
+            <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.contentEncoding">ascii</stringProp>
+            <stringProp name="HTTPSampler.path">/api/v2/server-instance-groups/${serverInstanceGroupID}/config/networking/connections</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{&#xd;
+  &quot;logicalNetworkId&quot;: &quot;${LOGICAL_NETWORK_ID}&quot;,&#xd;
+  &quot;tagged&quot;: false,&#xd;
+  &quot;accessMode&quot;: &quot;l2&quot;,&#xd;
+  &quot;mtu&quot;: 1500,&#xd;
+  &quot;providesDefaultRoute&quot;: false,&#xd;
+  &quot;disableAutoIpAllocation&quot;: false,&#xd;
+  &quot;dns&quot;: {&#xd;
+    &quot;provisionInstanceDnsRecords&quot;: true,&#xd;
+    &quot;provisionLoadBalancingDnsRecord&quot;: false&#xd;
+  }&#xd;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+              <collectionProp name="HeaderManager.headers">
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Authorization</stringProp>
+                  <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+                </elementProp>
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Content-type</stringProp>
+                  <stringProp name="Header.value">application/json</stringProp>
+                </elementProp>
+              </collectionProp>
+            </HeaderManager>
+            <hashTree/>
+          </hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Deploy infrastructure">
+            <stringProp name="TestPlan.comments">Deploy the infrastructure</stringProp>
+            <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.contentEncoding">ascii</stringProp>
+            <stringProp name="HTTPSampler.path">/api/v2/infrastructures/${infraID}/actions/deploy</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{&#xd;
+  &quot;allowDataLoss&quot;: true,&#xd;
+  &quot;shutdownOptions&quot;: {&#xd;
+    &quot;attemptSoftShutdown&quot;: true,&#xd;
+    &quot;softShutdownTimeout&quot;: 0,&#xd;
+    &quot;attemptHardShutdown&quot;: true,&#xd;
+    &quot;forceShutdown&quot;: true&#xd;
+  },&#xd;
+  &quot;serverTypeIdToPreferredServerIds&quot;: {}&#xd;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+              <collectionProp name="HeaderManager.headers">
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Authorization</stringProp>
+                  <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+                </elementProp>
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Content-type</stringProp>
+                  <stringProp name="Header.value">application/json</stringProp>
+                </elementProp>
+              </collectionProp>
+            </HeaderManager>
+            <hashTree/>
+          </hashTree>
+          <WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="While deployOngoing">
+            <stringProp name="WhileController.condition">${__javaScript( 
+
+&quot;${deployOngoing}&quot;!=&quot;false&quot;
+
+)}</stringProp>
+          </WhileController>
+          <hashTree>
+            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Get infra status">
+              <stringProp name="TestPlan.comments">get the job group status</stringProp>
+              <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
+              <stringProp name="HTTPSampler.protocol">https</stringProp>
+              <stringProp name="HTTPSampler.contentEncoding">ascii</stringProp>
+              <stringProp name="HTTPSampler.path">/api/v2/infrastructures/${infraID}</stringProp>
+              <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+              <stringProp name="HTTPSampler.method">GET</stringProp>
+              <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+              <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
+              <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+                <collectionProp name="Arguments.arguments"/>
+              </elementProp>
+            </HTTPSamplerProxy>
+            <hashTree>
+              <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+                <collectionProp name="HeaderManager.headers">
+                  <elementProp name="" elementType="Header">
+                    <stringProp name="Header.name">Authorization</stringProp>
+                    <stringProp name="Header.value">Bearing ${METALCLOUD_API_KEY}</stringProp>
+                  </elementProp>
+                  <elementProp name="" elementType="Header">
+                    <stringProp name="Header.name">Content-type</stringProp>
+                    <stringProp name="Header.value">application/json</stringProp>
+                  </elementProp>
+                </collectionProp>
+              </HeaderManager>
+              <hashTree/>
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get status">
+                <stringProp name="JSONPostProcessor.referenceNames">infraServiceStatus</stringProp>
+                <stringProp name="JSONPostProcessor.jsonPathExprs">$.serviceStatus</stringProp>
+                <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+                <stringProp name="JSONPostProcessor.defaultValues">none</stringProp>
+              </JSONPostProcessor>
+              <hashTree/>
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get number of failed jobs">
+                <stringProp name="JSONPostProcessor.referenceNames">numberOfFailedJobs</stringProp>
+                <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.jobsThrownError</stringProp>
+                <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+              </JSONPostProcessor>
+              <hashTree/>
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCreatedTimestamp">
+                <stringProp name="JSONPostProcessor.referenceNames">groupCreatedTimestamp</stringProp>
+                <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.groupCreatedTimestamp</stringProp>
+                <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+              </JSONPostProcessor>
+              <hashTree/>
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCompletedTimestamp">
+                <stringProp name="JSONPostProcessor.referenceNames">groupCompletedTimestamp</stringProp>
+                <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.groupCompletedTimestamp</stringProp>
+                <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
+              </JSONPostProcessor>
+              <hashTree/>
+            </hashTree>
+            <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="deploy">
+              <stringProp name="cacheKey">true</stringProp>
+              <stringProp name="filename"></stringProp>
+              <stringProp name="parameters"></stringProp>
+              <stringProp name="script">import java.time.Instant;
+import java.time.Duration;
+import org.apache.jmeter.samplers.SampleResult;
+
+
+String serviceStatus = vars.get(&quot;infraServiceStatus&quot;);
+String numberOfFailedJobs = vars.get(&quot;numberOfFailedJobs&quot;);
+
+
+if ( 
+	( serviceStatus==null ||  serviceStatus.equals(&quot;&quot;) || serviceStatus.equals(&quot;ordered&quot;) ) &amp;&amp; 
+	( numberOfFailedJobs==null ||  numberOfFailedJobs.equals(&quot;&quot;) || numberOfFailedJobs.equals(&quot;0&quot;) )
+    ) {
+
+	vars.put(&quot;deployOngoing&quot;,&quot;true&quot;);
+	SampleResult.setIgnore();
+
+	
+};
+
+if ( serviceStatus.equals(&quot;active&quot;) ) {
+		
+	vars.put(&quot;deployOngoing&quot;,&quot;false&quot;);
+	SampleResult.setSuccessful(true);
+	SampleResult.setResponseOK();
+
+	Instant instant1 = Instant.parse(vars.get(&quot;groupCreatedTimestamp&quot;));
+     Instant instant2 = Instant.now();
+     
+     Duration duration = Duration.between(instant1, instant2).abs();
+
+	SampleResult subResult = SampleResult.createTestSample(duration.toMillis());
+	subResult.setResponseMessage(&quot;Deploy finished successfuly in &quot;+ duration.getSeconds()+&quot; seconds&quot;);
+	subResult.setResponseOK();
+
+	SampleResult.addSubResult(subResult);
+
+}
+
+if ( (!numberOfFailedJobs.equals(&quot;&quot;)) &amp;&amp; ( Integer.valueOf(numberOfFailedJobs)&gt;0 )) {
+
+	vars.put(&quot;deployOngoing&quot;,&quot;false&quot;);
+	SampleResult.setSuccessful(false);
+	SampleResult.setResponseCode(&quot;503&quot;);
+	SampleResult.setResponseMessage(&quot;Deploy failed&quot;);
+};
+</stringProp>
+              <stringProp name="scriptLanguage">java</stringProp>
+            </JSR223Sampler>
+            <hashTree/>
+            <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Constant Timer">
+              <stringProp name="ConstantTimer.delay">1000</stringProp>
+            </ConstantTimer>
+            <hashTree/>
+          </hashTree>
+        </hashTree>
+        <DebugSampler guiclass="TestBeanGUI" testclass="DebugSampler" testname="Debug Sampler">
+          <boolProp name="displayJMeterProperties">false</boolProp>
+          <boolProp name="displayJMeterVariables">true</boolProp>
+          <boolProp name="displaySystemProperties">false</boolProp>
+        </DebugSampler>
+        <hashTree/>
+        <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
