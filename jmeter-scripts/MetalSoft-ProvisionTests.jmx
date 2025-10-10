@@ -5,11 +5,13 @@
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
         <collectionProp name="Arguments.arguments"/>
       </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
         <intProp name="ThreadGroup.num_threads">1</intProp>
-        <intProp name="ThreadGroup.ramp_time">0</intProp>
+        <intProp name="ThreadGroup.ramp_time">3</intProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
@@ -72,7 +74,7 @@
           </elementProp>
         </HTTPSamplerProxy>
         <hashTree>
-          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
             <collectionProp name="HeaderManager.headers">
               <elementProp name="" elementType="Header">
                 <stringProp name="Header.name">Authorization</stringProp>
@@ -81,23 +83,63 @@
             </collectionProp>
           </HeaderManager>
           <hashTree/>
-          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server id">
-            <stringProp name="JSONPostProcessor.referenceNames">serverID</stringProp>
-            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[*].serverId</stringProp>
-            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
-          </JSONPostProcessor>
-          <hashTree/>
-          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server type id">
-            <stringProp name="JSONPostProcessor.referenceNames">serverTypeID</stringProp>
-            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[?(@.serverId==${serverID})].serverTypeId</stringProp>
-            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
-          </JSONPostProcessor>
-          <hashTree/>
-          <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="extract server status">
-            <stringProp name="JSONPostProcessor.referenceNames">serverStatus</stringProp>
-            <stringProp name="JSONPostProcessor.jsonPathExprs">$.data[?(@.serverId==${serverID})].serverStatus</stringProp>
-            <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
-          </JSONPostProcessor>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="JSR223 PostProcessor">
+            <stringProp name="scriptLanguage">java</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">import net.minidev.json.JSONObject;
+import net.minidev.json.JSONArray;
+import net.minidev.json.parser.JSONParser;
+import java.util.Random;
+import java.io.*;
+
+JSONParser parser = new JSONParser(JSONParser.MODE_PERMISSIVE);
+
+try {
+
+    String json = prev.getResponseDataAsString();
+
+    JSONObject root = (JSONObject) parser.parse(json);
+       
+    JSONArray data = (JSONArray) root.get(&quot;data&quot;);
+
+    
+    System.out.println(&quot;here&quot;);
+    int arrayLength = data.size();
+    System.out.println(&quot;array len &quot;+arrayLength);
+
+
+    if (arrayLength == 0) {
+        log.warn(&quot;Extracted array is empty. No random item can be selected.&quot;);
+        return; // Exit the script
+    }
+
+
+    Random rand = new Random();
+
+    int randomIndex = rand.nextInt(arrayLength);
+    vars.put(&quot;serverSelectedIndex&quot;,randomIndex.toString());
+
+    JSONObject randomServer =  (JSONObject) data.get(randomIndex);
+
+    int serverID = randomServer.get(&quot;serverId&quot;);
+    int serverTypeID = randomServer.get(&quot;serverTypeId&quot;);
+    String serverStatus = randomServer.get(&quot;serverStatus&quot;);
+    
+    vars.put(&quot;serverID&quot;,serverID.toString());
+    vars.put(&quot;serverTypeID&quot;,serverTypeID.toString());
+    vars.put(&quot;serverStatus&quot;,serverStatus);
+    
+    
+    
+} catch (Exception e) {
+
+    // Log any errors to the JMeter console (jmeter.log)
+    log.error(&quot;Error processing JSON and selecting random item: &quot; + e.getMessage(), e);
+    
+}</stringProp>
+          </JSR223PostProcessor>
           <hashTree/>
         </hashTree>
         <IfController guiclass="IfControllerPanel" testclass="IfController" testname="If available">
@@ -106,7 +148,7 @@
           <boolProp name="IfController.useExpression">true</boolProp>
         </IfController>
         <hashTree>
-          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Create infrastructure">
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Create infrastructure" enabled="true">
             <stringProp name="TestPlan.comments">Create a new infrastructure</stringProp>
             <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
             <stringProp name="HTTPSampler.protocol">https</stringProp>
@@ -136,7 +178,7 @@
             </elementProp>
           </HTTPSamplerProxy>
           <hashTree>
-            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
               <collectionProp name="HeaderManager.headers">
                 <elementProp name="" elementType="Header">
                   <stringProp name="Header.name">Authorization</stringProp>
@@ -149,7 +191,7 @@
               </collectionProp>
             </HeaderManager>
             <hashTree/>
-            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor">
+            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor" enabled="true">
               <stringProp name="JSONPostProcessor.referenceNames">infraID</stringProp>
               <stringProp name="JSONPostProcessor.jsonPathExprs">$.id</stringProp>
               <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
@@ -184,7 +226,7 @@
             </elementProp>
           </HTTPSamplerProxy>
           <hashTree>
-            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
               <collectionProp name="HeaderManager.headers">
                 <elementProp name="" elementType="Header">
                   <stringProp name="Header.name">Authorization</stringProp>
@@ -197,14 +239,14 @@
               </collectionProp>
             </HeaderManager>
             <hashTree/>
-            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor">
+            <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="JSON Extractor" enabled="true">
               <stringProp name="JSONPostProcessor.referenceNames">serverInstanceGroupID</stringProp>
               <stringProp name="JSONPostProcessor.jsonPathExprs">$.id</stringProp>
               <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
             </JSONPostProcessor>
             <hashTree/>
           </hashTree>
-          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Attach to logical network">
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Attach to logical network" enabled="true">
             <stringProp name="TestPlan.comments">Attach to the provided logical network</stringProp>
             <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
             <stringProp name="HTTPSampler.protocol">https</stringProp>
@@ -236,7 +278,7 @@
             </elementProp>
           </HTTPSamplerProxy>
           <hashTree>
-            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
               <collectionProp name="HeaderManager.headers">
                 <elementProp name="" elementType="Header">
                   <stringProp name="Header.name">Authorization</stringProp>
@@ -280,7 +322,7 @@
             </elementProp>
           </HTTPSamplerProxy>
           <hashTree>
-            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
               <collectionProp name="HeaderManager.headers">
                 <elementProp name="" elementType="Header">
                   <stringProp name="Header.name">Authorization</stringProp>
@@ -294,7 +336,7 @@
             </HeaderManager>
             <hashTree/>
           </hashTree>
-          <WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="While deployOngoing">
+          <WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="While deployOngoing" enabled="true">
             <stringProp name="WhileController.condition">${__javaScript( 
 
 &quot;${deployOngoing}&quot;!=&quot;false&quot;
@@ -302,7 +344,7 @@
 )}</stringProp>
           </WhileController>
           <hashTree>
-            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Get infra status">
+            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Get infra status" enabled="true">
               <stringProp name="TestPlan.comments">get the job group status</stringProp>
               <stringProp name="HTTPSampler.domain">${METALCLOUD_ENDPOINT}</stringProp>
               <stringProp name="HTTPSampler.protocol">https</stringProp>
@@ -317,7 +359,7 @@
               </elementProp>
             </HTTPSamplerProxy>
             <hashTree>
-              <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+              <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">
                 <collectionProp name="HeaderManager.headers">
                   <elementProp name="" elementType="Header">
                     <stringProp name="Header.name">Authorization</stringProp>
@@ -330,33 +372,33 @@
                 </collectionProp>
               </HeaderManager>
               <hashTree/>
-              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get status">
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get status" enabled="true">
                 <stringProp name="JSONPostProcessor.referenceNames">infraServiceStatus</stringProp>
                 <stringProp name="JSONPostProcessor.jsonPathExprs">$.serviceStatus</stringProp>
                 <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
                 <stringProp name="JSONPostProcessor.defaultValues">none</stringProp>
               </JSONPostProcessor>
               <hashTree/>
-              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get number of failed jobs">
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get number of failed jobs" enabled="true">
                 <stringProp name="JSONPostProcessor.referenceNames">numberOfFailedJobs</stringProp>
                 <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.jobsThrownError</stringProp>
                 <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
               </JSONPostProcessor>
               <hashTree/>
-              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCreatedTimestamp">
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCreatedTimestamp" enabled="true">
                 <stringProp name="JSONPostProcessor.referenceNames">groupCreatedTimestamp</stringProp>
                 <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.groupCreatedTimestamp</stringProp>
                 <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
               </JSONPostProcessor>
               <hashTree/>
-              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCompletedTimestamp">
+              <JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="get groupCompletedTimestamp" enabled="true">
                 <stringProp name="JSONPostProcessor.referenceNames">groupCompletedTimestamp</stringProp>
                 <stringProp name="JSONPostProcessor.jsonPathExprs">$.statistics.groupCompletedTimestamp</stringProp>
                 <stringProp name="JSONPostProcessor.match_numbers">0</stringProp>
               </JSONPostProcessor>
               <hashTree/>
             </hashTree>
-            <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="deploy">
+            <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="deploy" enabled="true">
               <stringProp name="cacheKey">true</stringProp>
               <stringProp name="filename"></stringProp>
               <stringProp name="parameters"></stringProp>
@@ -410,7 +452,7 @@ if ( (!numberOfFailedJobs.equals(&quot;&quot;)) &amp;&amp; ( Integer.valueOf(num
               <stringProp name="scriptLanguage">java</stringProp>
             </JSR223Sampler>
             <hashTree/>
-            <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Constant Timer">
+            <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Constant Timer" enabled="true">
               <stringProp name="ConstantTimer.delay">1000</stringProp>
             </ConstantTimer>
             <hashTree/>
