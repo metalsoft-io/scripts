@@ -710,6 +710,7 @@ inband_dc="  ms-agent:
       # - HTTPS_PORT=443
       # - TLS_PEM_FILE=/etc/ssl/certs/ssl-cert.pem
       # - GC_NOVERIFY_SSL=true
+      # - FILE_SERVE_TIMEOUT=30 #minutes
       - TZ=Etc/UTC
       - AGENT_ID=${DATACENTERNAME}-${HOSTNAMERANDOM}
       - AGENT_SECRET=${MS_TUNNEL_SECRET}
