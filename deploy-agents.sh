@@ -537,7 +537,7 @@ else # if rhel
       debuglog "$os_packager installing docker-ce docker-ce-cli containerd.io docker-compose-plugin .." && \
       $os_packager -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null; }
         else
-          dnf install -y podman python3-pip >/dev/null && python3 -m pip install python-dotenv >/dev/null
+          dnf install -y podman python3-pip python3-yaml >/dev/null && python3 -m pip install python-dotenv >/dev/null
   fi
 fi
 
