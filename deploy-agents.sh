@@ -1064,6 +1064,11 @@ sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/a
 
 dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" "$HOME/.bashrc";then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> "$HOME/.bashrc" && source "$HOME/.bashrc";fi
 
+if ! command -v "$DOCKERBIN" >/dev/null 2>&1; then
+  echo -e "${lightred}Error: $DOCKERBIN command not found. Please ensure $DOCKERBIN is installed.${nc}" >&2
+  exit 1
+fi
+
 debuglog "Starting $DOCKERBIN containers"
 if [ "$DOCKERBIN" == "docker" ];then
   systemctl enable -q --now docker.service
