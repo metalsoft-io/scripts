@@ -57,6 +57,7 @@ testOS ()
         found_os_ver="rhel9"
         test -n "$os_packager" && os_supported=1
       fi
+      
     elif [ "$found_os" == "debian" ]; then
       command -v apt > /dev/null && os_packager=apt
       command -v apt-get > /dev/null && os_packager=apt-get
@@ -352,6 +353,7 @@ if [ "$found_os" == "debian" ];then
     cp "/usr/local/share/ca-certificates/${CUSTOM_CA}" /etc/ssl/certs/
     update-ca-certificates >/dev/null
   fi
+  ms_agent_ssl_os_ca_path="/etc/ssl/certs"
 else # if rhel
   if [[ -n "$CUSTOM_CA" ]]; then
     echo "${CUSTOM_CA_CERT}" | base64 -d| gunzip -c 2>/dev/null > "/etc/pki/ca-trust/source/anchors/${CUSTOM_CA}" || echo "${CUSTOM_CA_CERT}" | base64 -d > "/etc/pki/ca-trust/source/anchors/${CUSTOM_CA}"
@@ -365,7 +367,7 @@ else # if rhel
     fi
     update-ca-trust extract
   fi
-
+  ms_agent_ssl_os_ca_path="/etc/pki/ca-trust/source/anchors"
   # or (This ensures the rule is set correctly, whether it existed before or not.)
   # semanage fcontext -m -t svirt_sandbox_file_t "/etc/ssl/certs(/.*)?"
 
@@ -743,7 +745,7 @@ inband_dc="  ms-agent:
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
-      - /etc/ssl/certs:/etc/ssl/certs
+      - ${ms_agent_ssl_os_ca_path}:/etc/ssl/certs
 $ms_agent_ansible_runner_volumes
       # - /etc/hosts:/etc/hosts:ro
       # - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/ssl-cert.pem
@@ -776,7 +778,7 @@ non_inband_dc="  agents:
       - /opt/metalsoft/logs:/var/log
       - /opt/metalsoft/.ssh:/root/.ssh
       - /opt/metalsoft/mon:/var/lib/mon/data
-      - /etc/ssl/certs:/etc/ssl/certs
+      - ${ms_agent_ssl_os_ca_path}:/etc/ssl/certs
       - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
       - /usr/share/ca-certificates:/usr/share/ca-certificates
       #- /etc/hosts:/etc/hosts:ro
