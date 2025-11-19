@@ -93,10 +93,10 @@ fi
 if [ "$found_os" == "debian" ];then
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
-    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null; }
+    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null || debuglog "Error installing packages"; }
     else # if rhel
       command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
-        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null; }
+        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null || debuglog "Error installing packages" fail; }
 fi
 
 debuglog "Creating folders"
