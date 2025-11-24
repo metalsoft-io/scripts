@@ -577,7 +577,7 @@ else
 fi
 
 HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
-HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/\./-/g')-${HOSTNAMERANDOM}
+HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/[.:][.:]*/-/g')-${HOSTNAMERANDOM}
 
 # Define the list of capabilities
 declare -a CAPABILITIES=(
@@ -679,6 +679,18 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
     volumes:
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
+
+### pull openshift binaries
+# OCP_VERSION=4.20.5
+# curl -L \"https://mirror.openshift.com/pub/openshift-v4/clients/ocp/\${OCP_VERSION}/openshift-install-linux-\${OCP_VERSION}.tar.gz\" -o openshift-install.tar.gz && tar xzf openshift-install.tar.gz openshift-install && rm -f openshift-install.tar.gz
+# curl -L \"https://mirror.openshift.com/pub/openshift-v4/clients/ocp/\${OCP_VERSION}/openshift-client-linux-\${OCP_VERSION}.tar.gz\" -o openshift-client.tar.gz && tar -xzf openshift-client.tar.gz oc && rm -f openshift-client.tar.gz
+# mkdir -p /opt/metalsoft/extensions
+# mv {oc,openshift-install} /opt/metalsoft/extensions/
+# ls -la /opt/metalsoft/extensions/
+### once you have the binaries, uncomment below lines:
+
+      #- /opt/metalsoft/extensions/oc:/usr/local/bin/oc:ro
+      #- /opt/metalsoft/extensions/openshift-install:/usr/local/bin/openshift-install:ro
 "
         ms_agent_ansible_runner_mounts="
       - ANSIBLE_RUNNER=enabled
