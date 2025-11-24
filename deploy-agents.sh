@@ -578,6 +578,8 @@ fi
 
 HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
 HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/[.:][.:]*/-/g')-${HOSTNAMERANDOM}
+while [[ "$HOSTNAMERANDOM" == *[.:]* ]]; do HOSTNAMERANDOM=${HOSTNAMERANDOM//[.:]/-}; done
+while [[ "$HOSTNAMERANDOM" == *--* ]]; do HOSTNAMERANDOM=${HOSTNAMERANDOM//--/-}; done
 
 # Define the list of capabilities
 declare -a CAPABILITIES=(
