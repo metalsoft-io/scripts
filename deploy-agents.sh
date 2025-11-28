@@ -1138,30 +1138,6 @@ while [ $? -ne 0 ]; do
 done
 
 
-debuglog "stopping any running $DOCKERBIN containers.." info lightred
-$DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
-
-cd /opt/metalsoft/agents
-debuglog "pulling latest images.."
-if [ "$DOCKERBIN" == "docker" ];then
-  $DOCKERBIN compose pull
-  $DOCKERBIN compose up -d
-else
-  ${DOCKERBIN}-compose pull
-  ${DOCKERBIN}-compose up -d
-fi
-
-else
-  debuglog "Registry connection to ${REG_HOST} failed, skipping docker login and image pull" info yellow
-fi
-
-if [ -f /etc/ssh/ms_banner ];then
-  debuglog "update /etc/ssh/ms_banner"
-  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $interface_ip" /etc/ssh/ms_banner;else echo "AgentIP: $interface_ip" >> /etc/ssh/ms_banner;fi
-  dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
-  dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml|head -1)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
-fi
-
 if [ "$found_os" == "debian" ];then
   debuglog "Stop and disable host systemd-resolved.service, which will be replaced by agent's DNS $DOCKERBIN container"
   systemctl disable --now systemd-resolved.service 2>/dev/null || true
@@ -1187,18 +1163,45 @@ else #if rhel
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
   nameservers="$(nmcli d show "$interface_name" 2>/dev/null |grep IP4.DNS|awk '{print $2}'|xargs)"
   test -n "$nameservers" && for nameserver in $nameservers; do
-  debuglog "nmcli nameserver ${yellow}$nameserver${nc}"
-  if [[ $nameserver != $(grep "$nameserver" /etc/resolv.conf | cut -d" " -f2) ]];then
-    echo "nameserver $nameserver" >> /etc/resolv.conf
-    RESOLVCONFCHANGED="YES"
-  fi
+    debuglog "nmcli nameserver ${yellow}$nameserver${nc}"
+    if [[ $nameserver != $(grep "$nameserver" /etc/resolv.conf | cut -d" " -f2) ]];then
+      echo "nameserver $nameserver" >> /etc/resolv.conf
+      RESOLVCONFCHANGED="YES"
+    fi
+    # setenforce 0 && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+  done
   debuglog "Stop and disable rpcbind service/socket, which will be replaced by agent's nfs-server container"
   systemctl disable --now rpcbind 2>/dev/null || true
   systemctl disable --now rpcbind.socket 2>/dev/null || true
   systemctl daemon-reload
-  # setenforce 0 && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
-done
 fi
+
+
+debuglog "stopping any running $DOCKERBIN containers.." info lightred
+$DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
+
+cd /opt/metalsoft/agents
+debuglog "pulling latest images.."
+if [ "$DOCKERBIN" == "docker" ];then
+  $DOCKERBIN compose pull
+  $DOCKERBIN compose up -d
+else
+  ${DOCKERBIN}-compose pull
+  ${DOCKERBIN}-compose up -d
+fi
+
+else
+  debuglog "Registry connection to ${REG_HOST} failed, skipping docker login and image pull" info yellow
+fi
+
+if [ -f /etc/ssh/ms_banner ];then
+  debuglog "update /etc/ssh/ms_banner"
+  if grep -q '^AgentIP:' /etc/ssh/ms_banner;then sed -i "/^AgentIP:.*/c AgentIP: $interface_ip" /etc/ssh/ms_banner;else echo "AgentIP: $interface_ip" >> /etc/ssh/ms_banner;fi
+  dcurl="$(grep ' URL=' /opt/metalsoft/agents/docker-compose.yaml|grep -oP '.* URL=\K.*'|cut -d/ -f1-3)" && if grep -q '^Controller:' /etc/ssh/ms_banner;then sed -i "/^Controller:.*/c Controller: $dcurl" /etc/ssh/ms_banner;else echo "Controller: $dcurl" >> /etc/ssh/ms_banner;fi
+  dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml|head -1)" && if grep -q '^Datacenter:' /etc/ssh/ms_banner;then sed -i "/^Datacenter:.*/c Datacenter: $dcname" /etc/ssh/ms_banner;else echo "Datacenter: $dcname" >> /etc/ssh/ms_banner;fi
+fi
+
+
 
 if ! grep -q nameserver /etc/resolv.conf;then
   echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
