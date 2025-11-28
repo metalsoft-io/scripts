@@ -1192,6 +1192,10 @@ else #if rhel
     echo "nameserver $nameserver" >> /etc/resolv.conf
     RESOLVCONFCHANGED="YES"
   fi
+  debuglog "Stop and disable rpcbind service/socket, which will be replaced by agent's nfs-server container"
+  systemctl disable --now rpcbind 2>/dev/null || true
+  systemctl disable --now rpcbind.socket 2>/dev/null || true
+  systemctl daemon-reload
   # setenforce 0 && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
 done
 fi
