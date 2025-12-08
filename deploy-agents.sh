@@ -105,6 +105,7 @@ PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/meta
 MONITORING_SERVICE_PORT=8099
 fi
 mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+chown -R 1000:1000 /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives
 if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
