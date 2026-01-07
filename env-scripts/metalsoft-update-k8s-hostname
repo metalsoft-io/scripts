@@ -585,7 +585,7 @@ fi
 		fi
 	fi
 
-for pod in license bsi;do
+for pod in license gateway-api bsi;do
 	$k get deploy --no-headers|awk '{print $1}'|grep -E "\b${pod}\b"|while read -r z;do debuglog "Restarting pod ${pod}.."; $k rollout restart "deploy/${pod}" >/dev/null 2>&1;done
 done
 findSslSubject="$($k get secret "${ns}-ssl" -o json| jq -r '.data."tls.crt"'|base64 -d|openssl x509 -subject -noout 2>/dev/null|sed 's/^subject=//g;s/, /\n/g'|grep '^CN')"
