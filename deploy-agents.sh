@@ -735,6 +735,7 @@ inband_dc="  ms-agent:
       - MONITORING_SERVICE_PORT=${MONITORING_SERVICE_PORT:-80}
       - LOG_LEVEL=debug
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
+      ## CONTROLLER_TCP_ADDRESS (9091) should not be needed as of v7.2.0
       - CONTROLLER_TCP_ADDRESS=${controller_tcp_address_val}
       - CONTROLLER_REMOTE_CONSOLE_URI=wss://${SSL_HOSTNAME}/agent-remote-console
       - OS_IMAGES_MOUNT=/iso
