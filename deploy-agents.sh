@@ -116,6 +116,8 @@ if [ -n "$DOCKERENV" ]; then
   JUNOSDRIVER_URL="${REG_HOST}/sc/junos-driver:${IMAGES_TAGENV}"
   MSAGENT_URL="${REG_HOST}/sc/ms-agent:${IMAGES_TAGENV}"
   ANSIBLE_RUNNER_URL="${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
+  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
+
 else
   # Set default version if IMAGES_TAG not set
   IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
@@ -125,6 +127,8 @@ else
   JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-${REG_HOST}/sc/junos-driver:${IMAGES_TAG}}
   MSAGENT_URL=${MSAGENT_URL:-${REG_HOST}/sc/ms-agent:${IMAGES_TAG}}
   ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
+  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
+
 fi
 
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
@@ -597,6 +601,8 @@ declare -a CAPABILITIES=(
     "DHCP_OOB"
     "ANSIBLE_RUNNER"
     "HTTP_REQUEST"
+    "BUILD_IMAGE"
+    "INBAND_WEBMKS"
 )
 
 # Default values for non-ACAP variables
@@ -707,6 +713,30 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
     fi
 fi
 
+# Initialize sc-image-builder variable
+sc_image_builder=""
+
+# Conditionally define sc-image-builder service
+if [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "enabled" ]] || [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "1" ]]; then
+    if ! verlt "$IMAGES_TAG" v7.2.0; then
+        sc_image_builder="  sc-image-builder:
+    container_name: sc-image-builder
+    network_mode: host
+    hostname: sc-image-builder-${DATACENTERNAME}-${HOSTNAMERANDOM}
+    image: ${SCIMAGEBUILDER_URL}
+    restart: always
+    extra_hosts:
+      - \"ms-agent:127.0.0.1\"
+    environment:
+      # - LOG_LEVEL=debug
+      # - MINIMUM_FREE_DISK_SIZE_GB_TO_START_BUILD=40
+      - OS_IMAGES_MOUNT=/iso
+    volumes:
+      - /opt/metalsoft/nfs-storage:/iso
+"
+    fi
+fi
+
 # Determine CONTROLLER_TCP_ADDRESS value based on SECOND_IP
 controller_tcp_address_val="${SSL_HOSTNAME}:9091"
 if [[ -n "${SECOND_IP}" && "${SECOND_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -759,6 +789,8 @@ inband_dc="  ms-agent:
       - SPICE=${ENVVAR_SPICE:-disabled}
       - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
       - HTTP_REQUEST=${ENVVAR_HTTP_REQUEST:-disabled}
+      - BUILD_IMAGE=${ENVVAR_BUILD_IMAGE:-disabled}
+      - INBAND_WEBMKS=${ENVVAR_INBAND_WEBMKS:-disabled}
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
@@ -877,6 +909,7 @@ cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 services:
 $inband_dc
 $ansible_runner
+$sc_image_builder
 $non_inband_dc
 $other_services
 ENDD
