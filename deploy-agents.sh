@@ -57,7 +57,7 @@ testOS ()
         found_os_ver="rhel9"
         test -n "$os_packager" && os_supported=1
       fi
-      
+
     elif [ "$found_os" == "debian" ]; then
       command -v apt > /dev/null && os_packager=apt
       command -v apt-get > /dev/null && os_packager=apt-get
@@ -717,8 +717,8 @@ fi
 sc_image_builder=""
 
 # Conditionally define sc-image-builder service
-if [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "enabled" ]] || [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "1" ]]; then
     if ! verlt "$IMAGES_TAG" v7.2.0; then
+if [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "enabled" ]] || [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "1" ]]; then
         sc_image_builder="  sc-image-builder:
     container_name: sc-image-builder
     network_mode: host
@@ -733,6 +733,22 @@ if [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "enabled" ]] || [[ "${ENVVAR_BUILD_IM
       - OS_IMAGES_MOUNT=/iso
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
+"
+else
+        sc_image_builder="#  sc-image-builder:
+#    container_name: sc-image-builder
+#    network_mode: host
+#    hostname: sc-image-builder-${DATACENTERNAME}-${HOSTNAMERANDOM}
+#    image: ${SCIMAGEBUILDER_URL}
+#    restart: always
+#    extra_hosts:
+#      - \"ms-agent:127.0.0.1\"
+#    environment:
+#      # - LOG_LEVEL=debug
+#      # - MINIMUM_FREE_DISK_SIZE_GB_TO_START_BUILD=40
+#      - OS_IMAGES_MOUNT=/iso
+#    volumes:
+#      - /opt/metalsoft/nfs-storage:/iso
 "
     fi
 fi
@@ -903,6 +919,7 @@ if ! verlt "$IMAGES_TAG" v7.0.0; then
 fi
 
 test "$INBAND" = "1" && non_inband_dc=''
+if [[ "$IMAGES_TAG" =~ ^develop ]]; then  non_inband_dc=''; fi
 
 debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
 cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
@@ -1213,17 +1230,27 @@ else #if rhel
 fi
 
 
-debuglog "stopping any running $DOCKERBIN containers.." info lightred
-$DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
-
-cd /opt/metalsoft/agents
+cd /opt/metalsoft/agents || { echo "Error: Failed to change directory to /opt/metalsoft/agents" >&2; exit 1; }
 debuglog "pulling latest images.."
+PULL_SUCCESS=0
 if [ "$DOCKERBIN" == "docker" ];then
-  $DOCKERBIN compose pull
-  $DOCKERBIN compose up -d
+  $DOCKERBIN compose pull && PULL_SUCCESS=1
 else
-  ${DOCKERBIN}-compose pull
-  ${DOCKERBIN}-compose up -d
+  ${DOCKERBIN}-compose pull && PULL_SUCCESS=1
+fi
+
+if [ "$PULL_SUCCESS" -eq 1 ]; then
+  debuglog "stopping any running $DOCKERBIN containers.." info lightred
+  $DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
+
+  debuglog "starting containers with updated images.."
+  if [ "$DOCKERBIN" == "docker" ];then
+    $DOCKERBIN compose up -d
+  else
+    ${DOCKERBIN}-compose up -d
+  fi
+else
+  debuglog "Image pull failed, skipping container restart to avoid downtime" fail
 fi
 
 else
@@ -1265,8 +1292,10 @@ else
 test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
 fi
 
+if [ "$PULL_SUCCESS" -eq 1 ]; then
 sleep 2
 $DOCKERBIN ps
+fi
 sleep 2
 $DOCKERBIN ps
 
