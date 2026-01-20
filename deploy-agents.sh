@@ -407,7 +407,7 @@ if ! command -v yq >/dev/null; then
   fi
 fi
 
-if verlt "$IMAGES_TAG" v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0 && [[ ! "$IMAGES_TAG" =~ ^develop ]]; then
 debuglog "Checking DCONF"
 if [ -z "$DCCONF" ];then
   echo
