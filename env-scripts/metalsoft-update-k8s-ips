@@ -424,7 +424,16 @@ if [ -d "${MS_MANIFESTS_FOLDER}" ];then
     fi
 fi
 
-applyK3sVersionWorkaround
+if [ -n "$K3S_VERSION_WORKAROUND" ];then
+    echo "[i] applying k3s version workaround"
+    applyk3sversionworkaround
+else
+    echo "[i] restarting k3s"
+    systemctl restart k3s
+
+    echo "[i] waiting for all nodes to be ready"
+    kubectl wait --for=condition=Ready node --all --timeout=180s
+fi
 
 echo "[i] Applying ingressroutes.yaml"
 test -f ingressroutes.yaml && kubectl -n "${ns}" apply -f ingressroutes.yaml >/dev/null || { echo "[i] Error: kubectl could not apply: ingressroutes.yaml"; }
