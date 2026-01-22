@@ -588,21 +588,22 @@ while [[ "$HOSTNAMERANDOM" == *--* ]]; do HOSTNAMERANDOM=${HOSTNAMERANDOM//--/-}
 
 # Define the list of capabilities
 declare -a CAPABILITIES=(
-    "OOB_HTTP_PROXY"
-    "INBAND_HTTP_PROXY"
-    "FILE_TRANSFER"
-    "INBAND_FILE_TRANSFER"
-    "SWITCH_SUBSCRIPTION"
-    "COMMAND_EXECUTION"
-    "NETCONF"
-    "VNC"
-    "SPICE"
-    "SYSLOG"
-    "DHCP_OOB"
     "ANSIBLE_RUNNER"
-    "HTTP_REQUEST"
     "BUILD_IMAGE"
+    "COMMAND_EXECUTION"
+    "DHCP_OOB"
+    "FILE_TRANSFER"
+    "HTTP_REQUEST"
+    "INBAND_FILE_TRANSFER"
+    "INBAND_HTTP_PROXY"
     "INBAND_WEBMKS"
+    "NETCONF"
+    "OOB_HTTP_PROXY"
+    "SPICE"
+    "SSH_COMMAND"
+    "SWITCH_SUBSCRIPTION"
+    "SYSLOG"
+    "VNC"
 )
 
 # Default values for non-ACAP variables
@@ -635,18 +636,19 @@ done
 
  # Defaults for v6.x
   if verlt "$IMAGES_TAG" v7.0.0; then
-    export ENVVAR_OOB_HTTP_PROXY=enabled
-    export ENVVAR_FILE_TRANSFER=enabled
-    export ENVVAR_SWITCH_SUBSCRIPTION=enabled
     export ENVVAR_COMMAND_EXECUTION=enabled
-    export ENVVAR_VNC=enabled
-    export ENVVAR_SYSLOG=enabled
-    export ENVVAR_SPICE=disabled
-    export ENVVAR_INBAND_HTTP_PROXY=disabled
-    export ENVVAR_INBAND_FILE_TRANSFER=disabled
-    export ENVVAR_NETCONF=enabled
     export ENVVAR_DHCP_OOB=disabled
+    export ENVVAR_FILE_TRANSFER=enabled
     export ENVVAR_HTTP_REQUEST=disabled
+    export ENVVAR_INBAND_FILE_TRANSFER=disabled
+    export ENVVAR_INBAND_HTTP_PROXY=disabled
+    export ENVVAR_NETCONF=enabled
+    export ENVVAR_OOB_HTTP_PROXY=enabled
+    export ENVVAR_SPICE=disabled
+    export ENVVAR_SSH_COMMAND=disabled
+    export ENVVAR_SWITCH_SUBSCRIPTION=enabled
+    export ENVVAR_SYSLOG=enabled
+    export ENVVAR_VNC=enabled
   fi
 
 # Initialize ansible variables
@@ -793,20 +795,21 @@ inband_dc="  ms-agent:
       # - DHCP_LISTEN_INTERFACES=${ENVVAR_DHCP_LISTEN_INTERFACES}
 
       ## Capabilities:
-      - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY:-disabled}
-      - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER:-disabled}
-      - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY:-disabled}
-      - FILE_TRANSFER=${ENVVAR_FILE_TRANSFER:-disabled}
-      - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION:-disabled}
-      - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION:-disabled}
-      - NETCONF=${ENVVAR_NETCONF:-disabled}
-      - VNC=${ENVVAR_VNC:-disabled}
-      - SYSLOG=${ENVVAR_SYSLOG:-disabled}
-      - SPICE=${ENVVAR_SPICE:-disabled}
-      - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
-      - HTTP_REQUEST=${ENVVAR_HTTP_REQUEST:-disabled}
       - BUILD_IMAGE=${ENVVAR_BUILD_IMAGE:-disabled}
+      - COMMAND_EXECUTION=${ENVVAR_COMMAND_EXECUTION:-disabled}
+      - DHCP_OOB=${ENVVAR_DHCP_OOB:-disabled}
+      - FILE_TRANSFER=${ENVVAR_FILE_TRANSFER:-disabled}
+      - HTTP_REQUEST=${ENVVAR_HTTP_REQUEST:-disabled}
+      - INBAND_FILE_TRANSFER=${ENVVAR_INBAND_FILE_TRANSFER:-disabled}
+      - INBAND_HTTP_PROXY=${ENVVAR_INBAND_HTTP_PROXY:-disabled}
       - INBAND_WEBMKS=${ENVVAR_INBAND_WEBMKS:-disabled}
+      - NETCONF=${ENVVAR_NETCONF:-disabled}
+      - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY:-disabled}
+      - SPICE=${ENVVAR_SPICE:-disabled}
+      - SSH_COMMAND=${ENVVAR_SSH_COMMAND:-disabled}
+      - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION:-disabled}
+      - SYSLOG=${ENVVAR_SYSLOG:-disabled}
+      - VNC=${ENVVAR_VNC:-disabled}
 $ms_agent_ansible_runner_mounts
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
