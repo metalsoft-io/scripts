@@ -104,8 +104,8 @@ if verlt $IMAGES_TAG v7.0.0; then
 PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
 MONITORING_SERVICE_PORT=8099
 fi
-mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
-chown -R 1000:1000 /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives
+mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage/buildImageRequest /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+chown -R 1000:1000 /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/nfs-storage
 if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
@@ -767,6 +767,12 @@ inband_dc="  ms-agent:
     hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
     image: ${MSAGENT_URL}
     restart: always
+    cap_add:
+      - NET_BIND_SERVICE
+#      - NET_RAW
+      - NET_ADMIN
+#    security_opt:
+#      - no-new-privileges:true
     environment:
       # - HTTP_PROXY=http://proxy_ip_here:3128
       # - HTTPS_PROXY=http://proxy_ip_here:3128
