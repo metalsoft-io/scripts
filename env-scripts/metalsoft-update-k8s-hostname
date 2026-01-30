@@ -237,7 +237,7 @@ fi
 
 # Remove any existing line starting with the current IP and add the new hostname line
 sed -i "/^${cip}\s/d" /etc/hosts
-echo "$cip ${newhostname} cluster.demo.metalsoft.io controller-demo.metalsoft.io repo.${newhostname} repo-internal.${newhostname}" >> /etc/hosts
+echo "$cip ${newhostname} cluster.demo.metalsoft.io controller-demo.metalsoft.io gc-demo.metalsoft.io repo.${newhostname} repo-internal.${newhostname}" >> /etc/hosts
 
 namespace="$(kubectl get po -A --no-headers|awk '{print $1}'|sort|uniq|grep metalsoft|head -1)"
 test -z "$namespace" && namespace='demo-metalsoft'
