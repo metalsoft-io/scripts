@@ -769,7 +769,6 @@ inband_dc="  ms-agent:
     restart: always
     cap_add:
       - NET_BIND_SERVICE
-#      - NET_RAW
       - NET_ADMIN
 #    security_opt:
 #      - no-new-privileges:true
