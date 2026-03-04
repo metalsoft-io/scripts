@@ -23,6 +23,7 @@ exec   > >(tee -ia "$bash_log")
 exec  2> >(tee -ia "$bash_log" >&19)
 # For trace output
 export BASH_XTRACEFD="19"
+export PS4='+[${SECONDS}s] '
 set -x
 
 #test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
