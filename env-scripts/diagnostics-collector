@@ -4,14 +4,16 @@
 # How to install:
 # wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/diagnostics-collector -O /usr/local/bin/diagnostics-collector && chmod +x /usr/local/bin/diagnostics-collector
 
-nc=$(tput sgr0)
-bold=$(tput bold)
-orange=$(tput setaf 3)
-lightred=$(tput setaf 9)
-lightgreen=$(tput setaf 10)
-gray=$(tput setaf 8)
-#yellow=$(tput setaf 11)
-#lightblue=$(tput setaf 12)
+if tput sgr0 &>/dev/null; then
+	nc=$(tput sgr0)
+	bold=$(tput bold)
+	orange=$(tput setaf 3)
+	lightred=$(tput setaf 9)
+	lightgreen=$(tput setaf 10)
+	gray=$(tput setaf 8)
+else
+	nc='' bold='' orange='' lightred='' lightgreen='' gray=''
+fi
 
 # DEBUG:
 which tee &>/dev/null || { echo "ERROR: Please install 'tee'. Exiting..."; exit 1; }
@@ -45,12 +47,23 @@ function usage {
 }
 
 #auto determine if we are on sc or gc:
+gather=""
+envname=""
+k=""
 test -f /opt/metalsoft/agents/docker-compose.yaml && type docker &>/dev/null && gather='sc' && envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
 type kubectl &>/dev/null && gather='gc' && k='kubectl '
 type microk8s &>/dev/null && gather='gc' && k='microk8s.kubectl '
-test "$gather" == 'gc' && test -n "$ns" && envname="$ns"
+test "$gather" == 'gc' && test -n "${ns:-}" && envname="$ns"
 pushfile=
 extended=
+pushfileFromArg=""
+sqlUpgradeLogs=""
+doNotAutoSend=""
+debugOn=""
+SKIP_DISK_LATENCY_CHECK=""
+curl_no_proxy=""
+newbackupFolder=""
+mysqldump_exitcode_error=""
 
 while getopts ":k:n:b:P:capezsxd" flag
 do
@@ -81,43 +94,102 @@ fi
 
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 test -z "$envname" && test "$gather" == 'gc' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
+set -u
 originalBackupFolder=${backupFolder}
 backupFolder=${backupFolder}/ms-diagnostics-${thedate}_${envname}__${gather}
 
 function finish {
 	echo "[i] cleaning up.."
 	rm -rf "${backupFolder}"
+	test -n "$newbackupFolder" && test "$newbackupFolder" != "$backupFolder" && rm -rf "${newbackupFolder}"
 	exit 3
 }
-trap finish INT #EXIT
+trap finish INT TERM
 test -n "$debugOn" && set -x
 mkdir -p "${backupFolder}" || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
 
-cat /etc/environment 2>/dev/null > "${backupFolder}/etc_environment"
-env > "${backupFolder}/env"
-test -f /etc/metalsoft && cp /etc/metalsoft "${backupFolder}/etc_metalsoft" 2>/dev/null
 env | grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy && echo -ne "${nc}"
+
+# --- Shared functions ---
+
+function create_dirs ()
+{
+	mkdir -p "${backupFolder}/system"
+	mkdir -p "${backupFolder}/disk"
+	mkdir -p "${backupFolder}/network"
+	mkdir -p "${backupFolder}/ssl"
+	if [ "$gather" == 'gc' ];then
+		mkdir -p "${backupFolder}/k8s/cluster"
+		mkdir -p "${backupFolder}/k8s/resources"
+		mkdir -p "${backupFolder}/k8s/ingress"
+		mkdir -p "${backupFolder}/k8s/logs"
+		mkdir -p "${backupFolder}/k8s/bsi/varlog"
+		mkdir -p "${backupFolder}/k8s/api_resources"
+		mkdir -p "${backupFolder}/mysql"
+		mkdir -p "${backupFolder}/couchdb"
+	fi
+	if [ "$gather" == 'sc' ];then
+		mkdir -p "${backupFolder}/docker/agents"
+		mkdir -p "${backupFolder}/docker/agents-logs"
+		mkdir -p "${backupFolder}/docker/logs"
+		mkdir -p "${backupFolder}/nfs"
+	fi
+}
+
+function get_system ()
+{
+	cat /etc/environment 2>/dev/null > "${backupFolder}/system/environment.txt"
+	env > "${backupFolder}/system/env.txt"
+	test -f /etc/metalsoft && cp /etc/metalsoft "${backupFolder}/system/etc_metalsoft" 2>/dev/null
+	stat "$(realpath "$0")" > "${backupFolder}/system/stat.txt" 2>&1 || true
+	uptime > "${backupFolder}/system/uptime.txt" 2>&1 || true
+	cat /etc/os-release > "${backupFolder}/system/os-release" 2>&1 || true
+	uname -a > "${backupFolder}/system/uname.txt" 2>&1 || true
+	free -h > "${backupFolder}/system/memory.txt" 2>&1 || true
+	dmesg --time-format iso 2>&1 | tail -500 > "${backupFolder}/system/dmesg.txt" || true
+	command -v timedatectl &>/dev/null && timedatectl > "${backupFolder}/system/timedatectl.txt" 2>&1 || true
+	cat /etc/hosts > "${backupFolder}/system/hosts" 2>&1 || true
+	cat /etc/resolv.conf > "${backupFolder}/system/resolv.conf" 2>&1 || true
+}
+
+function get_network ()
+{
+	ip a > "${backupFolder}/network/ip_addr.txt" 2>&1 || true
+	ip r > "${backupFolder}/network/ip_route.txt" 2>&1 || true
+	ip link > "${backupFolder}/network/ip_link.txt" 2>&1 || true
+	command -v iptables &>/dev/null && iptables -t filter -vxnL > "${backupFolder}/network/iptables.txt" 2>&1 || true
+	ss -tlnp > "${backupFolder}/network/ss.txt" 2>&1 || true
+	command -v nft &>/dev/null && nft list ruleset > "${backupFolder}/network/nftables.txt" 2>&1 || true
+}
+
+function get_ssl ()
+{
+	ls -laR /etc/ssl/certs/ &> "${backupFolder}/ssl/ls_etc_ssl_certs.txt" || true
+	test -d /etc/pki/tls/certs/ && ls -laR /etc/pki/tls/certs/ &> "${backupFolder}/ssl/ls_etc_pki_tls_certs.txt" || true
+	test -d /etc/pki/ca-trust/source/anchors/ && ls -laR /etc/pki/ca-trust/source/anchors/ &> "${backupFolder}/ssl/ls_etc_pki_ca_trust_anchors.txt" || true
+	test -d /usr/local/share/ca-certificates/ && ls -laR /usr/local/share/ca-certificates/ &> "${backupFolder}/ssl/ls_usr_local_share_ca_certs.txt" || true
+	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && grep "^# " /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem > "${backupFolder}/ssl/ca_bundle_headers.txt" || true
+	test -d /etc/ssl/certs/ && tar czf "${backupFolder}/ssl/etc_ssl_certs.tar.gz" /etc/ssl/certs/ &>/dev/null
+	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && cp /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem "${backupFolder}/ssl/ca_bundle.pem" || true
+	test -d /etc/pki/ca-trust/source/anchors/ && \ls /etc/pki/ca-trust/source/anchors/|while read -r z;do echo ":::: $z";openssl x509 -noout -subject -in "/etc/pki/ca-trust/source/anchors/$z";done > "${backupFolder}/ssl/anchor_subjects.txt" || true
+	test -f /etc/ssl/certs/ca-certificates.crt && cp /etc/ssl/certs/ca-certificates.crt "${backupFolder}/ssl/ca_certificates.crt" || true
+}
 
 function get_disks ()
 {
-	echo -e "\n:: stat diagnostics-collector: $(realpath $0)\n" >> "${backupFolder}/disks_stats.txt"
-	stat "$(realpath "$0")" >> "${backupFolder}/disks_stats.txt"
-	echo -e "\n:: time:\n $(date)\n" >> "${backupFolder}/disks_stats.txt"
-	echo -e "\n:: uptime:\n $(uptime)\n" >> "${backupFolder}/disks_stats.txt"
-	echo -e "\n:: df -h\n" >> "${backupFolder}/disks_stats.txt"
-	df -h 2>&1 >> "${backupFolder}/disks_stats.txt" || true
-	echo -e "\n:: lsblk\n" >> "${backupFolder}/disks_stats.txt"
-	lsblk 2>&1 >> "${backupFolder}/disks_stats.txt" || true
-	echo -e "\n:: fdisk -l\n" >> "${backupFolder}/disks_stats.txt"
-	fdisk -l 2>&1 >> "${backupFolder}/disks_stats.txt" | true
-	cat /etc/hosts > "${backupFolder}/etc_hosts" || true
-	cat /etc/resolv.conf > "${backupFolder}/etc_resolv_conf" || true
-	echo -e "\n:: ip a\n" > "${backupFolder}/ip_stats"
-	ip a >> "${backupFolder}/ip_stats" || true
-	echo -e "\n:: ip r\n" >> "${backupFolder}/ip_stats"
-	ip r >> "${backupFolder}/ip_stats" || true
-	echo -e "\n:: ip link\n" >> "${backupFolder}/ip_stats"
-	ip link >> "${backupFolder}/ip_stats" || true
+	df -h > "${backupFolder}/disk/df.txt" 2>&1 || true
+	lsblk > "${backupFolder}/disk/lsblk.txt" 2>&1 || true
+	fdisk -l > "${backupFolder}/disk/fdisk.txt" 2>&1 || true
+}
+
+function get_k8s_cluster ()
+{
+	$k_orig version > "${backupFolder}/k8s/cluster/version.txt" 2>&1 || true
+	$k_orig describe nodes > "${backupFolder}/k8s/cluster/nodes.txt" 2>&1 || true
+	$k_orig get events -A --sort-by=.lastTimestamp > "${backupFolder}/k8s/cluster/events.txt" 2>&1 || true
+	$k_orig top nodes > "${backupFolder}/k8s/cluster/top_nodes.txt" 2>&1 || true
+	$k_orig top pods -A > "${backupFolder}/k8s/cluster/top_pods.txt" 2>&1 || true
+	command -v helm &>/dev/null && helm list -A > "${backupFolder}/k8s/cluster/helm_releases.txt" 2>&1 || true
 }
 
 function get_k8s ()
@@ -139,22 +211,20 @@ function get_k8s ()
 		$k get ipaddresspool -A 2>&1 || true
 		echo -e "\n:: kubectl -n metallb-system get pods\n"
 		$k -n metallb-system get pods 2>&1 || true
-	} >> "${backupFolder}/k8s_stats.txt"
+	} >> "${backupFolder}/k8s/resources/stats.txt"
 
-	kubectl -n metallb-system get pods --no-headers | awk '$3 != "Running" {print $1}' | while read -r pod
+	$k_orig -n metallb-system get pods --no-headers | awk '$3 != "Running" {print $1}' | while read -r pod
 do
-	echo -e "\n:: Logs for metallb-system $pod\n" >> "${backupFolder}/k8s_stats.txt"
-	kubectl -n metallb-system logs "$pod" >> "${backupFolder}/k8s_stats.txt" 2>&1 || true
+	echo -e "\n:: Logs for metallb-system $pod\n" >> "${backupFolder}/k8s/resources/metallb_logs.txt"
+	$k_orig -n metallb-system logs "$pod" >> "${backupFolder}/k8s/resources/metallb_logs.txt" 2>&1 || true
 done
 
-	$k get ingressroute --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroute "$z" -o yaml > "${backupFolder}/k8s_ingressroute_${z}.yaml";done || true
-	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s_ingressroutetcp_${z}.yaml";done || true
-	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s_ingressrouteudp_${z}.yaml";done || true
+	$k get ingressroute --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroute "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressroute_${z}.yaml";done || true
+	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressroutetcp_${z}.yaml";done || true
+	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressrouteudp_${z}.yaml";done || true
 
-	$k get pod -A --no-headers|grep -vw Running|while read -r pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> "${backupFolder}/k8s_pods_not_running.txt" || true
+	$k get pod -A --no-headers|grep -vw Running|while read -r pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> "${backupFolder}/k8s/resources/not_running.txt" || true
 }
-
-command -v iptables &>/dev/null && iptables -t filter -vxnL > "${backupFolder}/iptables.txt" || true
 
 if [ "$gather" == 'gc' ];then
 	# Extract hostname from configuration files
@@ -165,7 +235,7 @@ if [ "$gather" == 'gc' ];then
 	if [ -z "$config_hostname" ] && [ -f /root/manifests/ingressroutes.yaml ]; then
 		config_hostname="$(grep replacement: /root/manifests/ingressroutes.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
 	fi
-	
+
 	# Use extracted hostname if available, otherwise fall back to envname
 	if [ -n "$config_hostname" ]; then
 		envnamelabel="-${envname}-${config_hostname}-gc"
@@ -173,13 +243,13 @@ if [ "$gather" == 'gc' ];then
 		envnamelabel="-${envname}-gc"
 	fi
     test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}-/")"
-	
+
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
 	# Store original k for operations that don't need namespace
 	k_orig="$k"
 	test -z "$envname" && envname=$($k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && test -z "$config_hostname" && envnamelabel="-${envname}-gc"
 	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
-	
+
 	# Update k to include namespace
 	k="$k -n $envname"
 
@@ -187,18 +257,24 @@ if [ "$gather" == 'gc' ];then
 	if ! $k_orig get ns|grep -q "$envname" ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k_orig get ns;exit 1;fi
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
+	create_dirs
+	get_system
+	get_network
 	get_disks
+	get_ssl
+	get_k8s_cluster
+
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
 		echo "[i] checking disk latency [100mb temp file] .."
-		echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disks_stats.txt"
-		$k exec -it deploy/bsi -- bash -c "df -h" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
-		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disks_stats.txt"
-		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
-		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disks_stats.txt"
-		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" 2>/dev/null >> "${backupFolder}/disks_stats.txt"
+		echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disk/bsi_df.txt"
+		$k exec -it deploy/bsi -- bash -c "df -h" >> "${backupFolder}/disk/bsi_df.txt" 2>&1
+		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
+		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
 	else
 		echo "[-] Skipping disk latency check"
-		echo "############ disk latency check skipped" >> "${backupFolder}/disks_stats.txt"
+		echo "############ disk latency check skipped" >> "${backupFolder}/disk/latency.txt"
 	fi
 	get_k8s
 
@@ -241,8 +317,8 @@ if [ "$gather" == 'gc' ];then
 	echo "[+] ${mysql_elapsed} sec $mysqldump_exitcode_error"
 	#backup all couchdb DBs:
 	couchdbUrl="$($k get svc|grep couchdb|awk '{print $3":"$5}'|sed 's/ /:/g'|cut -d/ -f1)"
-	test -n "$HTTP_PROXY" && test -n "$couchdbUrl" && curl_no_proxy="NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
-	test -n "$http_proxy" && test -n "$couchdbUrl" && curl_no_proxy="no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
+	test -n "${HTTP_PROXY:-}" && test -n "$couchdbUrl" && curl_no_proxy="env NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
+	test -n "${http_proxy:-}" && test -n "$couchdbUrl" && curl_no_proxy="env no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 
     if [ "$($curl_no_proxy curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
       couchdb_admin_user="$($k get configmap common -o json|jq -r .data.couchdb_admin_user)"
@@ -260,9 +336,8 @@ if [ "$gather" == 'gc' ];then
 	test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz";done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
-	$k get pod --no-headers|awk '{print $1}'|while read -r z;do $k logs "$z" > "${backupFolder}/logs_pod_${z}" 2>&1; $k describe pod "$z" >  "${backupFolder}/describe_pod_${z}" 2>&1;done
-	$k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/logs_pod_bsi_supervisorctl_status_all" 2>&1
-	mkdir -p "${backupFolder}/k8s_pod_bsi_varlog"
+	$k get pod --no-headers|awk '{print $1}'|while read -r z;do $k logs "$z" > "${backupFolder}/k8s/logs/pod_${z}.log" 2>&1; $k describe pod "$z" > "${backupFolder}/k8s/logs/describe_pod_${z}.txt" 2>&1;done
+	$k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/k8s/bsi/supervisorctl.txt" 2>&1
 	bsipod="$($k get pod --no-headers|grep ^bsi|awk '{print $1}')"
 	test -n "$bsipod" && while read -r bsi;do
 	if [ -z "$sqlUpgradeLogs" ];then
@@ -271,19 +346,31 @@ if [ "$gather" == 'gc' ];then
 		varlogs="$($k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
 	fi
 
-	test -n "$varlogs" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
+	test -n "$varlogs" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
 
 	varlogsbsi="$($k exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
-	test -n "$varlogsbsi" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s_pod_bsi_varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
+	test -n "$varlogsbsi" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
 done <<< "$bsipod"
 
-$k get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get secret "$z" -o yaml;done > "${backupFolder}/k8s_secrets"
-$k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get cm "$z" -o yaml;done > "${backupFolder}/k8s_configmaps"
+$k get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get secret "$z" -o yaml;done > "${backupFolder}/k8s/resources/secrets.yaml"
+$k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get cm "$z" -o yaml;done > "${backupFolder}/k8s/resources/configmaps.yaml"
+
+	# GC-specific SSL: TLS secret expiry
+	{
+		$k_orig get secrets -A -o json 2>/dev/null | jq -r '.items[] | select(.type=="kubernetes.io/tls") | .metadata.namespace + "/" + .metadata.name' 2>/dev/null | while read -r secret; do
+			ns_name="${secret%%/*}"
+			sec_name="${secret##*/}"
+			echo ":::: $ns_name/$sec_name"
+			$k_orig -n "$ns_name" get secret "$sec_name" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -subject -enddate 2>/dev/null || echo "  (unable to decode)"
+		done
+	} > "${backupFolder}/ssl/k8s_tls_certs.txt" 2>&1 || true
+	# GC-specific SSL: traefik cert logs
+	$k_orig -n traefik logs deploy/traefik 2>&1 | grep -i cert > "${backupFolder}/ssl/traefik_certs.txt" || true
 
 if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s resources.."
 	# k8s backups
-	$k api-resources --no-headers|awk '{print $1}'|while read -r z;do mkdir -p "${backupFolder}/k8s_api_resources/${z}";$k get "$z" --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get "$z" "$a" -o yaml > "${backupFolder}/k8s_api_resources/${z}/${z}_${a}.yaml" 2>/dev/null;done;done || true
+	$k api-resources --no-headers|awk '{print $1}'|while read -r z;do mkdir -p "${backupFolder}/k8s/api_resources/${z}";$k get "$z" --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get "$z" "$a" -o yaml > "${backupFolder}/k8s/api_resources/${z}/${z}_${a}.yaml" 2>/dev/null;done;done || true
 
 	echo "[i] backing up k8s container logs.."
 	test -d /var/log/containers && mkdir -p "${backupFolder}/container_logs" && rsync -azL /var/log/containers/* "${backupFolder}/container_logs/" || true
@@ -291,7 +378,7 @@ fi
 
 else # if gather=sc
 	envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
-	
+
 	# Extract hostname from docker-compose.yaml
 	config_hostname=""
 	if [ -f /opt/metalsoft/agents/docker-compose.yaml ]; then
@@ -303,7 +390,7 @@ else # if gather=sc
 			config_hostname="$(grep CONTROLLER_TCP_ADDRESS= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d= -f2 | cut -d: -f1 | head -1)"
 		fi
 	fi
-	
+
 	# Use extracted hostname if available, otherwise fall back to envname
 	if [ -n "$config_hostname" ]; then
 		envnamelabel="${envname}-${config_hostname}-sc"
@@ -312,42 +399,45 @@ else # if gather=sc
 	fi
 	test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}/")"
 
-	echo "[i] backing up disk stats.."
+	create_dirs
+	get_system
+	get_network
 	get_disks
+	get_ssl
 
 	echo "[i] backing up docker stats.."
-	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p "${backupFolder}/docker-agents" && rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker-agents/" || true
-	test -d /opt/metalsoft/nfs-storage && ls -lahR /opt/metalsoft/nfs-storage/ > "${backupFolder}/nfs-storage_ls.txt" || true
-	systemctl status docker > "${backupFolder}/docker_status.txt" || true
-	docker ps -a > "${backupFolder}/docker_ps.txt" || true
-	docker ps|grep Restarting > "${backupFolder}/docker_restarting.txt" || true
-	docker ps|grep Restarting|awk '{print $1}'|while read -r z;do docker logs "$z" --tail=1000 > "${backupFolder}/docker_restarting_${z}.txt";done || true
-	docker images -a > "${backupFolder}/docker_images.txt" || true
-	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p "${backupFolder}/docker-agents-logs" && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read -r z;do echo "$z"|while read -r f;do find "$f" -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} "${backupFolder}/docker-agents-logs/" \;;done;done
-	test -f /opt/metalsoft/agents/docker-compose.yaml && mkdir -p "${backupFolder}/docker-logs" && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do docker logs "${z%%.*}" > "${backupFolder}/docker-logs/${z}.log" 2>&1;done
+	test -f /opt/metalsoft/agents/docker-compose.yaml && rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker/agents/" || true
+	test -d /opt/metalsoft/nfs-storage && ls -lahR /opt/metalsoft/nfs-storage/ > "${backupFolder}/nfs/storage_ls.txt" || true
+	systemctl status docker > "${backupFolder}/docker/status.txt" || true
+	docker ps -a > "${backupFolder}/docker/ps.txt" || true
+	docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt" || true
+	docker ps|grep Restarting|awk '{print $1}'|while read -r z;do docker logs "$z" --tail=1000 > "${backupFolder}/docker/restarting_${z}.txt";done || true
+	docker images -a > "${backupFolder}/docker/images.txt" || true
+	docker info > "${backupFolder}/docker/info.txt" 2>&1 || true
+	docker system df > "${backupFolder}/docker/system_df.txt" 2>&1 || true
+	docker network ls > "${backupFolder}/docker/networks.txt" 2>&1 || true
+	docker volume ls > "${backupFolder}/docker/volumes.txt" 2>&1 || true
+	test -f /etc/docker/daemon.json && cp /etc/docker/daemon.json "${backupFolder}/docker/daemon.json" || true
+	journalctl -u docker -n 500 --no-pager > "${backupFolder}/docker/journalctl.txt" 2>&1 || true
+	test -f /opt/metalsoft/agents/docker-compose.yaml && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read -r z;do echo "$z"|while read -r f;do find "$f" -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} "${backupFolder}/docker/agents-logs/" \;;done;done
+	test -f /opt/metalsoft/agents/docker-compose.yaml && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
+	# SC-specific SSL: openssl to GC
 	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl_to_gc_debug_443.txt" 2>&1
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:9091" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl_to_gc_debug_9091.txt" 2>&1
-	ls -laR /etc/ssl/certs/ &> "${backupFolder}/ssl_ls_etc_ssl_certs.txt" || true
-	test -d /etc/pki/tls/certs/ && ls -laR /etc/pki/tls/certs/ &> "${backupFolder}/ssl_ls_etc_pki_tls_certs.txt" || true
-	test -d /etc/pki/ca-trust/source/anchors/ && ls -laR /etc/pki/ca-trust/source/anchors/ &> "${backupFolder}/ssl_ls_etc_pki_ca_trust_source_anchors.txt" || true
-	test -d /usr/local/share/ca-certificates/ && ls -laR /usr/local/share/ca-certificates/ &> "${backupFolder}/ssl_ls_usr_local_share_ca_certificates.txt" || true
-	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && grep "^# " /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem > "${backupFolder}/ssl_grep_redhat_etc_pki_ca_trust_extracted_pem_tls_ca_bundle.txt" || true
-	test -d /etc/ssl/certs/ && tar czf "${backupFolder}/ssl_etc_ssl_certs.tar.gz" /etc/ssl/certs/ &>/dev/null
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl/openssl_443.txt" 2>&1
+	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:9091" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl/openssl_9091.txt" 2>&1
 	test -d /opt/metalsoft/ansible-jobs && tar czf "${backupFolder}/ansible-jobs.tar.gz" /opt/metalsoft/ansible-jobs &>/dev/null
-	test -f /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && cp /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem "${backupFolder}/ssl_cp_redhat_tls_ca_bundle.pem" || true
-	test -d /etc/pki/ca-trust/source/anchors/ && \ls /etc/pki/ca-trust/source/anchors/|while read -r z;do echo ":::: $z";openssl x509 -noout -subject -in "/etc/pki/ca-trust/source/anchors/$z";done > "${backupFolder}/ssl_redhat_etc_pki_ca_trust_source_anchors_subjects.txt" || true
-	test -f /etc/ssl/certs/ca-certificates.crt && cp /etc/ssl/certs/ca-certificates.crt "${backupFolder}/ssl_cp_debian_ca_certificates.crt" || true
 fi
 
 echo "[i] creating an archive.."
-test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log_${thedate}.txt" &>/dev/null
+test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log.txt" &>/dev/null
 resultFilename="${originalBackupFolder}/ms-diagnostics-${thedate}${envnamelabel}.tar.gz"
-mv "${backupFolder}" "${newbackupFolder}"
+test -z "$newbackupFolder" && newbackupFolder="$backupFolder"
+test "$backupFolder" != "$newbackupFolder" && mv "${backupFolder}" "${newbackupFolder}"
 tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackupFolder##*/}" >/dev/null 2>&1 && \
-	rm -rf "$backupFolder" && \
+	rm -rf "$newbackupFolder" && {
 	filesize="$(du -h "${resultFilename}" | awk '{print $1}')"
-	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}" || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
+	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}"
+} || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
 
 	if [ "$pushfile" == "1" ];then
 		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
