@@ -702,6 +702,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
 
       #- /opt/metalsoft/extensions/oc:/usr/local/bin/oc:ro
       #- /opt/metalsoft/extensions/openshift-install:/usr/local/bin/openshift-install:ro
+      #- /opt/metalsoft/nfs-storage:/iso
 "
         ms_agent_ansible_runner_mounts="
       - ANSIBLE_RUNNER=enabled
