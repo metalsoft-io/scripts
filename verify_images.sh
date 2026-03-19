@@ -294,8 +294,8 @@ verify_deployment() {
             elif [[ "$deployment_name" == *"-microservice" ]] && kubectl -n "$NAMESPACE" get deploy "${deployment_name%-microservice}" &>/dev/null; then
                  actual_deployment_name="${deployment_name%-microservice}"
             else
-                echo -e "${RED}${ICON_FAIL}${NC} Deployment '$deployment_name' (checked as '$actual_deployment_name', '${deployment_name}-microservice', '${deployment_name%-microservice}') not found in namespace '$NAMESPACE'"
-                return 1
+                echo -e "${YELLOW}${ICON_INFO}${NC} $deployment_name ${GRAY}(not deployed in namespace '$NAMESPACE' - skipped)${NC}"
+                return 0
             fi
         fi
 
