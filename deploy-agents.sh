@@ -1189,6 +1189,7 @@ if [ -n "${REGISTRY_LOGIN}" ]; then
     fi
 fi
 
+PULL_SUCCESS=0
 if [ -z "$REG_HOST_CONN_FAILED" ];then
 debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
 $DOCKERBIN login "${REG_HOST}"
@@ -1241,7 +1242,6 @@ fi
 
 cd /opt/metalsoft/agents || { echo "Error: Failed to change directory to /opt/metalsoft/agents" >&2; exit 1; }
 debuglog "pulling latest images.."
-PULL_SUCCESS=0
 if [ "$DOCKERBIN" == "docker" ];then
   $DOCKERBIN compose pull && PULL_SUCCESS=1
 else
