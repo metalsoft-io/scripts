@@ -76,9 +76,7 @@ if [ ${#backupFolder} -le 1 ];then
     echo -e "${lightred}backupFolder is set to '$backupFolder', which is suspiciously short path! Exiting..${nc}"
   exit 11
 fi
-kubectl="kubectl"
-command -v microk8s > /dev/null && kubectl="microk8s.kubectl"
-k="${altk:-$kubectl}"
+k="${altk:-kubectl}"
 if ! type $k >/dev/null 2>&1 ;then echo "$k was not found"; exit 12;fi
 test -n "$gpg_email" && test type gpg &>/dev/null
 if [ -n "$gpg_email" ];then
@@ -100,31 +98,53 @@ if [ -z "$envname" ];then echo -e "${lightred}No environment namespace is set. E
 if ! $k get ns|grep -q $envname ;then echo -e "${lightred}Env $envname not found. Exiting..${nc}";exit 15;fi
 k="$k -n $envname"
 
-mkdir -p ${backupFolder} && test -w "${backupFolder}" || { echo -e "${lightred}Unable to create or write to required backup folder '${backupFolder}'. Exiting..${nc}"; exit 16; }
+mkdir -p "${backupFolder}" && test -w "${backupFolder}" || { echo -e "${lightred}Unable to create or write to required backup folder '${backupFolder}'. Exiting..${nc}"; exit 16; }
 #cleanup:
 
 # cleanup the new style backupFolder as set below..
-find ${backupFolder} -mindepth 2 -maxdepth 2 -mtime +${preserveDays} -exec rm -rf {} \;
+find "${backupFolder}" -mindepth 2 -maxdepth 2 -mtime +"${preserveDays}" -exec rm -rf {} \;
 
-originalBackupFolder=${backupFolder}
-backupFolder=${backupFolder}/${envname}/${thedate}
-mkdir -p $backupFolder
+originalBackupFolder="${backupFolder}"
+backupFolder="${backupFolder}/${envname}/${thedate}"
+mkdir -p "$backupFolder"
 
 # k8s backups
-test -z "$SKIP_K8S_RESOURCES" && $k api-resources --no-headers|awk '{print $1}'|sort -u|grep -v 'events'|while read -r z;do mkdir -p ${backupFolder}/k8s_api_resources/${z};$k get $z --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get $z $a -o yaml > ${backupFolder}/k8s_api_resources/${z}/${z}_${a}.yaml 2>/dev/null;done;done
+test -z "$SKIP_K8S_RESOURCES" && {
+  mkdir -p ${backupFolder}/k8s_api_resources
+  $k api-resources --no-headers | awk '{print $1}' | sort -u | grep -v 'events' | xargs -I{} -P 4 bash -c '
+    resource="$1"
+    backupDir="$2/k8s_api_resources/$resource"
+    k="$3"
+    mkdir -p "$backupDir"
+    $k get $resource --no-headers 2>/dev/null | awk "{print \$1}" | xargs -I% -P 4 bash -c "
+      $k get $resource % -o yaml > \"$backupDir/${resource}_%.yaml\" 2>/dev/null
+    " || true
+  ' -- {} ${backupFolder} "$k"
+}
 
-echo -e "\n:: kubectl get node -o wide\n" >> ${backupFolder}/k8s_stats.txt
-$k get node -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
-echo -e "\n:: kubectl get pod -A\n" >> ${backupFolder}/k8s_stats.txt
-$k get pod -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
-echo -e "\n:: kubectl get svc -A\n" >> ${backupFolder}/k8s_stats.txt
-$k get svc -A 2>&1 >> ${backupFolder}/k8s_stats.txt || true
-echo -e "\n:: kubectl get deploy -A -o wide\n" >> ${backupFolder}/k8s_stats.txt
-$k get deploy -A -o wide 2>&1 >> ${backupFolder}/k8s_stats.txt || true
+mkdir -p "${backupFolder}/etc"
+for src in /etc/hosts /etc/resolv.conf /etc/environment; do
+  test -f "$src" && cp "$src" "${backupFolder}/etc"
+done
+for src in /etc/netplan /etc/rancher /etc/ssl; do
+  test -d "$src" && cp -a "$src" "${backupFolder}/etc"
+done
+
+append_k8s_stats() {
+  header="$1"
+  shift
+  echo -e "\n:: ${header}\n" >> "${backupFolder}/k8s_stats.txt"
+  $k "$@" 2>&1 >> "${backupFolder}/k8s_stats.txt" || true
+}
+append_k8s_stats "kubectl get node -o wide" get node -o wide
+append_k8s_stats "kubectl get pod -A" get pod -A -o wide
+append_k8s_stats "kubectl get svc -A" get svc -A
+append_k8s_stats "kubectl get deploy -A -o wide" get deploy -A -o wide
 
 if [ -z "$SKIP_COUCHDB" ];then
   #backup all couchdb DBs:
-  couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
+  couchdbUrl="$($k -n $envname get svc|grep couchdb|grep ClusterIP|head -1|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
+  test -z "$couchdbUrl" && couchdbUrl="$($k -n $envname get svc|grep couchdb|awk '{print $3,$5}'|sed 's/ /:/g'|cut -d/ -f1|cut -d: -f1,2)"
 
   if [ -n "$couchdbUrl" ];then
     if [ "$(curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
@@ -137,9 +157,9 @@ if [ -z "$SKIP_COUCHDB" ];then
   test -n "$couchdbUrl" && curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > ${backupFolder}/${thedate}_couchdb_backup_${z}.gz;done
 
 #create couchdb_restore script:
-cat > ${backupFolder}/.restore_couchdb <<ENDD
+cat > "${backupFolder}/.restore_couchdb" <<ENDD
 #!/bin/bash
-couchdb="\$(kubectl -n ${envname} get svc|grep couchdb|head -1|awk '{print \$3":"\$5}'|cut -d/ -f1)"
+couchdb="\$(kubectl -n ${envname} get svc|grep couchdb|grep ClusterIP|head -1|awk '{print \$3":"\$5}'|cut -d/ -f1)"
 if [ -z "\$couchdb" ]; then echo couchdb host not found; exit 17;fi
 couchdb_admin_user="$couchdb_admin_user"
 couchdb_admin_password="$couchdb_admin_password"
@@ -170,7 +190,7 @@ fi
 
 done
 ENDD
-chmod +x ${backupFolder}/.restore_couchdb
+chmod +x "${backupFolder}/.restore_couchdb"
 fi
 
 fi
@@ -180,9 +200,9 @@ fi
 all_dbs="$($k -n $envname exec deploy/mysql -c bsi-mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 while read -r z;do
   if [ "$z" == "mysql" ];then
-    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz
+    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
   else
-    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > ${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz
+    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
   fi
 done <<< "$all_dbs"
 
@@ -190,9 +210,9 @@ done <<< "$all_dbs"
 if [ -n "$gpg_email" ];then
   test -n "$GPG_PASS" && gpg_with_pass="--pinentry-mode loopback --passphrase '${GPG_PASS}'"
   test -z "$GPG_PASS" && test -n "$GPG_PASS_FILE" && gpg_with_pass="--pinentry-mode loopback --passphrase-file ${GPG_PASS_FILE}"
-  find ${backupFolder} -type f -name '*mysql*.gz' -o -name '*couchdb_*.gz'|while read -r z;do
-  gpg -q --batch --yes $gpg_with_pass --default-key "${gpg_email}" --output ${z}.sig --detach-sign ${z}
-  echo -e "echo :: Verifying ${z}\ngpg --verify ${z}.sig ${z}" >> ${backupFolder}/.gpg_verify
+  find "${backupFolder}" -type f -name '*mysql*.gz' -o -name '*couchdb_*.gz'|while read -r z;do
+  gpg -q --batch --yes $gpg_with_pass --default-key "${gpg_email}" --output "${z}.sig" --detach-sign "${z}"
+  echo -e "echo :: Verifying ${z}\ngpg --verify ${z}.sig ${z}" >> "${backupFolder}/.gpg_verify"
 done
 fi
 
@@ -200,5 +220,5 @@ fi
 if [ -n "$sshHost" -a -n "$sshDest" -a -n "$originalBackupFolder" ];then
   sshPort=${sshPortGet:-22}
   sshUser=${sshUserGet:-root}
-  rsync -aze "ssh -p $sshPort" --delete ${originalBackupFolder}/ ${sshUser}@${sshHost}:${sshDest}
+  rsync -aze "ssh -p $sshPort" --delete "${originalBackupFolder}/" "${sshUser}@${sshHost}:${sshDest}"
 fi
