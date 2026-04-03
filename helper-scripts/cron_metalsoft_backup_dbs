@@ -9,6 +9,7 @@ if ! which jq > /dev/null;then echo "$0 needs jq installed";exit 1;fi
 
 backupFolder=/var/backups/metalsoft
 preserveDays=30
+mysql_container_name="mysql" # rename to bsi-mysql for old deploys
 thedate="$(date +"%F-%H%M%S")"
 
 nc="\e[00m"
@@ -197,12 +198,12 @@ fi
 
 #backup all mysql DBs:
 # NOT WORKING ON mySQL Cluster
-all_dbs="$($k -n $envname exec deploy/mysql -c bsi-mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+all_dbs="$($k -n $envname exec deploy/mysql -c $mysql_container_name -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 while read -r z;do
   if [ "$z" == "mysql" ];then
-    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
+    $k -n $envname exec deploy/mysql -c $mysql_container_name -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
   else
-    $k -n $envname exec deploy/mysql -c bsi-mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
+    $k -n $envname exec deploy/mysql -c $mysql_container_name -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases $z --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/${thedate}_mysqldatabase_${z}_${envname}.sql.gz"
   fi
 done <<< "$all_dbs"
 
