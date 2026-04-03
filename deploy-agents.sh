@@ -46,7 +46,6 @@ testOS ()
   fi
 
   if [ -n "$found_os" ]; then
-    source /etc/os-release
     if [ "$found_os" == "rhel" ]; then
       command -v yum > /dev/null && os_packager=yum
       command -v dnf > /dev/null && os_packager=dnf
@@ -88,9 +87,7 @@ if [ "$found_os" == "debian" ];then
   export LC_ALL=C
   export DEBIAN_FRONTEND=noninteractive
   export APT_LISTCHANGES_FRONTEND=none
-fi
 
-if [ "$found_os" == "debian" ];then
   command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
     $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null || debuglog "Error installing packages"; }
@@ -100,7 +97,7 @@ if [ "$found_os" == "debian" ];then
 fi
 
 debuglog "Creating folders"
-if verlt $IMAGES_TAG v7.0.0; then
+if verlt "$IMAGES_TAG" v7.0.0; then
 PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
 MONITORING_SERVICE_PORT=8099
 fi
@@ -127,7 +124,7 @@ else
   JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-${REG_HOST}/sc/junos-driver:${IMAGES_TAG}}
   MSAGENT_URL=${MSAGENT_URL:-${REG_HOST}/sc/ms-agent:${IMAGES_TAG}}
   ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
-  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
+  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAG}"
 
 fi
 
@@ -160,19 +157,13 @@ debuglog "Using interface ${interface_name} with IP ${interface_ip}"
 
 # Try multiple methods to get main IP address. Prioritize the IP on the default route interface.
 MAINIP="$interface_ip"
-if [ -z "$MAINIP" ]; then
-    MAINIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-fi
-if [ -z "$MAINIP" ] && command -v getent >/dev/null 2>&1 && command -v hostname >/dev/null 2>&1; then
-  MAINIP="$(getent ahosts "$(hostname)" 2>/dev/null | awk '/STREAM/ {print $1; exit}')"
-fi
 
 if verlt "$IMAGES_TAG" v7.0.0; then
 test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
 else
 test -n "$SSL_HOSTNAME" || { echo -e "${lightred}Error: SSL_HOSTNAME not set${nc}" >&2; exit 11; }
 fi
-test -n "$MAINIP" && NFSIP="$MAINIP"
+NFSIP="$MAINIP"
 
 # keep the NFS_HOST if already set, as it could've been modified manually
 test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
@@ -202,35 +193,36 @@ function check_remote_conn {
     done
   } &
   __spinner_pid=$!
+  _stop_spinner() { kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"; }
 
   # For HTTPS (port 443), use hostname directly without IP resolution
   if [ "$protocol" = "tcp" ] && [ "$port" = "443" ]; then
     if curl -sk --connect-timeout 10 --max-time 11 $curl_s_proxy "https://$ip" >/dev/null 2>&1; then
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightgreen}success${nc}"
       return 0
     else
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightred}failure${nc}"
       return 1
     fi
   elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
     if curl -sk --connect-timeout 10 --max-time 11 $curl_proxy "http://$ip" >/dev/null 2>&1; then
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightgreen}success${nc}"
       return 0
     else
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightred}failure${nc}"
       return 1
     fi
   elif [ "$protocol" = "icmp" ]; then
     if ping -c1 "$ip" >/dev/null 2>&1; then
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightgreen}success${nc}"
       return 0
     else
-      kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+      _stop_spinner
       echo -e "${lightred}failure${nc}"
       return 1
     fi
@@ -250,7 +242,7 @@ function check_remote_conn {
   esac
 
   if [ -z "$ip" ]; then
-    kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+    _stop_spinner
     echo -e "${lightred}Error: not resolved${nc}"
     return 1
   fi
@@ -276,7 +268,7 @@ function check_remote_conn {
       fi
     fi
   done
-  kill $__spinner_pid 2>/dev/null; wait $__spinner_pid 2>/dev/null; printf "\b"
+  _stop_spinner
   echo -e "${res% }"
 
   # Return success only if all connections succeeded
@@ -400,11 +392,9 @@ if ! command -v yq >/dev/null; then
   esac
 
   YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
-  if ! command -v yq >/dev/null; then
-    debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
-    curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
-    chmod +x /usr/local/bin/yq
-  fi
+  debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
+  curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
+  chmod +x /usr/local/bin/yq
 fi
 
 if verlt "$IMAGES_TAG" v7.0.0 && [[ ! "$IMAGES_TAG" =~ ^develop ]]; then
@@ -1192,11 +1182,8 @@ fi
 PULL_SUCCESS=0
 if [ -z "$REG_HOST_CONN_FAILED" ];then
 debuglog "Login to $DOCKERBIN with Metalsoft provided credentials for ${REG_HOST}:"
-$DOCKERBIN login "${REG_HOST}"
-
-while [ $? -ne 0 ]; do
+while ! $DOCKERBIN login "${REG_HOST}"; do
   debuglog "Lets try again: $DOCKERBIN login ${REG_HOST}:"
-  $DOCKERBIN login "${REG_HOST}"
   sleep 1
 done
 
@@ -1282,7 +1269,7 @@ fi
 
 if [[ -n ${RESOLVCONFCHANGED} ]];then
   debuglog "Resolv.conf changed, restarting $DOCKERBIN containers"
-  cd /opt/metalsoft/agents || return
+  cd /opt/metalsoft/agents || exit 1
   if [ "$DOCKERBIN" == "docker" ];then
     $DOCKERBIN compose down
     $DOCKERBIN compose up -d
@@ -1290,7 +1277,7 @@ if [[ -n ${RESOLVCONFCHANGED} ]];then
     ${DOCKERBIN}-compose down
     ${DOCKERBIN}-compose up -d
   fi
-  cd - || return
+  cd - || exit 1
 fi
 
 
