@@ -285,10 +285,15 @@ if [ "$gather" == 'gc' ];then
 		mysqldump_opts='--skip-comments'
 		all_dbs="$($k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read -r z;do
+			_outfile="${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz"
 			if [ "$z" == "mysql" ];then
-				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
+				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "$_outfile"
 			else
-				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz" || true
+				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
+			fi
+			_pipe_rc=("${PIPESTATUS[@]}")
+			if [ "${_pipe_rc[0]}" -ne 0 ] || ! gzip -t "$_outfile" 2>/dev/null; then
+				echo "${lightred}[!] mysqldump warning for '$z': exit codes=${_pipe_rc[*]}, gzip integrity=$(gzip -t "$_outfile" 2>&1 || echo FAILED). File may be incomplete.${nc}"
 			fi
 		done <<< "$all_dbs"
 	fi
