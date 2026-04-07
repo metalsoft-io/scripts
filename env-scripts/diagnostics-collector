@@ -292,7 +292,7 @@ if [ "$gather" == 'gc' ];then
 				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
 			fi
 			_pipe_rc=("${PIPESTATUS[@]}")
-			if [ "${_pipe_rc[0]}" -ne 0 ] || ! gzip -t "$_outfile" 2>/dev/null; then
+			if (( ${_pipe_rc[0]} + ${_pipe_rc[1]:-0} + ${_pipe_rc[2]:-0} )) || ! gzip -t "$_outfile" 2>/dev/null; then
 				echo "${lightred}[!] mysqldump warning for '$z': exit codes=${_pipe_rc[*]}, gzip integrity=$(gzip -t "$_outfile" 2>&1 || echo FAILED). File may be incomplete.${nc}"
 			fi
 		done <<< "$all_dbs"
