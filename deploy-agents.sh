@@ -756,6 +756,45 @@ if verlt "$IMAGES_TAG" v7.2.0; then
     controller_tcp_address_line="      - CONTROLLER_TCP_ADDRESS=${controller_tcp_address_val}"
 fi
 
+# Determine NFS service configuration (DEPLOY_NFS=1 to enable, default: enabled)
+if [[ "${DEPLOY_NFS:-1}" == "1" ]]; then
+  nfs_service="  nfs:
+    network_mode: host
+    container_name: nfs-server
+    image: ${REG_HOST}/sc/nfs-server:3
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
+      #- NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
+    volumes:
+      - /opt/metalsoft/nfs-storage:/data
+    ports:
+      - 2049:2049
+      - 111:111
+      - 32765:32765
+      - 32767:32767
+"
+else
+  nfs_service="#  nfs:
+#    network_mode: host
+#    container_name: nfs-server
+#    image: ${REG_HOST}/sc/nfs-server:3
+#    restart: unless-stopped
+#    privileged: true
+#    environment:
+#      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
+#      #- NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
+#    volumes:
+#      - /opt/metalsoft/nfs-storage:/data
+#    ports:
+#      - 2049:2049
+#      - 111:111
+#      - 32765:32765
+#      - 32767:32767
+"
+fi
+
 inband_dc="  ms-agent:
     container_name: ms-agent
     network_mode: host
@@ -817,23 +856,7 @@ $ms_agent_ansible_runner_mounts
 $ms_agent_ansible_runner_volumes
       # - /etc/hosts:/etc/hosts:ro
       # - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/ssl-cert.pem
-  nfs:
-    network_mode: host
-    container_name: nfs-server
-    image: ${REG_HOST}/sc/nfs-server:3
-    restart: unless-stopped
-    privileged: true
-    environment:
-      - NFS_EXPORT_0=/data                *(ro,no_subtree_check)
-      #- NFS_EXPORT_1=/data/test-iso       *(ro,no_auth_nlm)
-    volumes:
-      - /opt/metalsoft/nfs-storage:/data
-    ports:
-      - 2049:2049
-      - 111:111
-      - 32765:32765
-      - 32767:32767
-"
+${nfs_service}"
 non_inband_dc="  agents:
     network_mode: host
     container_name: agents
