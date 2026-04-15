@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ -f license-deployment.yaml ]] || { echo "ERROR: license-deployment.yaml not found"; exit 1; }
+[[ $# -ge 1 ]] || { echo "Usage: $0 <newtag>"; exit 1; }
+
+newtag="$1"
+oldtag="$(grep -Po '(?<=license:)[v0-9.]+' license-deployment.yaml)"
+[[ -n "$oldtag" ]] || { echo "ERROR: could not extract current tag from license-deployment.yaml"; exit 1; }
+
+echo "Replacing :${oldtag} -> :${newtag}"
+sed -i "s/:${oldtag//./\\.}/:${newtag}/g" ./*.yaml
+
+grep "image:.*:${newtag}" ./*.yaml | awk '{n=index($0,":"); f=substr($0,1,n-1); v=substr($0,n+1); gsub(/^\.\//,"",f); gsub(/^ +/,"",v); printf "  %-45s %s\n",f,v}'
