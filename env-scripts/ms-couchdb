@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# couch.sh - CouchDB CLI tool for k8s-deployed CouchDB (curl only)
+# couch.sh - CouchDB CLI tool for k8s-deployed CouchDB (curl + jq)
 set -euo pipefail
 
 GREEN='\033[32m'
@@ -10,6 +10,8 @@ BOLD='\033[1m'
 
 _err() { printf "${LRED}%s${RESET}\n" "$*" >&2; }
 _ok()  { printf "${GREEN}●${RESET} %s\n" "$*"; }
+
+command -v jq >/dev/null 2>&1 || { _err 'ERROR: jq is required but not installed.'; exit 1; }
 
 [[ -z "${ns:-}" ]] && { _err 'ERROR: $ns is not set. Export the target namespace first (e.g. export ns=demo-metalsoft)'; exit 1; }
 NAMESPACE="$ns"
@@ -27,8 +29,8 @@ _get_svc_ip() {
 _get_creds() {
     local cm
     cm=$(kubectl get configmap "$CONFIGMAP" -n "$NAMESPACE" -o jsonpath='{.data}' 2>/dev/null)
-    COUCH_USER=$(echo "$cm" | grep -o '"couchdb_admin_user":"[^"]*"' | cut -d'"' -f4)
-    COUCH_PASS=$(echo "$cm" | grep -o '"couchdb_admin_password":"[^"]*"' | cut -d'"' -f4)
+    COUCH_USER=$(echo "$cm" | jq -r '.couchdb_admin_user')
+    COUCH_PASS=$(echo "$cm" | jq -r '.couchdb_admin_password')
 }
 
 _init() {
@@ -48,17 +50,13 @@ _curl() {
 
 # Print doc rows from _all_docs JSON on stdin: "  <id>  [rev: N]" with rev in green
 _print_docs() {
-    python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-rows = [r for r in data.get('rows', []) if not r['id'].startswith('_design/')]
-if not rows:
-    print('    (no documents)')
-for r in rows:
-    rev = r['value']['rev']
-    rev_num = rev.split('-')[0]
-    print(f'    {r[\"id\"]}  \033[32m[rev: {rev_num}]\033[0m')
-" 2>/dev/null
+    jq -r --arg g "$GREEN" --arg r "$RESET" '
+        [.rows[]? | select(.id | startswith("_design/") | not)] as $rows
+        | if ($rows | length) == 0
+          then "    (no documents)"
+          else ($rows[] | "    \(.id)  \($g)[rev: \(.value.rev | split("-")[0])]\($r)")
+          end
+    ' 2>/dev/null
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -67,13 +65,13 @@ cmd_info() {
     _init
     echo "  Service IP : $COUCH_IP"
     echo "  URL        : http://${COUCH_USER}:****@${COUCH_IP}:5984"
-    echo "  Version    : $(_curl "${COUCH_URL}/" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
+    echo "  Version    : $(_curl "${COUCH_URL}/" | jq -r '.version')"
 }
 
 cmd_list_dbs() {
     _init
     local dbs
-    dbs=$(_curl "${COUCH_URL}/_all_dbs" | tr ',' '\n' | tr -d '[]"' | grep -v '^\s*$' | sort)
+    dbs=$(_curl "${COUCH_URL}/_all_dbs" | jq -r '.[]' | sort)
 
     printf "${BOLD}Databases:${RESET}\n"
     while IFS= read -r db; do
@@ -101,14 +99,12 @@ cmd_pull() {
     _init
 
     local encoded_id
-    encoded_id=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$docid" 2>/dev/null \
-                 || echo "$docid" | sed 's| |%20|g')
+    encoded_id=$(jq -rn --arg x "$docid" '$x|@uri')
 
-    _curl "${COUCH_URL}/${db}/${encoded_id}" \
-        | python3 -m json.tool --indent 2 > "$outfile"
+    _curl "${COUCH_URL}/${db}/${encoded_id}" | jq . > "$outfile"
 
     local rev
-    rev=$(grep -o '"_rev": *"[^"]*"' "$outfile" | head -1 | cut -d'"' -f4)
+    rev=$(jq -r '._rev' "$outfile")
     _ok "Pulled '$docid' from '$db'"
     echo "  rev  : $rev"
     echo "  file : $outfile"
@@ -121,16 +117,14 @@ cmd_push() {
     _init
 
     local local_id local_rev
-    local_id=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['_id'])" "$file")
-    local_rev=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['_rev'])" "$file")
+    local_id=$(jq -r '._id' "$file")
+    local_rev=$(jq -r '._rev' "$file")
 
     local encoded_id
-    encoded_id=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$local_id" 2>/dev/null \
-                 || echo "$local_id")
+    encoded_id=$(jq -rn --arg x "$local_id" '$x|@uri')
 
     local server_rev
-    server_rev=$(_curl "${COUCH_URL}/${db}/${encoded_id}" \
-                 | python3 -c "import json,sys; print(json.load(sys.stdin)['_rev'])")
+    server_rev=$(_curl "${COUCH_URL}/${db}/${encoded_id}" | jq -r '._rev')
 
     if [[ "$server_rev" != "$local_rev" ]]; then
         _err "ERROR: Revision conflict!"
@@ -151,15 +145,9 @@ cmd_push() {
 
     if [[ "$http_code" == "201" || "$http_code" == "200" ]]; then
         local new_rev
-        new_rev=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin)['rev'])")
-        python3 - "$file" "$new_rev" <<'EOF'
-import json, sys
-f, rev = sys.argv[1], sys.argv[2]
-d = json.load(open(f))
-d['_rev'] = rev
-json.dump(d, open(f,'w'), indent=2)
-print()
-EOF
+        new_rev=$(echo "$body" | jq -r '.rev')
+        jq --arg rev "$new_rev" '._rev = $rev' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+        echo
         _ok "Pushed '$local_id' to '$db'"
         echo "  old rev : $local_rev"
         echo "  new rev : $new_rev"
@@ -175,7 +163,7 @@ EOF
 
 usage() {
     cat <<EOF
-couch.sh — CouchDB CLI (curl-based, k8s auto-discovery)
+couch.sh — CouchDB CLI (curl + jq, k8s auto-discovery)
 
 Usage:
   $0 info                         Show connection info
