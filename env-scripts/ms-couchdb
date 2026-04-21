@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# couch.sh - CouchDB CLI tool for k8s-deployed CouchDB (curl only)
+set -euo pipefail
+
+GREEN='\033[32m'
+LRED='\033[91m'
+DIM='\033[2m'
+RESET='\033[0m'
+BOLD='\033[1m'
+
+_err() { printf "${LRED}%s${RESET}\n" "$*" >&2; }
+_ok()  { printf "${GREEN}●${RESET} %s\n" "$*"; }
+
+[[ -z "${ns:-}" ]] && { _err 'ERROR: $ns is not set. Export the target namespace first (e.g. export ns=demo-metalsoft)'; exit 1; }
+NAMESPACE="$ns"
+CONFIGMAP="common"
+MANIFEST="${MANIFEST:-/root/manifests/couchdb-deployment.yaml}"
+
+# ── Discovery ────────────────────────────────────────────────────────────────
+
+_get_svc_ip() {
+    kubectl get svc -n "$NAMESPACE" \
+        -l "app.kubernetes.io/name=couchdb" \
+        -o jsonpath='{.items[0].spec.clusterIP}' 2>/dev/null
+}
+
+_get_creds() {
+    local cm
+    cm=$(kubectl get configmap "$CONFIGMAP" -n "$NAMESPACE" -o jsonpath='{.data}' 2>/dev/null)
+    COUCH_USER=$(echo "$cm" | grep -o '"couchdb_admin_user":"[^"]*"' | cut -d'"' -f4)
+    COUCH_PASS=$(echo "$cm" | grep -o '"couchdb_admin_password":"[^"]*"' | cut -d'"' -f4)
+}
+
+_init() {
+    COUCH_IP="${COUCH_IP:-$(_get_svc_ip)}"
+    if [[ -z "$COUCH_IP" ]]; then
+        _err "ERROR: Could not resolve CouchDB service IP"; exit 1
+    fi
+    if [[ -z "${COUCH_USER:-}" || -z "${COUCH_PASS:-}" ]]; then
+        _get_creds
+    fi
+    COUCH_URL="http://${COUCH_USER}:${COUCH_PASS}@${COUCH_IP}:5984"
+}
+
+_curl() {
+    curl -sf --connect-timeout 5 "$@"
+}
+
+# Print doc rows from _all_docs JSON on stdin: "  <id>  [rev: N]" with rev in green
+_print_docs() {
+    python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+rows = [r for r in data.get('rows', []) if not r['id'].startswith('_design/')]
+if not rows:
+    print('    (no documents)')
+for r in rows:
+    rev = r['value']['rev']
+    rev_num = rev.split('-')[0]
+    print(f'    {r[\"id\"]}  \033[32m[rev: {rev_num}]\033[0m')
+" 2>/dev/null
+}
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+cmd_info() {
+    _init
+    echo "  Service IP : $COUCH_IP"
+    echo "  URL        : http://${COUCH_USER}:****@${COUCH_IP}:5984"
+    echo "  Version    : $(_curl "${COUCH_URL}/" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
+}
+
+cmd_list_dbs() {
+    _init
+    local dbs
+    dbs=$(_curl "${COUCH_URL}/_all_dbs" | tr ',' '\n' | tr -d '[]"' | grep -v '^\s*$' | sort)
+
+    printf "${BOLD}Databases:${RESET}\n"
+    while IFS= read -r db; do
+        [[ -z "$db" ]] && continue
+        if [[ "$db" == _* ]]; then
+            printf "  ${DIM}%s${RESET}\n" "$db"
+            continue
+        fi
+        printf "  ${BOLD}%s${RESET}\n" "$db"
+        _curl "${COUCH_URL}/${db}/_all_docs" 2>/dev/null | _print_docs
+    done <<< "$dbs"
+}
+
+cmd_list_docs() {
+    local db="${1:?Usage: $0 list-docs <db>}"
+    _init
+    printf "${BOLD}Docs in '%s':${RESET}\n" "$db"
+    _curl "${COUCH_URL}/${db}/_all_docs" | _print_docs
+}
+
+cmd_pull() {
+    local db="${1:?Usage: $0 pull <db> <docid> [outfile.json]}"
+    local docid="${2:?Usage: $0 pull <db> <docid> [outfile.json]}"
+    local outfile="${3:-couchdb_${db}_${docid//\//_}.json}"
+    _init
+
+    local encoded_id
+    encoded_id=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$docid" 2>/dev/null \
+                 || echo "$docid" | sed 's| |%20|g')
+
+    _curl "${COUCH_URL}/${db}/${encoded_id}" \
+        | python3 -m json.tool --indent 2 > "$outfile"
+
+    local rev
+    rev=$(grep -o '"_rev": *"[^"]*"' "$outfile" | head -1 | cut -d'"' -f4)
+    _ok "Pulled '$docid' from '$db'"
+    echo "  rev  : $rev"
+    echo "  file : $outfile"
+}
+
+cmd_push() {
+    local db="${1:?Usage: $0 push <db> <file.json>}"
+    local file="${2:?Usage: $0 push <db> <file.json>}"
+    [[ -f "$file" ]] || { _err "ERROR: File not found: $file"; exit 1; }
+    _init
+
+    local local_id local_rev
+    local_id=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['_id'])" "$file")
+    local_rev=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['_rev'])" "$file")
+
+    local encoded_id
+    encoded_id=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$local_id" 2>/dev/null \
+                 || echo "$local_id")
+
+    local server_rev
+    server_rev=$(_curl "${COUCH_URL}/${db}/${encoded_id}" \
+                 | python3 -c "import json,sys; print(json.load(sys.stdin)['_rev'])")
+
+    if [[ "$server_rev" != "$local_rev" ]]; then
+        _err "ERROR: Revision conflict!"
+        _err "  Local  _rev : $local_rev"
+        _err "  Server _rev : $server_rev"
+        _err "Re-pull the document before pushing."
+        exit 1
+    fi
+
+    local response http_code body
+    response=$(curl -sf -w "\n__HTTP_CODE__:%{http_code}" \
+        -X PUT \
+        -H "Content-Type: application/json" \
+        -d @"$file" \
+        "${COUCH_URL}/${db}/${encoded_id}" 2>&1)
+    http_code=$(echo "$response" | grep '__HTTP_CODE__:' | cut -d: -f2)
+    body=$(echo "$response" | grep -v '__HTTP_CODE__:')
+
+    if [[ "$http_code" == "201" || "$http_code" == "200" ]]; then
+        local new_rev
+        new_rev=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin)['rev'])")
+        python3 - "$file" "$new_rev" <<'EOF'
+import json, sys
+f, rev = sys.argv[1], sys.argv[2]
+d = json.load(open(f))
+d['_rev'] = rev
+json.dump(d, open(f,'w'), indent=2)
+print()
+EOF
+        _ok "Pushed '$local_id' to '$db'"
+        echo "  old rev : $local_rev"
+        echo "  new rev : $new_rev"
+        _ok "file updated in place"
+    else
+        _err "ERROR: Push failed (HTTP $http_code)"
+        _err "$body"
+        exit 1
+    fi
+}
+
+# ── Help ─────────────────────────────────────────────────────────────────────
+
+usage() {
+    cat <<EOF
+couch.sh — CouchDB CLI (curl-based, k8s auto-discovery)
+
+Usage:
+  $0 info                         Show connection info
+  $0 dbs                          List all databases with their documents
+  $0 list-docs <db>               List documents in one database
+  $0 pull <db> <docid> [file]     Pull document to JSON file (default: couchdb_<db>_<docid>.json)
+  $0 push <db> <file.json>        Push file back; aborts if server _rev changed
+
+Env overrides:
+  COUCH_IP, COUCH_USER, COUCH_PASS   Skip auto-discovery
+
+Examples:
+  $0 dbs
+  $0 list-docs orchestrator-microservice
+  $0 pull orchestrator-microservice bsi
+  # edit couchdb_orchestrator-microservice_bsi.json ...
+  $0 push orchestrator-microservice couchdb_orchestrator-microservice_bsi.json
+EOF
+}
+
+# ── Router ───────────────────────────────────────────────────────────────────
+
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+    info)               cmd_info ;;
+    dbs|list-dbs)       cmd_list_dbs ;;
+    list-docs)          cmd_list_docs "$@" ;;
+    pull)               cmd_pull "$@" ;;
+    push)               cmd_push "$@" ;;
+    help|--help|-h)     usage ;;
+    *)  echo "Unknown command: $CMD"; usage; exit 1 ;;
+esac
