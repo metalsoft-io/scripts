@@ -591,6 +591,7 @@ declare -a CAPABILITIES=(
     "OOB_HTTP_PROXY"
     "SPICE"
     "SSH_COMMAND"
+    "SWITCH_SNMP_HEALTH"
     "SWITCH_SUBSCRIPTION"
     "SYSLOG"
     "VNC"
@@ -849,6 +850,7 @@ ${controller_tcp_address_line}
       - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY:-disabled}
       - SPICE=${ENVVAR_SPICE:-disabled}
       - SSH_COMMAND=${ENVVAR_SSH_COMMAND:-disabled}
+      - SWITCH_SNMP_HEALTH=${ENVVAR_SWITCH_SNMP_HEALTH:-disabled}
       - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION:-disabled}
       - SYSLOG=${ENVVAR_SYSLOG:-disabled}
       - VNC=${ENVVAR_VNC:-disabled}
