@@ -179,7 +179,7 @@ function check_remote_conn {
   [ -n "$4" ] && local comment="$4 "
   [ "$protocol" = "icmp" ] && local port=icmp
 
-  echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}... "
+  echo -en "Check connection (non-blocking) from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}... "
 
   # Start spinner animation in background
   local __spinner_pid
@@ -275,7 +275,6 @@ function check_remote_conn {
   [ "$success_count" -eq "$total_count" ] && return 0 || return 1
 }
 
-check_remote_conn repo.metalsoft.io 80 tcp
 #check_remote_conn download.docker.com 443 tcp
 check_remote_conn "${REG_HOST}" 443 tcp || REG_HOST_CONN_FAILED=1
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
@@ -850,7 +849,7 @@ ${controller_tcp_address_line}
       - OOB_HTTP_PROXY=${ENVVAR_OOB_HTTP_PROXY:-disabled}
       - SPICE=${ENVVAR_SPICE:-disabled}
       - SSH_COMMAND=${ENVVAR_SSH_COMMAND:-disabled}
-      - SWITCH_SNMP_HEALTH=${ENVVAR_SWITCH_SNMP_HEALTH:-disabled}
+      - SWITCH_SNMP_HEALTH=${ENVVAR_SWITCH_SNMP_HEALTH:-enabled}
       - SWITCH_SUBSCRIPTION=${ENVVAR_SWITCH_SUBSCRIPTION:-disabled}
       - SYSLOG=${ENVVAR_SYSLOG:-disabled}
       - VNC=${ENVVAR_VNC:-disabled}
