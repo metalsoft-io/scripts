@@ -1273,7 +1273,7 @@ if [ "$PULL_SUCCESS" -eq 1 ]; then
 
   debuglog "starting containers with updated images.."
   if [ "$DOCKERBIN" == "docker" ];then
-    $DOCKERBIN compose up -d
+    $DOCKERBIN compose up -d --remove-orphans
   else
     ${DOCKERBIN}-compose up -d
   fi
@@ -1304,7 +1304,7 @@ if [[ -n ${RESOLVCONFCHANGED} ]];then
   cd /opt/metalsoft/agents || exit 1
   if [ "$DOCKERBIN" == "docker" ];then
     $DOCKERBIN compose down
-    $DOCKERBIN compose up -d
+    $DOCKERBIN compose up -d --remove-orphans
   else
     ${DOCKERBIN}-compose down
     ${DOCKERBIN}-compose up -d
