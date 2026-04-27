@@ -179,7 +179,7 @@ function check_remote_conn {
   [ -n "$4" ] && local comment="$4 "
   [ "$protocol" = "icmp" ] && local port=icmp
 
-  echo -en "Check connection (non-blocking) from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}... "
+  echo -en "Check connection from ${bold}${MAINIP}${nc} to ${comment}${orange}$ip:$port${nc}... "
 
   # Start spinner animation in background
   local __spinner_pid
@@ -203,7 +203,7 @@ function check_remote_conn {
       return 0
     else
       _stop_spinner
-      echo -e "${lightred}failure${nc}"
+      echo -e "${yellow}failure${nc}"
       return 1
     fi
   elif [ "$protocol" = "tcp" ] && [ "$port" = "80" ]; then
@@ -213,7 +213,7 @@ function check_remote_conn {
       return 0
     else
       _stop_spinner
-      echo -e "${lightred}failure${nc}"
+      echo -e "${yellow}failure${nc}"
       return 1
     fi
   elif [ "$protocol" = "icmp" ]; then
@@ -223,7 +223,7 @@ function check_remote_conn {
       return 0
     else
       _stop_spinner
-      echo -e "${lightred}failure${nc}"
+      echo -e "${yellow}failure${nc}"
       return 1
     fi
   fi
@@ -243,7 +243,7 @@ function check_remote_conn {
 
   if [ -z "$ip" ]; then
     _stop_spinner
-    echo -e "${lightred}Error: not resolved${nc}"
+    echo -e "${yellow}Error: not resolved${nc}"
     return 1
   fi
 
@@ -257,14 +257,14 @@ function check_remote_conn {
         res+="${lightgreen}$ip=success${nc} "
         success_count=$((success_count + 1))
       else
-        res+="${lightred}$ip=failure${nc} "
+        res+="${yellow}$ip=failure${nc} "
       fi
     else
       if (echo >/dev/udp/"$ip"/"$port") >/dev/null 2>&1; then
         res+="${lightgreen}$ip=success${nc} "
         success_count=$((success_count + 1))
       else
-        res+="${lightred}$ip=failure${nc} "
+        res+="${yellow}$ip=failure${nc} "
       fi
     fi
   done
@@ -275,6 +275,7 @@ function check_remote_conn {
   [ "$success_count" -eq "$total_count" ] && return 0 || return 1
 }
 
+echo -e "${orange}Note:${nc} connectivity checks are informational — failures will not block setup."
 #check_remote_conn download.docker.com 443 tcp
 check_remote_conn "${REG_HOST}" 443 tcp || REG_HOST_CONN_FAILED=1
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
