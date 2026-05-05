@@ -1,0 +1,780 @@
+#!/usr/bin/env bash
+# ms-upgrade-helper — import an offline image bundle, then bump matching tags and apply.
+# Two modes (auto-detected, can be overridden with --mode):
+#   * k8s    — k3s/ctr/nerdctl  + manifest yamls            + kubectl apply
+#   * docker — docker/podman    + .env or docker-compose    + compose down/up
+#
+# Detection (same shape as diagnostics-collector):
+#   * docker — if /opt/metalsoft/agents/docker-compose.{yaml,yml} exists AND
+#              docker or podman is installed
+#   * k8s    — if kubectl, k3s or ctr is installed
+#
+# Install:
+#   sudo install -m 0755 ms-upgrade-helper /usr/local/bin/ms-upgrade-helper
+#
+# Examples:
+#   ms-upgrade-helper /root/k8s-images/license-v7.3.5.tar.gz       # k8s, autodetect
+#   ms-upgrade-helper --mode docker /tmp/agents-v7.3.5.tar.gz      # force docker mode
+#   ms-upgrade-helper -y /tmp/bundle.tar
+#   ms-upgrade-helper --skip-import                                 # NewTag inferred from image store
+#   ms-upgrade-helper --skip-import --new-tag v7.3.5                # explicit override
+
+set -Eeuo pipefail
+
+# ── Defaults ─────────────────────────────────────────────────────────────
+MODE=""
+MODE_OVERRIDE=""
+MANIFESTS_DIR="/root/manifests"
+AGENTS_DIR="/opt/metalsoft/agents"
+IMAGE_FILE=""
+NAMESPACE=""
+NEW_TAG_OVERRIDE=""
+OLD_TAG_OVERRIDE=""
+ASSUME_YES=0
+SKIP_IMPORT=0
+SKIP_MANIFEST_UPDATE=0
+SKIP_APPLY=0
+DRY_RUN=0
+LICENSE_MATCH=""               # auto-defaulted by mode if --license-match not given
+LICENSE_MATCH_USER_SET=0
+TMPDIR_RUN=""
+
+# ── Logging ──────────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+    C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BOLD=$'\e[1m'; C_DIM=$'\e[2m'; C_RST=$'\e[0m'
+else
+    C_RED=""; C_GRN=""; C_YEL=""; C_BOLD=""; C_DIM=""; C_RST=""
+fi
+log()   { printf '%s[i]%s %s\n' "$C_BOLD" "$C_RST" "$*"; }
+ok()    { printf '%s[✓]%s %s\n' "$C_GRN" "$C_RST" "$*"; }
+warn()  { printf '%s[!]%s %s\n' "$C_YEL" "$C_RST" "$*" >&2; }
+err()   { printf '%s[e]%s %s\n' "$C_RED" "$C_RST" "$*" >&2; }
+die()   { err "$*"; exit 1; }
+step()  { printf '\n%s━━ %s %s\n' "$C_BOLD" "$*" "$C_RST"; }
+yel()   { printf '%s%s%s' "$C_YEL" "$*" "$C_RST"; }
+
+cleanup() {
+    local rc=$?
+    if [[ -n "$TMPDIR_RUN" && -d "$TMPDIR_RUN" ]]; then
+        rm -rf "$TMPDIR_RUN" || true
+    fi
+    exit "$rc"
+}
+on_err() {
+    local rc=$? line=${1:-?} cmd=${2:-?}
+    err "Failed at line $line (rc=$rc): $cmd"
+}
+trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
+trap cleanup EXIT INT TERM
+
+# ── Help ─────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] <image-file>
+
+Imports a single image tarball (.tar or .tar.gz), then bumps tags in
+the relevant config (manifests in k8s mode, .env or docker-compose.yaml in docker
+mode), then applies the change.
+
+Mode is auto-detected:
+  * docker — if $AGENTS_DIR/docker-compose.{yaml,yml} exists AND docker/podman is installed
+  * k8s    — if kubectl/k3s/ctr is installed
+
+Arguments:
+  <image-file>                Path to the .tar or .tar.gz to import.
+                              Required unless --skip-import is given.
+
+Options:
+      --mode k8s|docker       Override mode auto-detection
+  -m, --manifests-dir DIR     [k8s]    Folder of manifests (default: $MANIFESTS_DIR)
+      --agents-dir DIR        [docker] Compose folder      (default: $AGENTS_DIR)
+  -n, --namespace NS          [k8s]    kubectl namespace  (default: auto-detect)
+      --license-match TOKEN   Substring identifying the upgrade-target image
+                              (default: 'license' for k8s, 'ms-agent' for docker)
+      --new-tag TAG           Override NewTag (otherwise parsed from import output;
+                              with --skip-import, falls back to highest tag in the
+                              local image store that is != OldTag)
+      --old-tag TAG           Override OldTag (defaults: k8s → running cluster, then
+                              license-deployment.yaml; docker → .env TAG=, then
+                              docker-compose.yaml)
+      --skip-import           Skip image import phase (no <image-file> needed)
+      --skip-manifest-update  Skip the in-place tag rewrite
+      --skip-apply            Skip the apply phase
+  -y, --yes                   Non-interactive: assume "yes" to all prompts
+      --dry-run               Show what would be done without changing state
+  -h, --help                  Show this help
+
+Examples:
+  ms-upgrade-helper /root/k8s-images/license-v7.3.5.tar.gz
+  ms-upgrade-helper --mode docker /tmp/agents-v7.3.5.tar.gz
+  ms-upgrade-helper -y /tmp/bundle.tar
+  ms-upgrade-helper --skip-import                  # NewTag inferred from image store
+  ms-upgrade-helper --skip-import --new-tag v7.3.5 # explicit override
+
+Exit codes:
+  0  success                  2  bad usage         3  prereq missing
+  4  import failure           5  tag-rewrite failure
+  6  apply failure            7  user declined
+EOF
+}
+
+# ── Args ─────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mode)                 MODE_OVERRIDE="${2:-}"; shift 2 ;;
+        -m|--manifests-dir)     MANIFESTS_DIR="${2:-}"; shift 2 ;;
+        --agents-dir)           AGENTS_DIR="${2:-}"; shift 2 ;;
+        -n|--namespace)         NAMESPACE="${2:-}"; shift 2 ;;
+        --license-match)        LICENSE_MATCH="${2:-}"; LICENSE_MATCH_USER_SET=1; shift 2 ;;
+        --new-tag)              NEW_TAG_OVERRIDE="${2:-}"; shift 2 ;;
+        --old-tag)              OLD_TAG_OVERRIDE="${2:-}"; shift 2 ;;
+        --skip-import)          SKIP_IMPORT=1; shift ;;
+        --skip-manifest-update) SKIP_MANIFEST_UPDATE=1; shift ;;
+        --skip-apply)           SKIP_APPLY=1; shift ;;
+        -y|--yes)               ASSUME_YES=1; shift ;;
+        --dry-run)              DRY_RUN=1; shift ;;
+        -h|--help)              usage; exit 0 ;;
+        --) shift; break ;;
+        -*) err "Unknown option: $1"; usage; exit 2 ;;
+        *)
+            if [[ -n "$IMAGE_FILE" ]]; then
+                err "Unexpected extra argument: $1 (only one image file is accepted)"
+                usage; exit 2
+            fi
+            IMAGE_FILE="$1"; shift ;;
+    esac
+done
+while [[ $# -gt 0 ]]; do
+    if [[ -n "$IMAGE_FILE" ]]; then
+        err "Unexpected extra argument: $1"
+        exit 2
+    fi
+    IMAGE_FILE="$1"; shift
+done
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+confirm() {
+    local prompt="$1"
+    if (( ASSUME_YES )); then
+        log "$prompt [auto-yes]"
+        return 0
+    fi
+    local ans
+    read -r -p "$prompt [Y/n] " ans || ans=""
+    case "${ans,,}" in
+        ""|y|yes) return 0 ;;
+        *)        return 1 ;;
+    esac
+}
+
+mktempdir_or_die() {
+    local d
+    if ! d="$(mktemp -d -t ms-upgrade-helper.XXXXXX 2>/dev/null)"; then
+        err "Failed to create scratch directory via mktemp."
+        err "Check that \$TMPDIR (or /tmp) exists, is writable, and has free space."
+        exit 3
+    fi
+    [[ -d "$d" && -w "$d" ]] || die "Scratch dir not usable: $d"
+    printf '%s' "$d"
+}
+
+find_compose_file() {
+    local f
+    for f in "$AGENTS_DIR/docker-compose.yaml" "$AGENTS_DIR/docker-compose.yml" \
+             "$AGENTS_DIR/compose.yaml" "$AGENTS_DIR/compose.yml"; do
+        [[ -f "$f" ]] && { printf '%s' "$f"; return 0; }
+    done
+    return 1
+}
+
+# Escape a string for use as a sed BRE *pattern*.
+# Tags like "v7.3.4" contain "." which is a sed wildcard; without escaping,
+# "s/:v7.3.4/:.../g" also matches ":v7X3X4".
+sed_escape_pattern() {
+    printf '%s' "$1" | sed -e 's/[]\/$*.^[]/\\&/g'
+}
+# Escape a string for use as a sed *replacement*. \, /, & are special.
+sed_escape_replacement() {
+    printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+# ── Mode detection ───────────────────────────────────────────────────────
+detect_mode() {
+    if [[ -n "$MODE_OVERRIDE" ]]; then
+        case "$MODE_OVERRIDE" in
+            k8s|docker) MODE="$MODE_OVERRIDE" ;;
+            *) die "Invalid --mode '$MODE_OVERRIDE' (must be 'k8s' or 'docker')." ;;
+        esac
+        return 0
+    fi
+    if find_compose_file >/dev/null \
+       && (command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1); then
+        MODE="docker"
+        return 0
+    fi
+    if command -v kubectl >/dev/null 2>&1 \
+       || command -v k3s >/dev/null 2>&1 \
+       || command -v ctr >/dev/null 2>&1; then
+        MODE="k8s"
+        return 0
+    fi
+    die "Could not auto-detect mode (no compose file under $AGENTS_DIR, and no kubectl/k3s/ctr). Pass --mode k8s|docker."
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# k8s mode
+# ─────────────────────────────────────────────────────────────────────────
+RUNTIME_KIND=""
+RUNTIME_BIN=()
+
+detect_k8s_runtime_quiet() {
+    if [[ ${#RUNTIME_BIN[@]} -gt 0 ]]; then return 0; fi
+    if command -v k3s >/dev/null 2>&1 \
+       && (systemctl is-active --quiet k3s 2>/dev/null \
+           || [[ -S /run/k3s/containerd/containerd.sock ]]); then
+        RUNTIME_KIND="k3s"; RUNTIME_BIN=(k3s ctr); return 0
+    elif command -v ctr >/dev/null 2>&1; then
+        RUNTIME_KIND="ctr"; RUNTIME_BIN=(ctr); return 0
+    elif command -v nerdctl >/dev/null 2>&1; then
+        RUNTIME_KIND="nerdctl"; RUNTIME_BIN=(nerdctl); return 0
+    fi
+    return 1
+}
+
+detect_k8s_runtime() {
+    detect_k8s_runtime_quiet || die "No k8s runtime found (k3s ctr / ctr / nerdctl)."
+    log "Runtime: ${RUNTIME_KIND} (${RUNTIME_BIN[*]})"
+}
+
+k8s_image_import() {
+    local file="$1"
+    if [[ "$RUNTIME_KIND" == "nerdctl" ]]; then
+        "${RUNTIME_BIN[@]}" load -i "$file"
+    else
+        "${RUNTIME_BIN[@]}" image import "$file"
+    fi
+}
+
+wait_k8s_runtime_ready() {
+    log "Waiting for k8s runtime to be ready..."
+    local i=0
+    until "${RUNTIME_BIN[@]}" image ls >/dev/null 2>&1; do
+        ((i++))
+        if (( i > 60 )); then die "Runtime did not become ready after 5 minutes."; fi
+        sleep 5
+    done
+    ok "Runtime is ready."
+}
+
+k8s_import_one() {
+    local file="$1"
+    [[ -f "$file" ]] || { err "Not a file: $file"; return 1; }
+
+    if [[ "$file" == *.gz ]]; then
+        command -v gunzip >/dev/null 2>&1 || { err "gunzip not installed but needed for $file"; return 1; }
+        log "Decompressing: $file"
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s gunzip -f %q\n' "$C_DIM" "$C_RST" "$file"
+        else
+            gunzip -f -- "$file" || { err "Decompression failed: $file"; return 1; }
+        fi
+        file="${file%.gz}"
+    fi
+
+    log "Importing: $file"
+    if (( DRY_RUN )); then
+        printf '%s[dry-run]%s %s image import %q\n' "$C_DIM" "$C_RST" "${RUNTIME_BIN[*]}" "$file"
+        return 0
+    fi
+    if ! k8s_image_import "$file" 2>&1 | tee -a "$TMPDIR_RUN/import.log"; then
+        err "Import failed: $file"; return 1
+    fi
+    return 0
+}
+
+phase_k8s_import() {
+    step "Phase 1: import image (k8s)"
+    [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import."
+    [[ -f "$IMAGE_FILE" ]] || die "File not found: $IMAGE_FILE"
+    detect_k8s_runtime
+    wait_k8s_runtime_ready
+    : > "$TMPDIR_RUN/import.log"
+    k8s_import_one "$IMAGE_FILE" || return 1
+    ok "Imported: $IMAGE_FILE"
+}
+
+extract_old_tag_from_cluster() {
+    command -v kubectl >/dev/null 2>&1 || return 1
+    local images tags count
+    images="$(kubectl get deploy -A \
+        -o jsonpath='{range .items[*]}{range .spec.template.spec.containers[*]}{.image}{"\n"}{end}{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{end}' \
+        2>/dev/null)" || return 1
+    [[ -n "$images" ]] || return 1
+    tags="$(printf '%s\n' "$images" \
+        | grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" \
+        | sed "s/^${LICENSE_MATCH}://" | sort -u)"
+    count="$(printf '%s\n' "$tags" | grep -c . || true)"
+    if [[ "$count" == "1" ]]; then
+        printf '%s' "$tags"; return 0
+    elif [[ "$count" -gt 1 ]]; then
+        warn "Multiple '${LICENSE_MATCH}' tags running in cluster:"
+        printf '%s\n' "$tags" | sed 's/^/        - /' >&2
+        warn "Will fall through to manifest file; use --old-tag to override."
+        return 1
+    fi
+    return 1
+}
+
+extract_old_tag_from_manifest() {
+    local file="$MANIFESTS_DIR/license-deployment.yaml"
+    [[ -f "$file" ]] || return 1
+    grep 'image:' "$file" \
+        | grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" \
+        | head -1 | sed "s/^${LICENSE_MATCH}://"
+}
+
+rewrite_manifests() {
+    local oldTag="$1" newTag="$2"
+    local oldEsc newEsc
+    oldEsc="$(sed_escape_pattern "$oldTag")"
+    newEsc="$(sed_escape_replacement "$newTag")"
+    local matched=()
+    while IFS= read -r f; do matched+=("$f"); done < <(
+        grep -lF ":${oldTag}" "$MANIFESTS_DIR"/*.yaml 2>/dev/null || true
+    )
+    if (( ${#matched[@]} == 0 )); then
+        warn "No manifests in $MANIFESTS_DIR contain ':$oldTag'."
+        return 0
+    fi
+    log "Files to rewrite (${#matched[@]}):"
+    printf '       - %s\n' "${matched[@]}"
+    local m
+    for m in "${matched[@]}"; do
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s sed -i "s/:%s/:%s/g" %q\n' "$C_DIM" "$C_RST" "$oldTag" "$newTag" "$m"
+        else
+            sed -i "s/:${oldEsc}/:${newEsc}/g" "$m" || { err "sed failed on $m"; return 1; }
+        fi
+    done
+    ok "Rewrote ${#matched[@]} manifest(s)."
+}
+
+detect_namespace() {
+    if [[ -n "$NAMESPACE" ]]; then
+        printf '%s' "$NAMESPACE"; return 0
+    fi
+    local nsFile="$MANIFESTS_DIR/namespace.yaml" ns=""
+    if [[ -f "$nsFile" ]]; then
+        ns="$(awk '
+            /^kind:[[:space:]]*Namespace/ {inNs=1; next}
+            inNs && /^[[:space:]]*name:/ {gsub(/[\047\042 ]/,"",$2); print $2; exit}
+        ' "$nsFile" || true)"
+    fi
+    if [[ -z "$ns" ]]; then
+        ns="$(grep -hE '^[[:space:]]*namespace:[[:space:]]*' "$MANIFESTS_DIR"/*.yaml 2>/dev/null \
+              | head -1 | awk '{print $2}' | tr -d "'\"")" || true
+    fi
+    printf '%s' "$ns"
+}
+
+phase_k8s_apply() {
+    local ns="$1"
+    [[ -n "$ns" ]] || die "Could not determine namespace; pass -n NAMESPACE."
+    command -v kubectl >/dev/null 2>&1 || die "kubectl not found in PATH."
+    if (( DRY_RUN )); then
+        printf '%s[dry-run]%s kubectl -n %s apply -f %q\n' "$C_DIM" "$C_RST" "$ns" "$MANIFESTS_DIR"
+        return 0
+    fi
+    # kubectl apply against the whole dir may flag non-manifest files (e.g. helm
+    # values yamls). Don't treat that as fatal — partial applies are normal.
+    ( cd "$MANIFESTS_DIR" && kubectl -n "$ns" apply -f . ) || true
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# docker mode
+# ─────────────────────────────────────────────────────────────────────────
+DOCKER_BIN=""
+COMPOSE_CMD=()
+
+# Engine and compose are detected separately:
+#   - the heuristic NewTag fallback only needs the engine (docker images)
+#   - the apply phase additionally needs compose
+# Conflating them blocks engine-only operations when compose is absent.
+
+detect_engine_quiet() {
+    if [[ -n "$DOCKER_BIN" ]]; then return 0; fi
+    if command -v docker >/dev/null 2>&1; then
+        DOCKER_BIN="docker"; return 0
+    fi
+    if command -v podman >/dev/null 2>&1; then
+        DOCKER_BIN="podman"; return 0
+    fi
+    return 1
+}
+
+detect_compose_quiet() {
+    if (( ${#COMPOSE_CMD[@]} > 0 )); then return 0; fi
+    detect_engine_quiet || return 1
+    if [[ "$DOCKER_BIN" == "docker" ]]; then
+        if docker compose version >/dev/null 2>&1; then
+            COMPOSE_CMD=(docker compose); return 0
+        elif command -v docker-compose >/dev/null 2>&1; then
+            COMPOSE_CMD=(docker-compose); return 0
+        fi
+    elif [[ "$DOCKER_BIN" == "podman" ]]; then
+        if command -v podman-compose >/dev/null 2>&1; then
+            COMPOSE_CMD=(podman-compose); return 0
+        elif podman compose version >/dev/null 2>&1; then
+            COMPOSE_CMD=(podman compose); return 0
+        fi
+    fi
+    return 1
+}
+
+detect_docker_runtime() {
+    detect_engine_quiet || die "Neither docker nor podman is installed."
+    detect_compose_quiet || die "Found '$DOCKER_BIN' but no compose plugin or '${DOCKER_BIN}-compose' binary."
+    log "Container engine: $DOCKER_BIN; compose: ${COMPOSE_CMD[*]}"
+}
+
+phase_docker_import() {
+    step "Phase 1: import image (docker/podman)"
+    [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import."
+    [[ -f "$IMAGE_FILE" ]] || die "File not found: $IMAGE_FILE"
+
+    : > "$TMPDIR_RUN/import.log"
+
+    if (( DRY_RUN )); then
+        printf '%s[dry-run]%s %s load -i %q\n' "$C_DIM" "$C_RST" "$DOCKER_BIN" "$IMAGE_FILE"
+        return 0
+    fi
+
+    log "Loading image: $IMAGE_FILE"
+    # Recent docker/podman handle .tar.gz natively; try a direct load first.
+    if "$DOCKER_BIN" load -i "$IMAGE_FILE" 2>&1 | tee -a "$TMPDIR_RUN/import.log"; then
+        ok "Loaded: $IMAGE_FILE"
+        return 0
+    fi
+
+    # Fallback: if it's a .gz, decompress and retry.
+    if [[ "$IMAGE_FILE" == *.gz ]]; then
+        warn "Direct load failed; decompressing $IMAGE_FILE and retrying..."
+        command -v gunzip >/dev/null 2>&1 || die "gunzip needed but not installed."
+        gunzip -f -- "$IMAGE_FILE" || die "Decompression failed: $IMAGE_FILE"
+        IMAGE_FILE="${IMAGE_FILE%.gz}"
+        log "Retrying with: $IMAGE_FILE"
+        if "$DOCKER_BIN" load -i "$IMAGE_FILE" 2>&1 | tee -a "$TMPDIR_RUN/import.log"; then
+            ok "Loaded: $IMAGE_FILE"
+            return 0
+        fi
+    fi
+    err "Failed to load image: $IMAGE_FILE"
+    return 1
+}
+
+extract_old_tag_from_env() {
+    local envfile="$AGENTS_DIR/.env"
+    [[ -f "$envfile" ]] || return 1
+    # Match TAG= or `export TAG=`, ignore comment lines, take the last definition.
+    grep -E '^[[:space:]]*(export[[:space:]]+)?TAG=' "$envfile" \
+        | grep -v '^[[:space:]]*#' \
+        | tail -1 \
+        | sed -E 's/^[[:space:]]*(export[[:space:]]+)?TAG=//' \
+        | sed -E 's/[[:space:]]+#.*$//' \
+        | sed -E 's/^["'"'"']//; s/["'"'"']$//' \
+        | sed -E 's/[[:space:]]+$//'
+}
+
+extract_old_tag_from_compose() {
+    local file
+    file="$(find_compose_file)" || return 1
+    grep 'image:' "$file" \
+        | grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" \
+        | head -1 | sed "s/^${LICENSE_MATCH}://"
+}
+
+docker_rewrite() {
+    local oldTag="$1" newTag="$2"
+    local oldEsc newEsc
+    oldEsc="$(sed_escape_pattern "$oldTag")"
+    newEsc="$(sed_escape_replacement "$newTag")"
+    local envfile="$AGENTS_DIR/.env"
+    if [[ -f "$envfile" ]]; then
+        # Confirm a TAG= line actually exists before claiming an update.
+        if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?TAG=' "$envfile"; then
+            err "$envfile has no TAG= line; can't rewrite. Add 'TAG=$oldTag' or use --skip-manifest-update."
+            return 1
+        fi
+        log "Rewriting $envfile: TAG=${oldTag} → TAG=${newTag}"
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s sed -i -E "s/^([[:space:]]*(export[[:space:]]+)?)TAG=.*/\\1TAG=%s/" %q\n' \
+                "$C_DIM" "$C_RST" "$newTag" "$envfile"
+        else
+            sed -i -E "s/^([[:space:]]*(export[[:space:]]+)?)TAG=.*/\\1TAG=${newEsc}/" "$envfile" \
+                || { err "sed on .env failed"; return 1; }
+            local actual; actual="$(extract_old_tag_from_env || true)"
+            if [[ "$actual" != "$newTag" ]]; then
+                err ".env update verification failed: TAG= now reads '$actual', expected '$newTag'."
+                err "Inspect $envfile manually."
+                return 1
+            fi
+        fi
+        ok "Updated $envfile."
+        return 0
+    fi
+    local compose
+    if compose="$(find_compose_file)"; then
+        if grep -qF ":${oldTag}" "$compose"; then
+            log "Rewriting $compose: :${oldTag} → :${newTag}"
+            if (( DRY_RUN )); then
+                printf '%s[dry-run]%s sed -i "s/:%s/:%s/g" %q\n' "$C_DIM" "$C_RST" "$oldTag" "$newTag" "$compose"
+            else
+                sed -i "s/:${oldEsc}/:${newEsc}/g" "$compose" || { err "sed on $compose failed"; return 1; }
+            fi
+            ok "Updated $compose."
+            return 0
+        fi
+        warn "No occurrences of :${oldTag} in $compose."
+        return 0
+    fi
+    err "Neither $envfile nor a compose file exists under $AGENTS_DIR."
+    return 1
+}
+
+docker_apply() {
+    if (( DRY_RUN )); then
+        printf '%s[dry-run]%s ( cd %q && %s down && %s up -d )\n' \
+            "$C_DIM" "$C_RST" "$AGENTS_DIR" "${COMPOSE_CMD[*]}" "${COMPOSE_CMD[*]}"
+        return 0
+    fi
+    log "Running: cd $AGENTS_DIR && ${COMPOSE_CMD[*]} down"
+    ( cd "$AGENTS_DIR" && "${COMPOSE_CMD[@]}" down ) || warn "compose down failed; continuing."
+    log "Running: cd $AGENTS_DIR && ${COMPOSE_CMD[*]} up -d"
+    ( cd "$AGENTS_DIR" && "${COMPOSE_CMD[@]}" up -d ) || warn "compose up -d failed."
+    sleep 2
+    log "Containers:"
+    "$DOCKER_BIN" ps || true
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# Shared tag discovery — branches on $MODE
+# ─────────────────────────────────────────────────────────────────────────
+OLD_TAG=""
+OLD_TAG_SOURCE=""
+NEW_TAG=""
+NEW_TAG_SOURCE=""
+NEW_TAG_CANDIDATES=""
+
+extract_old_tag() {
+    OLD_TAG=""; OLD_TAG_SOURCE=""
+    if [[ -n "$OLD_TAG_OVERRIDE" ]]; then
+        OLD_TAG="$OLD_TAG_OVERRIDE"
+        OLD_TAG_SOURCE="--old-tag override"
+        return 0
+    fi
+    local tag
+    if [[ "$MODE" == "k8s" ]]; then
+        tag="$(extract_old_tag_from_cluster || true)"
+        if [[ -n "$tag" ]]; then
+            OLD_TAG="$tag"; OLD_TAG_SOURCE="running cluster"; return 0
+        fi
+        tag="$(extract_old_tag_from_manifest || true)"
+        if [[ -n "$tag" ]]; then
+            OLD_TAG="$tag"; OLD_TAG_SOURCE="$MANIFESTS_DIR/license-deployment.yaml"; return 0
+        fi
+    elif [[ "$MODE" == "docker" ]]; then
+        tag="$(extract_old_tag_from_env || true)"
+        if [[ -n "$tag" ]]; then
+            OLD_TAG="$tag"; OLD_TAG_SOURCE="$AGENTS_DIR/.env (TAG=)"; return 0
+        fi
+        tag="$(extract_old_tag_from_compose || true)"
+        if [[ -n "$tag" ]]; then
+            local cf; cf="$(find_compose_file 2>/dev/null || echo "$AGENTS_DIR/docker-compose.yaml")"
+            OLD_TAG="$tag"; OLD_TAG_SOURCE="$cf"; return 0
+        fi
+    fi
+    return 1
+}
+
+extract_new_tag() {
+    NEW_TAG=""; NEW_TAG_SOURCE=""
+    local oldTag="${1:-}"
+
+    if [[ -n "$NEW_TAG_OVERRIDE" ]]; then
+        NEW_TAG="$NEW_TAG_OVERRIDE"
+        NEW_TAG_SOURCE="--new-tag override"
+        return 0
+    fi
+
+    if [[ -s "${TMPDIR_RUN:-/dev/null}/import.log" ]]; then
+        local fromLog
+        fromLog="$(grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" "$TMPDIR_RUN/import.log" \
+                    | head -1 | sed "s/^${LICENSE_MATCH}://")"
+        if [[ -n "$fromLog" ]]; then
+            NEW_TAG="$fromLog"
+            NEW_TAG_SOURCE="import output"
+            return 0
+        fi
+    fi
+
+    # Heuristic fallback: highest tag in the local image store, excluding OldTag.
+    local lsOut tags candidate
+    if [[ "$MODE" == "k8s" ]]; then
+        detect_k8s_runtime_quiet || return 1
+        lsOut="$("${RUNTIME_BIN[@]}" image ls 2>/dev/null)"
+    elif [[ "$MODE" == "docker" ]]; then
+        detect_engine_quiet || return 1
+        lsOut="$("$DOCKER_BIN" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)"
+    else
+        return 1
+    fi
+
+    tags="$(printf '%s\n' "$lsOut" \
+            | grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" \
+            | sed "s/^${LICENSE_MATCH}://" | sort -uV)"
+    [[ -n "$tags" ]] || return 1
+    if [[ -n "$oldTag" ]]; then
+        candidate="$(printf '%s\n' "$tags" | grep -v "^${oldTag}\$" | tail -1 || true)"
+    else
+        candidate="$(printf '%s\n' "$tags" | tail -1)"
+    fi
+    [[ -n "$candidate" ]] || return 1
+
+    NEW_TAG="$candidate"
+    NEW_TAG_SOURCE="image store (highest semver, heuristic)"
+    # Stash candidates so main() can print them — useful to spot wrong picks
+    # when tags are non-semver (e.g. "develop-monorepo" sort-Vs below "v7.3.5").
+    NEW_TAG_CANDIDATES="$(printf '%s\n' "$tags" | grep -v "^${oldTag}\$" || true)"
+    return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────
+main() {
+    TMPDIR_RUN="$(mktempdir_or_die)"
+
+    detect_mode
+    if (( ! LICENSE_MATCH_USER_SET )); then
+        if [[ "$MODE" == "k8s" ]]; then LICENSE_MATCH="license"; else LICENSE_MATCH="ms-agent"; fi
+    fi
+    log "Mode: $(yel "$MODE")  match-token: $(yel "$LICENSE_MATCH")"
+
+    # ── Phase 1: import ──────────────────────────────────────────────────
+    if (( SKIP_IMPORT )); then
+        warn "Skipping import phase (--skip-import)."
+    else
+        if [[ "$MODE" == "k8s" ]]; then
+            phase_k8s_import || die "Image import phase failed (rc=4)."
+        else
+            detect_docker_runtime
+            phase_docker_import || die "Image import phase failed (rc=4)."
+        fi
+    fi
+
+    if (( SKIP_MANIFEST_UPDATE && SKIP_APPLY )); then
+        ok "All remaining phases skipped. Done."
+        exit 0
+    fi
+
+    local oldTag="" newTag=""
+
+    # Tag discovery is only needed when we will actually rewrite (Phase 4).
+    # If --skip-manifest-update is set we skip directly to Phase 5 (apply).
+    if (( ! SKIP_MANIFEST_UPDATE )); then
+        # ── Phase 2: OldTag ──────────────────────────────────────────────
+        step "Phase 2: discover OldTag (current '$LICENSE_MATCH' tag)"
+        if [[ "$MODE" == "k8s" ]]; then
+            [[ -d "$MANIFESTS_DIR" ]] || die "Manifests dir not found: $MANIFESTS_DIR"
+        else
+            [[ -d "$AGENTS_DIR" ]] || die "Agents dir not found: $AGENTS_DIR"
+        fi
+        extract_old_tag || true
+        oldTag="$OLD_TAG"
+        if [[ -z "$oldTag" ]]; then
+            if [[ "$MODE" == "k8s" ]]; then
+                err "Could not determine OldTag (checked: --old-tag, running cluster, $MANIFESTS_DIR/license-deployment.yaml)."
+            else
+                err "Could not determine OldTag (checked: --old-tag, $AGENTS_DIR/.env TAG=, $AGENTS_DIR/docker-compose.{yaml,yml})."
+            fi
+            err "Pass --old-tag <tag> to set it explicitly."
+            exit 5
+        fi
+        ok "OldTag: $(yel "$oldTag")  ${C_DIM}(from: $OLD_TAG_SOURCE)${C_RST}"
+
+        # ── Phase 3: NewTag ──────────────────────────────────────────────
+        step "Phase 3: discover NewTag (just-imported '$LICENSE_MATCH' image)"
+        extract_new_tag "$oldTag" || true
+        newTag="$NEW_TAG"
+        if [[ -z "$newTag" ]]; then
+            if (( SKIP_IMPORT )); then
+                err "Could not determine NewTag (checked: --new-tag, import log, image store)."
+                err "Pass --new-tag <tag> explicitly."
+            else
+                err "Could not determine NewTag from import output. Was a '$LICENSE_MATCH' image in the bundle?"
+                err "You can override with --new-tag <tag>."
+            fi
+            exit 5
+        fi
+        ok "NewTag: $(yel "$newTag")  ${C_DIM}(from: $NEW_TAG_SOURCE)${C_RST}"
+        if [[ "$NEW_TAG_SOURCE" == "image store"* ]]; then
+            warn "NewTag was guessed by picking the highest semver from the local image store."
+            warn "This is wrong if you are downgrading, OR if your tags aren't semver"
+            warn "(e.g. 'develop-monorepo' sort-Vs below 'v7.3.5'). Pass --new-tag to override."
+            if [[ -n "$NEW_TAG_CANDIDATES" ]]; then
+                warn "Candidates considered (sorted -V, OldTag excluded):"
+                printf '%s\n' "$NEW_TAG_CANDIDATES" | sed 's/^/        - /' >&2
+            fi
+        fi
+
+        if [[ "$oldTag" == "$newTag" ]]; then
+            ok "OldTag == NewTag ($oldTag); nothing to upgrade."
+            exit 0
+        fi
+
+        # ── Phase 4: rewrite ─────────────────────────────────────────────
+        step "Phase 4: rewrite tags"
+        local where
+        if [[ "$MODE" == "k8s" ]]; then where="$MANIFESTS_DIR"; else where="$AGENTS_DIR"; fi
+        if confirm "In $where I see the deploys, and I can upgrade the tag from $(yel "$oldTag") to $(yel "$newTag"), should I proceed?"; then
+            if [[ "$MODE" == "k8s" ]]; then
+                rewrite_manifests "$oldTag" "$newTag" || { err "Manifest rewrite failed."; exit 5; }
+            else
+                docker_rewrite "$oldTag" "$newTag" || { err "Rewrite failed."; exit 5; }
+            fi
+        else
+            warn "User declined rewrite."
+            exit 7
+        fi
+    else
+        warn "Skipping tag discovery + rewrite (--skip-manifest-update)."
+    fi
+
+    # ── Phase 5: apply ───────────────────────────────────────────────────
+    if (( SKIP_APPLY )); then
+        warn "Skipping apply (--skip-apply)."
+        exit 0
+    fi
+    step "Phase 5: apply"
+    if confirm "Should I apply the changes?"; then
+        if [[ "$MODE" == "k8s" ]]; then
+            local ns
+            ns="$(detect_namespace)"
+            [[ -n "$ns" ]] || die "Auto-detect failed; pass -n NAMESPACE."
+            log "Namespace: $ns"
+            phase_k8s_apply "$ns"
+            ok "Done."
+            log "To check pod status, run: $(yel "kw") or $(yel "kubectl -n $ns get pods")"
+        else
+            detect_docker_runtime
+            docker_apply
+            ok "Upgrade is done."
+            log "To follow logs: $(yel "$DOCKER_BIN logs -f ms-agent")"
+        fi
+    else
+        warn "User declined apply."
+        exit 7
+    fi
+}
+
+main "$@"
