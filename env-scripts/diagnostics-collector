@@ -46,6 +46,17 @@ function usage {
 	exit 0
 }
 
+# Push a diagnostics file to MetalSoft. Args: $1=url, $2=file, $3=trace_log_path.
+# Echoes HTTP code on stdout; preserves curl's exit status.
+# --speed-time/--speed-limit is a stall detector, NOT a max-time: aborts only on 120s of zero throughput.
+function push_diag {
+	curl --connect-timeout 10 \
+		--speed-time 120 --speed-limit 1 \
+		-v --trace-time \
+		-sk -o /dev/null -w '%{http_code}' \
+		"$1" -F diag=@"$2" 2>"$3"
+}
+
 #auto determine if we are on sc or gc:
 gather=""
 envname=""
@@ -88,8 +99,18 @@ shift "$(( OPTIND - 1 ))"
 
 if [ -n "$pushfileFromArg" ];then
 	test -f "$pushfileFromArg" || { echo -e "[\e[1;31m✗\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
-	echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushfromarg=1&ns=${envname}" -F diag=@"${pushfileFromArg}" 2>/dev/null && echo -e " Done\n" || { echo -e "\n[\e[1;31m✗\e[0m] Tried pushing the diagnostics file to MetalSoft, but encountered errors."; exit 1; }
-	exit 0;
+	curl_log="/tmp/diagnostics-collector-curl-${thedate}.log"
+	echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... "
+	http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushfromarg=1&ns=${envname}" "$pushfileFromArg" "$curl_log")"
+	curl_exit=$?
+	if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+		echo -e " Done (HTTP $http_code)\n"
+		rm -f "$curl_log"
+		exit 0
+	else
+		echo -e "\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+		exit 1
+	fi
 fi
 
 test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
@@ -334,7 +355,11 @@ if [ "$gather" == 'gc' ];then
     fi
 
 	mkdir -p "${backupFolder}/couchdb"
-	echo "[i] backing up couchdb: [${couchdbUrl}]"
+	if [[ "$couchdbUrl" =~ ^([^:]+):([^@]*)@(.+)$ ]]; then
+		echo "[i] backing up couchdb: [${BASH_REMATCH[1]}:${BASH_REMATCH[2]:0:4}****@${BASH_REMATCH[3]}]"
+	else
+		echo "[i] backing up couchdb: [${couchdbUrl}]"
+	fi
 	if ! $curl_no_proxy curl -sS "http://${couchdbUrl}/_all_dbs" | jq -rce . &>/dev/null; then
 		echo "CouchDB: $curl_no_proxy http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > "${backupFolder}/couchdb/couchdb_pull_failed"
 	fi
@@ -444,16 +469,46 @@ tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackup
 	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}"
 } || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
 
+	curl_log="${originalBackupFolder}/diagnostics-collector-curl-${thedate}.log"
 	if [ "$pushfile" == "1" ];then
-		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; exit 1; }
+		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} "
+		http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" "$resultFilename" "$curl_log")"
+		curl_exit=$?
+		if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+			echo -e "${nc}Done (HTTP $http_code)\n"
+			rm -f "$curl_log"
+		else
+			echo -e "${nc}\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+			exit 1
+		fi
 	else
 		if timeout 3 bash -c "</dev/tcp/176.223.248.10/443" 2>/dev/null; then
-			test -z "$doNotAutoSend" && curl --connect-timeout 10 -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" -F diag=@"${resultFilename}" &>/dev/null
+			if [ -z "$doNotAutoSend" ]; then
+				http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" "$resultFilename" "$curl_log")"
+				curl_exit=$?
+				if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+					rm -f "$curl_log"
+					exit 0
+				else
+					echo -e "${orange}[!] Auto-upload failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: ${curl_log}${nc}"
+				fi
+			fi
 		fi
 		if [ -z "$doNotAutoSend" ];then
-			read -r -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn
+			# stderr is redirected into bash_log via tee; route prompt to /dev/tty so the user can see it.
+			read -r -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn </dev/tty 2>/dev/tty
 			case $yn in
-				[Yy]* ) echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} " && curl -sk "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" -F diag=@"${resultFilename}" && echo -e "${nc}\n" || { echo -e "\n[\e[1;31m✗\e[0m] Failed pushing the diagnostics file to MetalSoft."; };;
+				[Yy]* )
+					echo -n "[i] Trying to push the diagnostics file to MetalSoft [HTTPS]...${orange} "
+					http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" "$resultFilename" "$curl_log")"
+					curl_exit=$?
+					if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+						echo -e "${nc}Done (HTTP $http_code)\n"
+						rm -f "$curl_log"
+					else
+						echo -e "${nc}\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+					fi
+					;;
 				* ) exit;;
 			esac
 		fi
