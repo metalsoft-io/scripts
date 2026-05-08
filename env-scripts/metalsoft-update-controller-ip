@@ -41,15 +41,30 @@ fi
 aip="$(ip r get 1|head -1|awk '{print $7}')"
 test -z "$aip" && aip="$(hostname -I|awk '{print $1}')"
 
+# Detect agents major version from docker-compose.yaml image tags (e.g. :v7.3.5)
+ms_major_version=""
+if [ -f /opt/metalsoft/agents/docker-compose.yaml ];then
+        ms_major_version="$(grep -oP 'image:\s+\S+:v\K[0-9]+' /opt/metalsoft/agents/docker-compose.yaml | sort -n | tail -1)"
+fi
+is_v7plus=0
+if [ -n "$ms_major_version" ] && [ "$ms_major_version" -ge 7 ] 2>/dev/null;then
+        is_v7plus=1
+fi
+
 if [ -z "$1" ];then
         echo Please provide the new Controller IP [ and_optional_proxy_host ]
         echo example: $(basename $0) 10.0.0.2 [ http://1.2.3.4:3128/ ]
         echo
         echo ":::: ENV variables that can also be passed to the script:"
-        echo DCURL
+        if [ "$is_v7plus" -eq 0 ];then
+                echo DCURL
+        fi
         echo DATACENTERS_SECRET
         echo SSL_PULL_URL
         echo
+        if [ -n "$ms_major_version" ];then
+                echo "(detected agents major version: v${ms_major_version})"
+        fi
         exit 1;
 fi
 ip=$1
@@ -110,8 +125,12 @@ fi
 
 sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
 if [ -n "$DCURL" ];then
-        echo "Reconfiguring URL=${DCURL}"
-        sed -i "s,\(- URL=\).*,\1${DCURL},g" /opt/metalsoft/agents/docker-compose.yaml
+        if [ "$is_v7plus" -eq 1 ];then
+                echo "${orange}[!] DCURL is not valid for v${ms_major_version}+ agents; ignoring.${nc}"
+        else
+                echo "Reconfiguring URL=${DCURL}"
+                sed -i "s,\(- URL=\).*,\1${DCURL},g" /opt/metalsoft/agents/docker-compose.yaml
+        fi
 fi
 if [ -n "$DATACENTERS_SECRET" ];then
         echo "Reconfiguring DATACENTERS_SECRET=${DATACENTERS_SECRET}"
