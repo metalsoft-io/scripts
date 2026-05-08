@@ -1,10 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ -f license-deployment.yaml ]] || { echo "ERROR: license-deployment.yaml not found"; exit 1; }
-[[ $# -ge 1 ]] || { echo "Usage: $0 <newtag>"; exit 1; }
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <newtag>
+
+Replaces the image tag across all *.yaml files in the current directory.
+The current tag is auto-detected from license-deployment.yaml (must be in cwd).
+
+Arguments:
+  <newtag>    New image tag to apply (e.g. v7.3.4). Must not start with '-'.
+
+Options:
+  -h, --help  Show this help and exit.
+
+Example:
+  cd /path/to/manifests
+  $(basename "$0") v7.3.4
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+fi
+
+case "$1" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    -*)
+        echo "ERROR: unknown option '$1'" >&2
+        echo >&2
+        usage >&2
+        exit 1
+        ;;
+esac
 
 newtag="$1"
+
+if [[ ! "$newtag" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: invalid tag '$newtag'" >&2
+    echo "Tag must contain only letters, digits, dots, underscores, and hyphens (no spaces)." >&2
+    exit 1
+fi
+
+[[ -f license-deployment.yaml ]] || { echo "ERROR: license-deployment.yaml not found"; exit 1; }
 oldtag="$(grep -Po '(?<=license:)[v0-9.]+' license-deployment.yaml)"
 [[ -n "$oldtag" ]] || { echo "ERROR: could not extract current tag from license-deployment.yaml"; exit 1; }
 
