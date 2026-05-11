@@ -488,6 +488,8 @@ tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackup
 				curl_exit=$?
 				if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
 					rm -f "$curl_log"
+					sleep 3
+					echo -e "[${lightgreen}✓${nc}] File auto-uploaded to MetalSoft. No further action needed."
 					exit 0
 				else
 					echo -e "${orange}[!] Auto-upload failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: ${curl_log}${nc}"
