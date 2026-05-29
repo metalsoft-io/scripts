@@ -35,13 +35,14 @@ _get_creds() {
 
 _init() {
     COUCH_IP="${COUCH_IP:-$(_get_svc_ip)}"
+    COUCH_PORT="${COUCH_PORT:-5984}"
     if [[ -z "$COUCH_IP" ]]; then
         _err "ERROR: Could not resolve CouchDB service IP"; exit 1
     fi
     if [[ -z "${COUCH_USER:-}" || -z "${COUCH_PASS:-}" ]]; then
         _get_creds
     fi
-    COUCH_URL="http://${COUCH_USER}:${COUCH_PASS}@${COUCH_IP}:5984"
+    COUCH_URL="http://${COUCH_USER}:${COUCH_PASS}@${COUCH_IP}:${COUCH_PORT}"
 }
 
 _curl() {
@@ -64,7 +65,7 @@ _print_docs() {
 cmd_info() {
     _init
     echo "  Service IP : $COUCH_IP"
-    echo "  URL        : http://${COUCH_USER}:****@${COUCH_IP}:5984"
+    echo "  URL        : http://${COUCH_USER}:****@${COUCH_IP}:${COUCH_PORT}"
     echo "  Version    : $(_curl "${COUCH_URL}/" | jq -r '.version')"
 }
 
@@ -173,7 +174,7 @@ Usage:
   $0 push <db> <file.json>        Push file back; aborts if server _rev changed
 
 Env overrides:
-  COUCH_IP, COUCH_USER, COUCH_PASS   Skip auto-discovery
+  COUCH_IP, COUCH_PORT, COUCH_USER, COUCH_PASS   Skip auto-discovery
 
 Examples:
   $0 dbs
