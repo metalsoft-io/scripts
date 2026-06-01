@@ -545,6 +545,16 @@ else
   podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl $curl_s_proxy -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
 fi
 
+# Detect the GID that owns the docker socket (authoritative for container access),
+# fall back to the docker group entry, then 999. Used as the group_add default below.
+DOCKER_GID=""
+if [ "$DOCKERBIN" == "docker" ]; then
+  DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null)"
+  test -z "$DOCKER_GID" && DOCKER_GID="$(getent group docker 2>/dev/null | cut -d: -f3)"
+  debuglog "Detected DOCKER_GID=${DOCKER_GID:-999}"
+fi
+test -z "$DOCKER_GID" && DOCKER_GID=999
+
 debuglog "Checking provided SSL"
 test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
 
@@ -699,10 +709,17 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
+      - ANSIBLE_RUNNER_RUN_UID=\"1000\"
+      - ANSIBLE_RUNNER_RUN_GID=\"1000\"
+      - ANSIBLE_RUNNER_EXECUTION_ENV=\${ANSIBLE_RUNNER_EXECUTION_ENV:-registry.metalsoft.dev/ee/ee-default:latest}
+      - ANSIBLE_RUNNER_SOCKET_PATH=\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
+      - ANSIBLE_RUNNER_HOME_HOST=\${ANSIBLE_RUNNER_HOME_HOST:-/opt/metalsoft/ansible-jobs}
+      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
 "
         ms_agent_ansible_runner_volumes="
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
+#      - \${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}:\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
 "
     fi
 fi
@@ -802,11 +819,9 @@ inband_dc="  ms-agent:
     hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
     image: ${MSAGENT_URL}
     restart: always
-    cap_add:
-      - NET_BIND_SERVICE
-      - NET_ADMIN
-#    security_opt:
-#      - no-new-privileges:true
+    cap_add: [NET_BIND_SERVICE, NET_ADMIN]
+#    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
+#    security_opt: [\"no-new-privileges:true\"]
     environment:
       # - HTTP_PROXY=http://proxy_ip_here:3128
       # - HTTPS_PROXY=http://proxy_ip_here:3128
