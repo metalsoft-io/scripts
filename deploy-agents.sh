@@ -714,6 +714,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER_EXECUTION_ENV=\${ANSIBLE_RUNNER_EXECUTION_ENV:-registry.metalsoft.dev/ee/ee-default:latest}
       - ANSIBLE_RUNNER_SOCKET_PATH=\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
       - ANSIBLE_RUNNER_HOME_HOST=\${ANSIBLE_RUNNER_HOME_HOST:-/opt/metalsoft/ansible-jobs}
+      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_DNS_SERVERS=\"8.8.8.8,1.1.1.1\"
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
 "
         ms_agent_ansible_runner_volumes="
