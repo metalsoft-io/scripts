@@ -719,12 +719,23 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_DNS_SERVERS=\"8.8.8.8,1.1.1.1\"
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
 "
-        ms_agent_ansible_runner_volumes="
+    fi
+fi
+
+# ms-agent ansible runner volumes. Present when ANSIBLE_RUNNER enabled, or always for v7.4.0+
+# (the runner moved into ms-agent). Socket mount is commented for <v7.4.0, active for v7.4.0+.
+if ! verlt "$IMAGES_TAG" v7.4.0; then
+    sock_prefix="- "
+else
+    sock_prefix="#- "
+fi
+if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] || ! verlt "$IMAGES_TAG" v7.4.0; then
+    ms_agent_ansible_runner_volumes="
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
-#      - \${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}:\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
+      ${sock_prefix}\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}:\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
+      #- ANSIBLE_RUNNER_DEBUG_KEEP_CONTAINER=1
 "
-    fi
 fi
 
 # Initialize sc-image-builder variable
