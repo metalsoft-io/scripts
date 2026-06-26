@@ -677,6 +677,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
 "
     else
         #debuglog "ANSIBLE_RUNNER capability enabled" info green
+        if verlt "$IMAGES_TAG" v7.4.0; then
         ansible_runner="  ansible-runner:
     container_name: ansible-runner
     network_mode: host
@@ -705,6 +706,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       #- /opt/metalsoft/extensions/openshift-install:/usr/local/bin/openshift-install:ro
       #- /opt/metalsoft/nfs-storage:/iso
 "
+        fi
         ms_agent_ansible_runner_mounts="
       - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
