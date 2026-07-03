@@ -22,6 +22,19 @@ if [ "$EUID" -ne 0 ];then
         exit 1
 fi
 
+# Wait for docker daemon to be up (e.g. when invoked from cloud-init early at boot)
+DOCKER_WAIT_TIMEOUT="${DOCKER_WAIT_TIMEOUT:-600}"
+waited=0
+until docker info >/dev/null 2>&1;do
+        if [ "$waited" -ge "$DOCKER_WAIT_TIMEOUT" ];then
+                echo "${lightred}Timed out after ${DOCKER_WAIT_TIMEOUT}s waiting for docker daemon${nc}"
+                exit 3
+        fi
+        echo "Waiting for docker daemon to be up.. (${waited}s)"
+        sleep 5
+        waited=$((waited+5))
+done
+
 if docker >/dev/null 2>&1;then
         if docker compose >/dev/null 2>&1;then
                 docker_compose="docker compose"
