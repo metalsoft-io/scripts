@@ -8,6 +8,21 @@ DIM='\033[2m'
 RESET='\033[0m'
 BOLD='\033[1m'
 
+# Strip --no-color from args (can appear anywhere) and disable colors if found
+ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--no-color" ]]; then
+        GREEN=''
+        LRED=''
+        DIM=''
+        RESET=''
+        BOLD=''
+    else
+        ARGS+=("$arg")
+    fi
+done
+set -- "${ARGS[@]}"
+
 _err() { printf "${LRED}%s${RESET}\n" "$*" >&2; }
 _ok()  { printf "${GREEN}●${RESET} %s\n" "$*"; }
 
