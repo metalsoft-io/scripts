@@ -1,3 +1,5 @@
+<!-- AIR:tour -->
+
 # Metalsoft GlobalController+Sitecontroller setup
 
 This environment demonstrates the setup and use of Metalsoft's GlobalController (GC) and SiteController (SC)
@@ -7,6 +9,8 @@ This environment demonstrates the setup and use of Metalsoft's GlobalController 
 gc = Global Controller VM
 sc = Site Controller VM
 oob-mgmt-server = OOB Management Server VM, also the jumpbox through which the gc and sc VMs are accessed
+
+<!-- AIR:page -->
 
 ## Demo setup
 
@@ -25,6 +29,8 @@ Password: `MetalsoftR0cks@$@$`
 
 SC should be accessible via `ssh -l root 192.168.200.2`
 Password: `MetalsoftR0cks@$@$`
+
+<!-- AIR:page -->
 
 ## Setup GC to be accessed from outside:
 
@@ -65,6 +71,8 @@ User: `demo@metalsoft.io`
 Password: `MetalsoftR0cks@$@$`
 
 
+<!-- AIR:page -->
+
 ## Troubleshooting GC:
 
 once you ssh into the GC, you can check if all k8s pods are running via: `kw` (alias for: kubectl watch)
@@ -99,3 +107,4 @@ drwxr-xr-x 8 root root 4096 Jul  6 13:48 ..
 -rw-r--r-- 1 root root 3246 Jul  6 13:49 ssl-cert.pem
 ```
 
+<!-- AIR:tour -->
