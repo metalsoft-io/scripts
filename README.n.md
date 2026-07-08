@@ -7,7 +7,9 @@ This environment demonstrates the setup and use of Metalsoft's GlobalController 
 ## Demo topology
 
 gc = Global Controller VM
+
 sc = Site Controller VM
+
 oob-mgmt-server = OOB Management Server VM, also the jumpbox through which the gc and sc VMs are accessed
 
 <!-- AIR:page -->
@@ -76,6 +78,7 @@ Password: `MetalsoftR0cks@$@$`
 ## Troubleshooting GC:
 
 once you ssh into the GC, you can check if all k8s pods are running via: `kw` (alias for: kubectl watch)
+
 If all pods are not in `Running` state, and they do not auto-recover, you can force-restart with `k-restart-all -A`
 
 ## Troubleshooting SC:
