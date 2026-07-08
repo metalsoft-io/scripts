@@ -109,5 +109,18 @@ drwxr-xr-x 8 root root 4096 Jul  6 13:48 ..
 -rw-r--r-- 1 root root 4486 Jul  6 14:22 docker-compose.yaml
 -rw-r--r-- 1 root root 3246 Jul  6 13:49 ssl-cert.pem
 ```
+If on SC `docker logs -f ms-agent` are showing that it cannot resolve `demo.metalsoft.io`,
+on the SC host add in `/etc/hosts`:
+
+```bash
+192.168.200.3 demo.metalsoft.io
+```
+
+then run:
+
+```bash
+dcrestart
+```
+
 
 <!-- AIR:tour -->
