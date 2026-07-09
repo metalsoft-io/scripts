@@ -34,7 +34,7 @@ Password: `MetalsoftR0cks@$@$`
 
 <!-- AIR:page -->
 
-## Setup GC to be accessed from outside:
+## Setup GC UI to be accessed from outside:
 
 On `oob-mgmt-server`, execute the following commands to setup the forwarding of port 443 towards the GC:
 
@@ -66,6 +66,12 @@ Then on your Local Workstation point in your `hosts` file:
 <IP_of_worker_host> demo.metalsoft.io
 ```
 
+Make sure that in Nvidia Air Simuiation, unser Services tab a Service exists which creates HTTPS forwarding:
+
+- Service name: `HTTPS`
+- Service type: `HTTPS`
+- Service port: `443`
+
 Now you should be able to access the Metalsoft UI via `https://demo.metalsoft.io:<custom_port>/`
 
 Initial admin login:
@@ -74,6 +80,20 @@ Password: `MetalsoftR0cks@$@$`
 
 
 <!-- AIR:page -->
+
+## Setup SC to connect to GC:
+
+On SC make sure that the following entry exists within `/etc/hosts` file:
+
+```bash
+192.168.200.3 demo.metalsoft.io
+```
+
+Once applied, run the following command to restart the docker containers so they make use of the setting:
+
+```bash
+dcrestart
+```
 
 ## Troubleshooting GC:
 
@@ -109,18 +129,5 @@ drwxr-xr-x 8 root root 4096 Jul  6 13:48 ..
 -rw-r--r-- 1 root root 4486 Jul  6 14:22 docker-compose.yaml
 -rw-r--r-- 1 root root 3246 Jul  6 13:49 ssl-cert.pem
 ```
-If on SC `docker logs -f ms-agent` are showing that it cannot resolve `demo.metalsoft.io`,
-on the SC host add in `/etc/hosts`:
-
-```bash
-192.168.200.3 demo.metalsoft.io
-```
-
-then run:
-
-```bash
-dcrestart
-```
-
 
 <!-- AIR:tour -->
