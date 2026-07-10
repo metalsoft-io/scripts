@@ -101,6 +101,40 @@ once you ssh into the GC, you can check if all k8s pods are running via: `kw` (a
 
 If all pods are not in `Running` state, and they do not auto-recover, you can force-restart with `k-restart-all -A`
 
+---
+
+When accessing the URL: `https://demo.metalsoft.io:<custom_port>/`, Since the Demo is using a self-signed SSL,
+
+you will have to import the following CA certificate to the workstation from which you are accessing the URL:
+
+```
+-----BEGIN CERTIFICATE-----
+MIIEBzCCAu+gAwIBAgIUHKD6RcgrIEoHCNHErJUfUwDJMCAwDQYJKoZIhvcNAQEL
+BQAwgZIxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJJTDEQMA4GA1UEBwwHQ2hpY2Fn
+bzEcMBoGA1UECgwTTWV0YWxzb2Z0IENsb3VkIEluYzELMAkGA1UECwwCSVQxFTAT
+BgNVBAMMDG1ldGFsc29mdC5pbzEiMCAGCSqGSIb3DQEJARYTc3lzb3BzQG1ldGFs
+c29mdC5pbzAeFw0yNjA1MjAxMjMwNDZaFw0zNjA1MTcxMjMwNDZaMIGSMQswCQYD
+VQQGEwJVUzELMAkGA1UECAwCSUwxEDAOBgNVBAcMB0NoaWNhZ28xHDAaBgNVBAoM
+E01ldGFsc29mdCBDbG91ZCBJbmMxCzAJBgNVBAsMAklUMRUwEwYDVQQDDAxtZXRh
+bHNvZnQuaW8xIjAgBgkqhkiG9w0BCQEWE3N5c29wc0BtZXRhbHNvZnQuaW8wggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDp42R+t6p23lhjppq83K2b3mbf
+2KLIQ5IncUr0vgPp0NtWDbPFfK5HSWy0x62Gtux5SkmPOt3FwS0r1/BqgLrgM5rP
+ZTPpf/t0jSSh0vnCBP47XmPq4kDNF8rpxCgCoxEH+JWjdnJLBAO72qNdP5h2eAq1
+rFuwy71BFAC+qL9o64d/H0IJ4SHj9h1y2gnq7gAyiyLF7kw/PTXD5OA4zonrmBwL
+JdYmvXxmJjgi4W86X48pCdLowxFk5skZQTGSXZLcoblDXWRSwrc3s65EDhP53FVC
+qNjD1fxAV6fkLwkp8C0JXqQ+0vn3PBu7BO6MwZE5OgnWjq93FXHULDkpRlbDAgMB
+AAGjUzBRMB0GA1UdDgQWBBRsQNxcbzofE3L9TIiLqon4J+/ACTAfBgNVHSMEGDAW
+gBRsQNxcbzofE3L9TIiLqon4J+/ACTAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQAFarlYcAT/I/ybC8ywOiuOVOOVi7YBqz+j9HwKB/s36ViZEmsZ
+/SNiGBrzDEE5kCLfzxS7XLtiet7zYCU+fxezePdt3gNpyjLpibZKvkb1LxfG3EKK
++HEg0+hoMCJG8WNeVEGoa1rNUgXk9FT57hV1mquymzhTcXtXeXGWEakbHSs5Oj3u
+aQmS/TaU4iCyWrbB9EISr6irIG3Y7GS2Vv2/cyll1XVfrWYBzq1cg0RIJc0WIYoN
+ZqUyUBGgaH/f2Kp4oM44YCLumqKSxT8goHwGtjZ+LTYhW/9NvL0L9Sv5HzG2yEEJ
+HTAjPGqtBmfrA3e6HutGyfEeL8R2SUX+Z+Xy
+-----END CERTIFICATE-----
+```
+
+
 ## Troubleshooting SC:
 
 once you ssh into the SC, you can check the running containers via: `docker ps`
