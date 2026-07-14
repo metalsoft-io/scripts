@@ -167,6 +167,9 @@ drwxr-xr-x 8 root root 4096 Jul  6 13:48 ..
 ## If you need to install and use `metalcloud-cli` on the `oob-mgmt-server`:
 
 ```bash
+# Install required dependencies:
+sudo apt update -qq && sudo apt install -y jq
+
 # Install metalcloud-cli
 curl -skL $(curl -s https://api.github.com/repos/metalsoft-io/metalcloud-cli/releases/latest | grep -i browser_download_url  | grep "$(dpkg --print-architecture)" | grep deb | head -n 1 | cut -d'"' -f4) -o metalcloud-cli.deb && sudo dpkg -i metalcloud-cli.deb && metalcloud-cli completion bash |sudo tee /etc/bash_completion.d/metalcloud-cli
 
