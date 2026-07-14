@@ -168,10 +168,10 @@ drwxr-xr-x 8 root root 4096 Jul  6 13:48 ..
 
 ```bash
 # Install metalcloud-cli
-curl -skL $(curl -s https://api.github.com/repos/metalsoft-io/metalcloud-cli/releases/latest | grep -i browser_download_url  | grep "$(dpkg --print-architecture)" | grep deb | head -n 1 | cut -d'"' -f4) -o metalcloud-cli.deb && sudo dpkg -i metalcloud-cli.deb && metalcloud-cli completion bash |sudo tee /etc/bash_completion.d/metalcloud-cli && source ~/.bashrc
+curl -skL $(curl -s https://api.github.com/repos/metalsoft-io/metalcloud-cli/releases/latest | grep -i browser_download_url  | grep "$(dpkg --print-architecture)" | grep deb | head -n 1 | cut -d'"' -f4) -o metalcloud-cli.deb && sudo dpkg -i metalcloud-cli.deb && metalcloud-cli completion bash |sudo tee /etc/bash_completion.d/metalcloud-cli
 
 # Get the METALCLOUD environment variables from GC and add them locally
-ssh root@192.168.200.3 'grep METALCLOUD /root/.bashrc' | tee -a ~/.bashrc && source ~/.bashrc
+ssh root@192.168.200.3 'grep METALCLOUD /root/.bashrc' | tee -a ~/.bashrc
 
 # Add the demo.metalsoft.io host to /etc/hosts
 echo "192.168.200.3 demo.metalsoft.io"|sudo tee -a /etc/hosts
@@ -206,6 +206,30 @@ ENDD
 
 # Update CAs
 sudo update-ca-certificates
+
+# add the wait function in bash:
+cat <<'EOFF' >> ~/.bashrc
+
+wait_for_job_group() {
+  local jg="$1"
+  local sleep_time="${2:-15}"
+  test -z "$jg" && echo "Job Group not specified" && return 1
+  echo "waiting for job group $jg to finish ..."
+  # the group sets finishedTimestamp only once every job in it is terminal
+  until [ -n "$(metalcloud-cli job-group get "$jg" -f json | jq -r '.finishedTimestamp // empty')" ]; do
+    # progress: a count per status (e.g. "4 running", "2 returned_success")
+    metalcloud-cli job list --filter-job-group-id "$jg" -f json \
+      | jq -r 'group_by(.status)[] | "\(length)\t\(.[0].status)"'
+    sleep "$sleep_time"
+done
+  echo "job group $jg finished - per-job status:"
+  # every job should read returned_success / finished; anything else is a failure
+  metalcloud-cli job list --filter-job-group-id "$jg"
+}
+EOFF
+
+# source the bashrc
+source ~/.bashrc
 
 ```
 
