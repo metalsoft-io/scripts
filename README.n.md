@@ -40,7 +40,7 @@ On `oob-mgmt-server`, execute the following commands to setup the forwarding of 
 
 ```bash
 sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.200.3:443
+sudo iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 443 -j DNAT --to 192.168.200.3:443
 sudo iptables -t nat -A POSTROUTING -p tcp -d 192.168.200.3 --dport 443 -j MASQUERADE
 ```
 
