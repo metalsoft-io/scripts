@@ -3,7 +3,7 @@
 
 MetalSoft is an intelligent orchestration platform that transforms fragmented on-premises hardware into high-performance, fast-changing, secure, workload compliant infrastructure. It integrates both servers, switches, storage and more to provide a turnkey NCP solution. 
 
-<img src="https://docs.metalsoft.io/_astro/metalsoft-logo-default-registered.DxFqJBnC.svg" alt="drawing" width="200"  style="padding: 20px;"/>
+<img src="/nvair/img/metalsoft-logo-default-registered.DxFqJBnC.svg" alt="drawing" width="200"  style="padding: 20px;"/>
 
 
 Build an NVIDIA SpectrumX 2 Scalability Unit fabric (512 GPUS) from scratch and deploy a tenancy using the MetalSoft CLI and Terraform. The fabric uses a two-tier leaf-spine design running EVPN over eBGP on Cumulus Linux 5.14.0. 
@@ -13,7 +13,7 @@ Build an NVIDIA SpectrumX 2 Scalability Unit fabric (512 GPUS) from scratch and 
 
 The simulation packs everything needed to test the setup: The MetalSoft Global Controller and Site Controller, associated switches, links and HGX nodes.
 
-<img src="https://docs.metalsoft.io/assets/nvidia-air-marketplace-documentation/fabric_view_links_discovered.png"  alt="drawing" width="400"  style="padding: 20px;"/>
+<img src="/nvair/img/nvidia-air-marketplace-documentation/fabric_view_links_discovered.png"  alt="drawing" width="400"  style="padding: 20px;"/>
 
 ### Getting started
 
