@@ -661,7 +661,6 @@ The complete per-host netplan files are staged on the jumpstation under `netplan
 First, capture each host's rail state *before* applying netplan, so there is a baseline to compare against. The `eth_rail` NICs carry no `172.x` addresses yet and the routing table holds no rail routes:
 
 ```bash
-ubuntu@oob-mgmt-server:~/nvidia$ cd ~/nvidia
 export SSHPASS=nvidia   # the HGX hosts are ubuntu:nvidia
 for ip in 192.168.200.{23..30}; do
   host=$(sshpass -e ssh -n -o ConnectTimeout=10 -o StrictHostKeyChecking=no "ubuntu@$ip" hostname 2>/dev/null)
@@ -673,7 +672,6 @@ done
 Now push each host the file named for it and apply it. This loop reads each host's name, copies its file, installs it with mode 0600, and runs `netplan apply`:
 
 ```bash
-ubuntu@oob-mgmt-server:~/nvidia$ cd ~/nvidia
 export SSHPASS=nvidia   # the HGX hosts are ubuntu:nvidia
 for ip in 192.168.200.{23..30}; do
   host=$(sshpass -e ssh -n -o ConnectTimeout=10 -o StrictHostKeyChecking=no "ubuntu@$ip" hostname 2>/dev/null)
@@ -697,7 +695,6 @@ Validation:
 Re-run the baseline commands to see the effect of the netplan change. Each `eth_rail` NIC is now `UP` with its `/31` address, and the routing table has gained the per-rail `/15` and `/12` rail routes (via each rail gateway) that carry the RoCE traffic, none of which were present in the baseline above:
 
 ```bash
-ubuntu@oob-mgmt-server:~/nvidia$ cd ~/nvidia
 export SSHPASS=nvidia   # the HGX hosts are ubuntu:nvidia
 for ip in 192.168.200.{23..30}; do
   host=$(sshpass -e ssh -n -o ConnectTimeout=10 -o StrictHostKeyChecking=no "ubuntu@$ip" hostname 2>/dev/null)
@@ -734,7 +731,6 @@ Use control+C to stop an any time.
 The rail `/31`s live only on the hosts, so the ping sweep has to run on each host, not on the jumpstation. This block drives all eight hosts from the jumpstation: it SSHes in with the lab credentials and runs the full rail mesh on each one, covering all eight rails across both units and all four hosts (64 targets per host, including the same-rail peers in the other unit):
 
 ```bash
-ubuntu@oob-mgmt-server:~/nvidia$ cd ~/nvidia
 export SSHPASS=nvidia   # the HGX hosts are ubuntu:nvidia
 
 # Runs on each host: ping every host on all eight rails in both units, retrying for up to
