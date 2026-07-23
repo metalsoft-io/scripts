@@ -586,7 +586,7 @@ Validation:
 ```bash
 ubuntu@oob-mgmt-server:~/nvidia$ cd ~/nvidia/terraform/
 ubuntu@oob-mgmt-server:~/nvidia/terraform$ terraform init
-ubuntu@oob-mgmt-server:~/nvidia/terraform$ terraform apply
+ubuntu@oob-mgmt-server:~/nvidia/terraform$ terraform apply -auto-approve
 ubuntu@oob-mgmt-server:~/nvidia/terraform$ cd ~/nvidia
 ```
 
@@ -721,6 +721,7 @@ Before running the checks, confirm that the Terraform deployment from Step 12 ha
 ```bash
 ubuntu@oob-mgmt-server:~/nvidia$ watch -n 10 "metalcloud-cli infrastructure list"
 ```
+Use control+C to stop an any time.
 
 ```
 ┌────┬─────────┬──────────────┬────────┬───────┬──────┬─────────────────────┬─────────────────────┬───────────────┬───────────┐
