@@ -294,7 +294,7 @@ k8s_import_one() {
 
 phase_k8s_import() {
     step "Phase 1: import image (k8s)"
-    [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import."
+    [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import"
     [[ -f "$IMAGE_FILE" ]] || die "File not found: $IMAGE_FILE"
     detect_k8s_runtime
     wait_k8s_runtime_ready
@@ -633,18 +633,14 @@ extract_new_tag() {
             | grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" \
             | sed "s/^${LICENSE_MATCH}://" | sort -uV)"
     [[ -n "$tags" ]] || return 1
-    if [[ -n "$oldTag" ]]; then
-        candidate="$(printf '%s\n' "$tags" | grep -v "^${oldTag}\$" | tail -1 || true)"
-    else
-        candidate="$(printf '%s\n' "$tags" | tail -1)"
-    fi
+    candidate="$(printf '%s\n' "$tags" | tail -1)"
     [[ -n "$candidate" ]] || return 1
 
     NEW_TAG="$candidate"
     NEW_TAG_SOURCE="image store (highest semver, heuristic)"
     # Stash candidates so main() can print them — useful to spot wrong picks
     # when tags are non-semver (e.g. "develop-monorepo" sort-Vs below "v7.3.5").
-    NEW_TAG_CANDIDATES="$(printf '%s\n' "$tags" | grep -v "^${oldTag}\$" || true)"
+    NEW_TAG_CANDIDATES="$tags"
     return 0
 }
 
@@ -722,7 +718,7 @@ main() {
             warn "This is wrong if you are downgrading, OR if your tags aren't semver"
             warn "(e.g. 'develop-monorepo' sort-Vs below 'v7.3.5'). Pass --new-tag to override."
             if [[ -n "$NEW_TAG_CANDIDATES" ]]; then
-                warn "Candidates considered (sorted -V, OldTag excluded):"
+                warn "Candidates considered (sorted -V):"
                 printf '%s\n' "$NEW_TAG_CANDIDATES" | sed 's/^/        - /' >&2
             fi
         fi
@@ -730,6 +726,15 @@ main() {
         if [[ "$oldTag" == "$newTag" ]]; then
             ok "OldTag == NewTag ($oldTag); nothing to upgrade."
             exit 0
+        fi
+
+        # This script upgrades. Never downgrade unless the user said so explicitly.
+        if [[ "$NEW_TAG_SOURCE" != "--new-tag override" ]]; then
+            if [[ "$(printf '%s\n%s\n' "$oldTag" "$newTag" | sort -V | tail -1)" == "$oldTag" ]]; then
+                err "NewTag ($newTag) is older than OldTag ($oldTag) — refusing to downgrade."
+                err "If a downgrade is really intended, pass --new-tag $newTag explicitly."
+                exit 5
+            fi
         fi
 
         # ── Phase 4: rewrite ─────────────────────────────────────────────
