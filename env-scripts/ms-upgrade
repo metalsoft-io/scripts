@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-# ms-upgrade-helper — import an offline image bundle, then bump matching tags and apply.
+# ms-upgrade — import an offline image bundle, then bump matching tags and apply.
 # Two modes (auto-detected, can be overridden with --mode):
 #   * k8s    — k3s/ctr/nerdctl  + manifest yamls            + kubectl apply
 #   * docker — docker/podman    + .env or docker-compose    + compose down/up
+#
+# k8s mode accepts two bundle formats (auto-detected from the tar listing):
+#   * flat image tar  — a single docker-image archive, imported directly (legacy)
+#   * multi-folder    — a tar(.gz) whose top level contains any of:
+#       run-pre/      scripts → executed first, before anything else in the bundle
+#       registry/     image tar/tar.gz archives → imported into the image store
+#       repo/         files → copied into the 'repo' deployment volume
+#                     (PV hostPath write if resolvable, else kubectl cp/exec)
+#       helpers-bin/  binaries → installed to /usr/local/bin (sudo fallback)
+#       run-post/     scripts → executed last, after the apply phase
+#     run-pre/ and run-post/ scripts run in lexical order; a script that exits
+#     non-zero is reported and the upgrade continues.
 #
 # Detection (same shape as diagnostics-collector):
 #   * docker — if /opt/metalsoft/agents/docker-compose.{yaml,yml} exists AND
@@ -10,14 +22,14 @@
 #   * k8s    — if kubectl, k3s or ctr is installed
 #
 # Install:
-#   sudo install -m 0755 ms-upgrade-helper /usr/local/bin/ms-upgrade-helper
+#   sudo install -m 0755 ms-upgrade /usr/local/bin/ms-upgrade
 #
 # Examples:
-#   ms-upgrade-helper /root/k8s-images/license-v7.3.5.tar.gz       # k8s, autodetect
-#   ms-upgrade-helper --mode docker /tmp/agents-v7.3.5.tar.gz      # force docker mode
-#   ms-upgrade-helper -y /tmp/bundle.tar
-#   ms-upgrade-helper --skip-import                                 # NewTag inferred from image store
-#   ms-upgrade-helper --skip-import --new-tag v7.3.5                # explicit override
+#   ms-upgrade /root/k8s-images/license-v7.3.5.tar.gz       # k8s, autodetect
+#   ms-upgrade --mode docker /tmp/agents-v7.3.5.tar.gz      # force docker mode
+#   ms-upgrade -y /tmp/bundle.tar
+#   ms-upgrade --skip-import                                 # NewTag inferred from image store
+#   ms-upgrade --skip-import --new-tag v7.3.5                # explicit override
 
 set -Eeuo pipefail
 
@@ -38,6 +50,9 @@ DRY_RUN=0
 LICENSE_MATCH=""               # auto-defaulted by mode if --license-match not given
 LICENSE_MATCH_USER_SET=0
 TMPDIR_RUN=""
+BUNDLE_DIR=""
+REPO_NS=""
+REPO_COPY_DEFERRED=0
 
 # ── Logging ──────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -72,9 +87,20 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [options] <image-file>
 
-Imports a single image tarball (.tar or .tar.gz), then bumps tags in
+Imports an image tarball (.tar or .tar.gz), then bumps tags in
 the relevant config (manifests in k8s mode, .env or docker-compose.yaml in docker
 mode), then applies the change.
+
+In k8s mode the tarball may also be a multi-folder bundle whose top level
+contains any of (detected automatically):
+  run-pre/       scripts executed first, before anything else in the bundle
+  registry/      image tar/tar.gz archives, imported into the image store
+  repo/          files copied into the 'repo' deployment volume
+                 (PV hostPath write if resolvable, else kubectl cp/exec)
+  helpers-bin/   binaries installed to /usr/local/bin (sudo fallback)
+  run-post/      scripts executed last, after the apply phase
+Folders that are absent are skipped. run-pre/ and run-post/ scripts run in
+lexical order; a script that exits non-zero is reported and the run continues.
 
 Mode is auto-detected:
   * docker — if $AGENTS_DIR/docker-compose.{yaml,yml} exists AND docker/podman is installed
@@ -105,11 +131,11 @@ Options:
   -h, --help                  Show this help
 
 Examples:
-  ms-upgrade-helper /root/k8s-images/license-v7.3.5.tar.gz
-  ms-upgrade-helper --mode docker /tmp/agents-v7.3.5.tar.gz
-  ms-upgrade-helper -y /tmp/bundle.tar
-  ms-upgrade-helper --skip-import                  # NewTag inferred from image store
-  ms-upgrade-helper --skip-import --new-tag v7.3.5 # explicit override
+  ms-upgrade /root/k8s-images/license-v7.3.5.tar.gz
+  ms-upgrade --mode docker /tmp/agents-v7.3.5.tar.gz
+  ms-upgrade -y /tmp/bundle.tar
+  ms-upgrade --skip-import                  # NewTag inferred from image store
+  ms-upgrade --skip-import --new-tag v7.3.5 # explicit override
 
 Exit codes:
   0  success                  2  bad usage         3  prereq missing
@@ -169,7 +195,7 @@ confirm() {
 
 mktempdir_or_die() {
     local d
-    if ! d="$(mktemp -d -t ms-upgrade-helper.XXXXXX 2>/dev/null)"; then
+    if ! d="$(mktemp -d -t ms-upgrade.XXXXXX 2>/dev/null)"; then
         err "Failed to create scratch directory via mktemp."
         err "Check that \$TMPDIR (or /tmp) exists, is writable, and has free space."
         exit 3
@@ -227,16 +253,25 @@ detect_mode() {
 RUNTIME_KIND=""
 RUNTIME_BIN=()
 
+# containerd namespace holding the images kubelet actually pulls from. Bare
+# `ctr`/`nerdctl` default to "default", where kubelet never looks — an import
+# there "succeeds" and the pod still ErrImagePulls. Always pass it explicitly.
+# Honours containerd's own CONTAINERD_NAMESPACE env var as the escape hatch;
+# unrelated to -n/--namespace, which is the *kubectl* namespace.
+CTR_NAMESPACE="${CONTAINERD_NAMESPACE:-k8s.io}"
+
 detect_k8s_runtime_quiet() {
     if [[ ${#RUNTIME_BIN[@]} -gt 0 ]]; then return 0; fi
+    # -n precedes the subcommand for both ctr and nerdctl, so image import /
+    # load / image ls all inherit it.
     if command -v k3s >/dev/null 2>&1 \
        && (systemctl is-active --quiet k3s 2>/dev/null \
            || [[ -S /run/k3s/containerd/containerd.sock ]]); then
-        RUNTIME_KIND="k3s"; RUNTIME_BIN=(k3s ctr); return 0
+        RUNTIME_KIND="k3s"; RUNTIME_BIN=(k3s ctr -n "$CTR_NAMESPACE"); return 0
     elif command -v ctr >/dev/null 2>&1; then
-        RUNTIME_KIND="ctr"; RUNTIME_BIN=(ctr); return 0
+        RUNTIME_KIND="ctr"; RUNTIME_BIN=(ctr -n "$CTR_NAMESPACE"); return 0
     elif command -v nerdctl >/dev/null 2>&1; then
-        RUNTIME_KIND="nerdctl"; RUNTIME_BIN=(nerdctl); return 0
+        RUNTIME_KIND="nerdctl"; RUNTIME_BIN=(nerdctl -n "$CTR_NAMESPACE"); return 0
     fi
     return 1
 }
@@ -296,11 +331,227 @@ phase_k8s_import() {
     step "Phase 1: import image (k8s)"
     [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import"
     [[ -f "$IMAGE_FILE" ]] || die "File not found: $IMAGE_FILE"
-    detect_k8s_runtime
-    wait_k8s_runtime_ready
     : > "$TMPDIR_RUN/import.log"
-    k8s_import_one "$IMAGE_FILE" || return 1
-    ok "Imported: $IMAGE_FILE"
+    if is_multi_bundle "$IMAGE_FILE"; then
+        # Runtime is only needed if the bundle ships registry/ archives;
+        # phase_k8s_bundle detects it right before importing them.
+        phase_k8s_bundle || return 1
+    else
+        detect_k8s_runtime
+        wait_k8s_runtime_ready
+        k8s_import_one "$IMAGE_FILE" || return 1
+        ok "Imported: $IMAGE_FILE"
+    fi
+}
+
+# ── Multi-folder bundle (k8s only) ───────────────────────────────────────
+# A bundle tar(.gz) whose top level contains any of run-pre/, registry/, repo/,
+# helpers-bin/ or run-post/.
+
+BUNDLE_FOLDERS='registry|repo|helpers-bin|run-pre|run-post'
+
+is_multi_bundle() {
+    local file="$1" listing
+    # tar -t auto-detects gzip, so one branch covers .tar/.tar.gz/.tgz and
+    # oddly-named bundles. `|| true`: head closing the pipe early makes tar
+    # exit 141 under pipefail, which must not be treated as "not a bundle".
+    listing="$(tar -tf "$file" 2>/dev/null | head -200 || true)"
+    [[ -n "$listing" ]] || return 1
+    # Match nested too — `tar czf b.tgz mybundle/` wraps the folders one level down.
+    printf '%s\n' "$listing" | grep -qE "(^|/)($BUNDLE_FOLDERS)/"
+}
+
+# Execute every regular file in a bundle scripts folder, lexical order.
+# A script that fails is reported and the run continues — a broken hook must
+# not strand a half-applied upgrade.
+run_bundle_scripts() {
+    local sub="$1" dir="$BUNDLE_DIR/$1"
+    [[ -n "$BUNDLE_DIR" && -d "$dir" ]] || return 0
+    # Collect first: the loop must not hand `find`'s output to the scripts as stdin.
+    local files=() f rc
+    while IFS= read -r f; do files+=("$f"); done < <(find "$dir" -maxdepth 1 -type f | sort)
+    if (( ${#files[@]} == 0 )); then
+        warn "$sub/ present but contains no files."
+        return 0
+    fi
+    step "Running $sub/ scripts (${#files[@]})"
+    for f in "${files[@]}"; do
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s %q\n' "$C_DIM" "$C_RST" "$f"
+            continue
+        fi
+        log "Running: $(basename "$f")"
+        chmod +x "$f" 2>/dev/null || true
+        # </dev/null: a hook that reads stdin would otherwise block the upgrade
+        # forever, including under -y. Hooks are not interactive.
+        rc=0; "$f" </dev/null || rc=$?
+        if (( rc == 0 )); then
+            ok "$(basename "$f") finished."
+        else
+            warn "$(basename "$f") exited $rc — continuing."
+        fi
+    done
+}
+
+phase_k8s_bundle() {
+    log "Multi-folder bundle detected (run-pre/, registry/, repo/, helpers-bin/, run-post/)."
+    BUNDLE_DIR="$TMPDIR_RUN/bundle"
+    mkdir -p "$BUNDLE_DIR"
+    # Extract even in --dry-run (scratch dir only, auto-cleaned) so every
+    # phase can print the exact per-file actions it would take.
+    log "Extracting bundle to $BUNDLE_DIR"
+    tar -xf "$IMAGE_FILE" -C "$BUNDLE_DIR" || { err "Bundle extraction failed: $IMAGE_FILE"; return 1; }
+
+    # The folders may sit one level down inside a wrapper dir; point BUNDLE_DIR
+    # at wherever they actually landed. (`|| true`: head SIGPIPEs find.)
+    local anchor
+    anchor="$(find "$BUNDLE_DIR" -maxdepth 3 -type d 2>/dev/null \
+              | grep -E "/($BUNDLE_FOLDERS)\$" | sort | head -1 || true)"
+    if [[ -n "$anchor" ]]; then
+        BUNDLE_DIR="$(dirname "$anchor")"
+        log "Bundle root: $BUNDLE_DIR"
+    fi
+
+    run_bundle_scripts run-pre
+
+    if [[ -d "$BUNDLE_DIR/registry" ]]; then
+        detect_k8s_runtime
+        wait_k8s_runtime_ready
+        local f found=0
+        while IFS= read -r f; do
+            case "$f" in
+                *.tar|*.tar.gz) found=1; k8s_import_one "$f" || return 1 ;;
+                # Loud, not silent: an unimportable archive here means NewTag
+                # discovery later fails with a much more confusing message.
+                *) warn "Ignoring unrecognized file in registry/: $(basename "$f")" ;;
+            esac
+        done < <(find "$BUNDLE_DIR/registry" -maxdepth 1 -type f | sort)
+        if (( found )); then
+            ok "Imported registry/ archives."
+        else
+            warn "registry/ present but contains no .tar/.tar.gz files."
+        fi
+    else
+        log "No registry/ folder in bundle; skipping image import."
+    fi
+
+    # helpers-bin before repo: repo delivery can die on an unresolvable
+    # namespace, and losing the local install to that would be gratuitous.
+    if [[ -d "$BUNDLE_DIR/helpers-bin" ]]; then
+        phase_helpers_install
+    else
+        log "No helpers-bin/ folder in bundle; skipping helpers install."
+    fi
+
+    if [[ -d "$BUNDLE_DIR/repo" ]]; then
+        phase_repo_copy || warn "repo/ delivery failed; deliver manually (see above)."
+    else
+        log "No repo/ folder in bundle; skipping repo copy."
+    fi
+}
+
+repo_resolve_ns() {
+    if [[ -n "$REPO_NS" ]]; then return 0; fi
+    command -v kubectl >/dev/null 2>&1 || die "kubectl not found in PATH (needed for repo/ delivery)."
+    local ns
+    ns="$(detect_namespace)"
+    if [[ -z "$ns" ]] && kubectl get namespace demo-metalsoft >/dev/null 2>&1; then
+        ns="demo-metalsoft"
+    fi
+    [[ -n "$ns" ]] || die "Could not determine namespace for repo operations; pass -n NAMESPACE."
+    REPO_NS="$ns"
+}
+
+# Resolve where repo/ files should land. Prints "host <path>" or "pod <path>".
+# Chain: repo-pvc → PV hostPath (direct host write) → deploy repo volumeMount
+# 'repo-volume' → nginx-config ConfigMap 'alias' under /_internal/ → /mnt.
+repo_resolve_dest() {
+    local ns="$REPO_NS" pv hostPath mnt
+    pv="$(kubectl -n "$ns" get pvc repo-pvc -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
+    if [[ -n "$pv" ]]; then
+        hostPath="$(kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)"
+        if [[ -n "$hostPath" && -d "$hostPath" ]]; then
+            printf 'host %s' "$hostPath"; return 0
+        fi
+    fi
+    mnt="$(kubectl -n "$ns" get deploy repo \
+        -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.mountPath}{"\n"}{end}' \
+        2>/dev/null | awk '$1=="repo-volume"{print $2; exit}' || true)"
+    if [[ -z "$mnt" ]]; then
+        mnt="$(kubectl -n "$ns" get cm nginx-config -o jsonpath='{.data.nginx\.conf}' 2>/dev/null \
+                | awk '/location \/_internal\//,/}/' \
+                | grep -oE 'alias [^;]+' | head -1 \
+                | sed -E 's/^alias +//; s:/+$::')" || true
+    fi
+    [[ -n "$mnt" ]] || mnt="/mnt"
+    printf 'pod %s' "$mnt"
+}
+
+phase_repo_copy() {
+    step "Phase 1b: deliver repo/ bundle files${1:+ ($1)}"
+    repo_resolve_ns
+    local mode dest
+    read -r mode dest <<<"$(repo_resolve_dest)"
+    log "Repo destination: $mode:$dest (namespace: $REPO_NS)"
+    log "Files to deliver (relative paths preserved):"
+    ( cd "$BUNDLE_DIR/repo" && find . ! -type d | sed 's|^\./|       - |' )
+
+    if [[ "$mode" == "host" ]]; then
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s cp -a %q/. %q/\n' "$C_DIM" "$C_RST" "$BUNDLE_DIR/repo" "$dest"
+            return 0
+        fi
+        cp -a "$BUNDLE_DIR/repo/." "$dest/" || { err "Host-path copy to $dest failed."; return 1; }
+        ok "Copied repo/ contents to $dest."
+        return 0
+    fi
+
+    local pod
+    pod="$(kubectl -n "$REPO_NS" get pod -l app.kubernetes.io/name=repo \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    if (( DRY_RUN )); then
+        printf '%s[dry-run]%s kubectl -n %s cp %q/. %s:%s/\n' \
+            "$C_DIM" "$C_RST" "$REPO_NS" "$BUNDLE_DIR/repo" "${pod:-<repo-pod>}" "$dest"
+        return 0
+    fi
+    if [[ -z "$pod" ]] \
+       || ! kubectl -n "$REPO_NS" wait --for=condition=ready "pod/$pod" --timeout=120s >/dev/null 2>&1; then
+        warn "repo pod not ready; will retry repo/ delivery after the apply phase."
+        REPO_COPY_DEFERRED=1
+        return 0
+    fi
+    if kubectl -n "$REPO_NS" cp "$BUNDLE_DIR/repo/." "$pod:$dest/" 2>/dev/null; then
+        ok "Copied repo/ contents into $pod:$dest."
+        return 0
+    fi
+    warn "kubectl cp failed; trying kubectl exec tar stream..."
+    if tar -C "$BUNDLE_DIR/repo" -cf - . | kubectl -n "$REPO_NS" exec -i "$pod" -- tar -xf - -C "$dest"; then
+        ok "Copied repo/ contents into $pod:$dest (exec tar)."
+        return 0
+    fi
+    err "Failed to deliver repo/ contents to $pod:$dest."
+    warn "Manual: kubectl -n $REPO_NS cp $BUNDLE_DIR/repo/. $pod:$dest/"
+    return 1
+}
+
+phase_helpers_install() {
+    step "Phase 1c: install helpers-bin/ to /usr/local/bin"
+    local f base
+    for f in "$BUNDLE_DIR/helpers-bin"/*; do
+        [[ -f "$f" ]] || continue
+        base="$(basename "$f")"
+        if (( DRY_RUN )); then
+            printf '%s[dry-run]%s install -m 0755 %q /usr/local/bin/%s\n' "$C_DIM" "$C_RST" "$f" "$base"
+            continue
+        fi
+        if install -m 0755 "$f" /usr/local/bin/ 2>/dev/null; then
+            ok "Installed /usr/local/bin/$base"
+        elif command -v sudo >/dev/null 2>&1 && sudo install -m 0755 "$f" /usr/local/bin/; then
+            ok "Installed /usr/local/bin/$base (via sudo)"
+        else
+            warn "Could not install $base to /usr/local/bin (permissions?)."
+        fi
+    done
 }
 
 extract_old_tag_from_cluster() {
@@ -441,6 +692,9 @@ phase_docker_import() {
     step "Phase 1: import image (docker/podman)"
     [[ -n "$IMAGE_FILE" ]] || die "No image file given. Pass it as the last argument, or use --skip-import."
     [[ -f "$IMAGE_FILE" ]] || die "File not found: $IMAGE_FILE"
+    if is_multi_bundle "$IMAGE_FILE"; then
+        die "Multi-folder bundles (run-pre/, registry/, repo/, helpers-bin/, run-post/) are only supported in k8s mode."
+    fi
 
     : > "$TMPDIR_RUN/import.log"
 
@@ -607,9 +861,11 @@ extract_new_tag() {
     fi
 
     if [[ -s "${TMPDIR_RUN:-/dev/null}/import.log" ]]; then
+        # A bundle's registry/ may ship several archives; take the highest tag,
+        # not whichever archive happened to be imported first.
         local fromLog
         fromLog="$(grep -oE "${LICENSE_MATCH}:[A-Za-z0-9._+-]+" "$TMPDIR_RUN/import.log" \
-                    | head -1 | sed "s/^${LICENSE_MATCH}://")"
+                    | sed "s/^${LICENSE_MATCH}://" | sort -uV | tail -1)"
         if [[ -n "$fromLog" ]]; then
             NEW_TAG="$fromLog"
             NEW_TAG_SOURCE="import output"
@@ -669,6 +925,11 @@ main() {
     fi
 
     if (( SKIP_MANIFEST_UPDATE && SKIP_APPLY )); then
+        run_bundle_scripts run-post
+        if (( REPO_COPY_DEFERRED )); then
+            warn "repo/ delivery was deferred (pod not ready); deliver manually:"
+            warn "  kubectl -n $REPO_NS cp <bundle>/repo/. <repo-pod>:<dest>/"
+        fi
         ok "All remaining phases skipped. Done."
         exit 0
     fi
@@ -725,6 +986,7 @@ main() {
 
         if [[ "$oldTag" == "$newTag" ]]; then
             ok "OldTag == NewTag ($oldTag); nothing to upgrade."
+            run_bundle_scripts run-post
             exit 0
         fi
 
@@ -758,6 +1020,11 @@ main() {
     # ── Phase 5: apply ───────────────────────────────────────────────────
     if (( SKIP_APPLY )); then
         warn "Skipping apply (--skip-apply)."
+        run_bundle_scripts run-post
+        if (( REPO_COPY_DEFERRED )); then
+            warn "repo/ delivery was deferred (pod not ready) and apply is skipped; deliver manually:"
+            warn "  kubectl -n $REPO_NS cp <bundle>/repo/. <repo-pod>:<dest>/"
+        fi
         exit 0
     fi
     step "Phase 5: apply"
@@ -768,6 +1035,15 @@ main() {
             [[ -n "$ns" ]] || die "Auto-detect failed; pass -n NAMESPACE."
             log "Namespace: $ns"
             phase_k8s_apply "$ns"
+            if (( REPO_COPY_DEFERRED )); then
+                REPO_COPY_DEFERRED=0
+                phase_repo_copy "retry after apply" || true
+                if (( REPO_COPY_DEFERRED )); then
+                    warn "repo pod still not ready; deliver repo/ files manually:"
+                    warn "  kubectl -n $REPO_NS cp <bundle>/repo/. <repo-pod>:<dest>/"
+                fi
+            fi
+            run_bundle_scripts run-post
             ok "Done."
             log "To check pod status, run: $(yel "kw") or $(yel "kubectl -n $ns get pods")"
         else
@@ -778,6 +1054,10 @@ main() {
         fi
     else
         warn "User declined apply."
+        if (( REPO_COPY_DEFERRED )); then
+            warn "repo/ delivery was deferred (pod not ready); deliver manually:"
+            warn "  kubectl -n $REPO_NS cp <bundle>/repo/. <repo-pod>:<dest>/"
+        fi
         exit 7
     fi
 }
