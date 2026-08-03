@@ -452,7 +452,15 @@ test -f "${MS_MANIFESTS_FOLDER}/traefik-helm-chart-configvalues.yaml" || { debug
 ns="$(kubectl get ns --no-headers|grep "$namespace"|head -1|awk '{print $1}')" || { echo "Error: Namespace not found"; exit 1; }
 k="kubectl -n ${ns} "
 ingresstraefik80="$($k get ingressroute| grep ingress-traefik-port80|head -1|awk '{print $1}')" || { echo "Error: Ingress for traefik port80 not found"; exit 1; }
-hostname="$($k get ingressroute -o json "${ingresstraefik80}"|jq .spec.routes[0].match|cut -d'`' -f2)" || { echo "Error: Hostname was not found"; exit 1; }
+test -n "$ingresstraefik80" && hostname="$($k get ingressroute -o json "${ingresstraefik80}"|jq .spec.routes[0].match|cut -d'`' -f2)"
+
+# fallback: derive current hostname from cookie_domain in configmaps.yaml (strip leading dot)
+if [ -z "$hostname" ] && [ -f "${MS_MANIFESTS_FOLDER}/configmaps.yaml" ];then
+	hostname="$(grep -E '^[^#]*cookie_domain:' "${MS_MANIFESTS_FOLDER}/configmaps.yaml"|head -1|cut -d: -f2-|tr -d " \"'"|sed 's/^\.//')"
+	test -n "$hostname" && debuglog "Current hostname taken from configmaps.yaml cookie_domain: ${hostname}" info
+fi
+
+test -n "$hostname" || { debuglog "Error: Current hostname could not be determined (no traefik port80 ingressroute, no cookie_domain in configmaps.yaml)" fail; exit 1; }
 
 debuglog "Hostname: ${hostname} => ${newhostname}" info
 debuglog "Waiting on Mysql pod.."
