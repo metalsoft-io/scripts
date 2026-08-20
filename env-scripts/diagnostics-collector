@@ -75,6 +75,9 @@ SKIP_DISK_LATENCY_CHECK=""
 curl_no_proxy=""
 newbackupFolder=""
 mysqldump_exitcode_error=""
+kubeconfig=""
+ms_version=""
+bsi_present=""
 
 while getopts ":k:n:b:P:capezsxd" flag
 do
@@ -133,6 +136,106 @@ env | grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy
 
 # --- Shared functions ---
 
+# Echo the path of a kubeconfig that actually talks to the cluster.
+# kubectl finds its own config, but helm (and other tools) only honour
+# $KUBECONFIG / ~/.kube/config, so on k3s/rke2/microk8s/kubeadm nodes where
+# root has no ~/.kube/config they fall back to localhost:8080 and fail.
+# The probe is 'get ns', not 'get --raw /version': /version answers for any
+# authenticated identity, so a node-level kubeconfig would pass the probe and then
+# be rejected by RBAC on the real call. Returns 1 if no candidate works.
+function detect_kubeconfig ()
+{
+	local c
+	for c in "${KUBECONFIG:-}" \
+		"${HOME:-/root}/.kube/config" \
+		/etc/rancher/k3s/k3s.yaml \
+		/etc/rancher/rke2/rke2.yaml \
+		/etc/kubernetes/admin.conf \
+		/var/snap/microk8s/current/credentials/client.config \
+		/var/lib/rancher/k3s/server/cred/admin.kubeconfig
+	do
+		test -n "$c" && test -r "$c" || continue
+		if timeout 20 $k_orig --kubeconfig "$c" get ns &>/dev/null; then
+			echo "$c"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Dump the pre-restart logs of every container in a pod, one container at a time.
+# `kubectl logs --all-containers --previous` aborts with a single BadRequest as soon as
+# ONE container has no previous state - which is the normal case here, because every
+# MetalSoft pod has a completed '<svc>-depends-on-license' init container. The result is
+# zero log lines for the container that actually crashed, which is the whole point of
+# asking for --previous. Verified on the demo controller: 4 of 7 pods produced nothing
+# but "Error from server (BadRequest): previous terminated container ... not found".
+function previous_logs ()   # $1=namespace  $2=pod
+{
+	local c containers
+	containers="$(timeout 30 $k_orig -n "$1" get pod "$2" \
+		-o jsonpath='{range .spec.initContainers[*]}{.name}{" "}{end}{range .spec.containers[*]}{.name}{" "}{end}' 2>/dev/null)"
+	if [ -z "$containers" ];then
+		echo ":: could not list containers of ${1}/${2} (pod gone, or API unreachable)"
+		return 0
+	fi
+	# 60s, not 120: this runs once per container of every unhealthy pod, so the worst
+	# case multiplies. A --previous log is read off the node's disk - it arrives fast or
+	# it is not coming, and stalling here delays the whole collection on a broken cluster.
+	for c in $containers;do
+		echo ":::: previous log, container ${c}"
+		timeout 60 $k_orig -n "$1" logs "$2" -c "$c" --timestamps --previous 2>&1
+	done
+}
+
+# Filter `kubectl get pod[s] --no-headers` on stdin down to the pods worth looking at.
+# 'grep -vw Running' is not enough: a pod can sit in Running with 0/1 or 2/4 ready
+# containers forever (crashlooping sidecar, failing probe) and never show up.
+# The READY column is found by pattern (m/n) so this works with and without -A:
+# it echoes "<namespace> <name>" for -A input and "<name>" without.
+function unhealthy_pods ()
+{
+	awk '{
+		ri=0
+		for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\/[0-9]+$/) { ri=i; break }
+		if (!ri) next                                  # no READY column, e.g. an error line
+		status=$(ri+1)
+		if (status=="Completed" || status=="Succeeded") next   # finished Jobs are not broken
+		split($ri,r,"/")
+		if (status!="Running" || r[1]!=r[2]) {
+			out=$1
+			for (i=2;i<ri;i++) out=out" "$i
+			print out
+		}
+	}'
+}
+
+# Echo `kubectl get events -A -o wide`, newest last, plus any extra args ($@).
+# Sorting cannot be done with a bare '--sort-by || fallback': when kubectl cannot
+# resolve the sort field it prints "No resources found" and exits 0 - verified on k3s
+# v1.36.2, where `get pods -A --sort-by=.bogusField` reported no resources for 38
+# running pods. An exit-code fallback never fires and the file ships up empty. Compare
+# row counts instead and keep the sorted output only when it did not swallow anything.
+function get_events_wide ()
+{
+	local unsorted sorted
+	unsorted="$(timeout 60 $k_orig get events -A -o wide "$@" 2>&1)"
+	sorted="$(timeout 60 $k_orig get events -A -o wide "$@" --sort-by=.lastTimestamp 2>&1)"
+	if [ "$(printf '%s\n' "$sorted" | wc -l)" -ge "$(printf '%s\n' "$unsorted" | wc -l)" ];then
+		printf '%s\n' "$sorted"
+	else
+		echo ":: (--sort-by=.lastTimestamp dropped rows on this kubectl; showing unsorted)"
+		printf '%s\n' "$unsorted"
+	fi
+}
+
+# version_ge 7.4.3 7.0.0 -> true when $1 >= $2 (dotted versions, sort -V)
+function version_ge ()
+{
+	test -n "$1" && test -n "$2" || return 1
+	test "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2"
+}
+
 function create_dirs ()
 {
 	mkdir -p "${backupFolder}/system"
@@ -167,7 +270,21 @@ function get_system ()
 	cat /etc/os-release > "${backupFolder}/system/os-release" 2>&1 || true
 	uname -a > "${backupFolder}/system/uname.txt" 2>&1 || true
 	free -h > "${backupFolder}/system/memory.txt" 2>&1 || true
-	dmesg --time-format iso 2>&1 | tail -500 > "${backupFolder}/system/dmesg.txt" || true
+	# Whole ring buffer, not tail -500: kernel messages that matter (martian source,
+	# conntrack table full, OOM, EXT4 errors, link flaps) are usually older than the
+	# last 500 lines. Timestamped where util-linux supports it, plain otherwise.
+	dmesg --time-format iso > "${backupFolder}/system/dmesg.txt" 2>/dev/null \
+		|| dmesg -T > "${backupFolder}/system/dmesg.txt" 2>/dev/null \
+		|| dmesg > "${backupFolder}/system/dmesg.txt" 2>&1 || true
+	# The ring buffer wraps; journald keeps kernel history across that (and reboots).
+	# On a containerd host every container start emits apparmor= audit records; they were
+	# ~100% of 90k lines on the demo controller and say nothing about the cluster. Drop
+	# AppArmor records specifically, NOT all 'audit: type=1400': on RHEL/SELinux hosts
+	# that is where 'avc: denied' appears, which is worth keeping. tail bounds what a
+	# pathologically noisy host can add to the archive.
+	command -v journalctl &>/dev/null && journalctl -k --no-pager --since "-14 days" -n 100000 2>&1 \
+		| grep -v -e 'apparmor="' -e 'kauditd_printk_skb' | tail -n 20000 \
+		> "${backupFolder}/system/journalctl_kernel.txt" || true
 	command -v timedatectl &>/dev/null && timedatectl > "${backupFolder}/system/timedatectl.txt" 2>&1 || true
 	cat /etc/hosts > "${backupFolder}/system/hosts" 2>&1 || true
 	cat /etc/resolv.conf > "${backupFolder}/system/resolv.conf" 2>&1 || true
@@ -205,12 +322,37 @@ function get_disks ()
 
 function get_k8s_cluster ()
 {
-	$k_orig version > "${backupFolder}/k8s/cluster/version.txt" 2>&1 || true
-	$k_orig describe nodes > "${backupFolder}/k8s/cluster/nodes.txt" 2>&1 || true
-	$k_orig get events -A --sort-by=.lastTimestamp > "${backupFolder}/k8s/cluster/events.txt" 2>&1 || true
-	$k_orig top nodes > "${backupFolder}/k8s/cluster/top_nodes.txt" 2>&1 || true
-	$k_orig top pods -A > "${backupFolder}/k8s/cluster/top_pods.txt" 2>&1 || true
-	command -v helm &>/dev/null && helm list -A > "${backupFolder}/k8s/cluster/helm_releases.txt" 2>&1 || true
+	timeout 60 $k_orig version > "${backupFolder}/k8s/cluster/version.txt" 2>&1 || true
+	timeout 120 $k_orig describe nodes > "${backupFolder}/k8s/cluster/nodes.txt" 2>&1 || true
+	timeout 60 $k_orig top nodes > "${backupFolder}/k8s/cluster/top_nodes.txt" 2>&1 || true
+	timeout 60 $k_orig top pods -A > "${backupFolder}/k8s/cluster/top_pods.txt" 2>&1 || true
+
+	# Events are pruned by kube-apiserver --event-ttl (1h by default), so this is a
+	# narrow window no matter what we do. Widen what we can: -o wide adds the source
+	# and object, the yaml keeps firstTimestamp/count/series (a 1h-old event with
+	# count=80514 tells you it has been failing for weeks), and a Warning-only view
+	# makes the file scannable.
+	{
+		echo ":: NOTE: the API only retains events for ~1h (kube-apiserver --event-ttl)."
+		echo ":: For older history use the 'count'/'firstTimestamp' fields in events.yaml,"
+		echo ":: the Events section of k8s/logs/describe_pod_*.txt, and container restart counts."
+		echo
+		get_events_wide
+	} > "${backupFolder}/k8s/cluster/events.txt" 2>&1 || true
+	timeout 60 $k_orig get events -A -o yaml > "${backupFolder}/k8s/cluster/events.yaml" 2>&1 || true
+	get_events_wide --field-selector type=Warning > "${backupFolder}/k8s/cluster/events_warnings.txt" 2>&1 || true
+
+	if command -v helm &>/dev/null; then
+		{
+			echo ":: kubeconfig used: ${kubeconfig:-<none found, helm used its own defaults>}"
+			echo
+			if [ -n "$kubeconfig" ]; then
+				KUBECONFIG="$kubeconfig" timeout 60 helm list -A 2>&1
+			else
+				timeout 60 helm list -A 2>&1
+			fi
+		} > "${backupFolder}/k8s/cluster/helm_releases.txt" || true
+	fi
 }
 
 function get_k8s ()
@@ -234,17 +376,26 @@ function get_k8s ()
 		$k -n metallb-system get pods 2>&1 || true
 	} >> "${backupFolder}/k8s/resources/stats.txt"
 
-	$k_orig -n metallb-system get pods --no-headers | awk '$3 != "Running" {print $1}' | while read -r pod
+	$k_orig -n metallb-system get pods --no-headers | unhealthy_pods | while read -r pod
 do
 	echo -e "\n:: Logs for metallb-system $pod\n" >> "${backupFolder}/k8s/resources/metallb_logs.txt"
-	$k_orig -n metallb-system logs "$pod" >> "${backupFolder}/k8s/resources/metallb_logs.txt" 2>&1 || true
+	timeout 120 $k_orig -n metallb-system logs "$pod" --timestamps --all-containers=true --prefix=true >> "${backupFolder}/k8s/resources/metallb_logs.txt" 2>&1 || true
 done
 
 	$k get ingressroute --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroute "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressroute_${z}.yaml";done || true
 	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressroutetcp_${z}.yaml";done || true
 	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressrouteudp_${z}.yaml";done || true
 
-	$k get pod -A --no-headers|grep -vw Running|while read -r pod;do echo -e "\n:::: k describe pod -n $(echo "$pod"|awk '{print $1" "$2}')\n";$k describe pod -n $(echo "$pod"|awk '{print $1" "$2}');done &> "${backupFolder}/k8s/resources/not_running.txt" || true
+	{
+		echo ":: pods that are not Running, or Running with containers not ready (READY m/n, m<n)."
+		echo ":: Completed/Succeeded pods are skipped."
+		$k_orig get pod -A --no-headers | unhealthy_pods | while read -r pns pname;do
+			echo -e "\n:::: k describe pod -n ${pns} ${pname}\n"
+			timeout 60 $k_orig describe pod -n "$pns" "$pname" 2>&1 || true
+			echo -e "\n:::: previous (pre-restart) logs for ${pns}/${pname}, tail\n"
+			previous_logs "$pns" "$pname" 2>&1 | tail -300 || true
+		done
+	} &> "${backupFolder}/k8s/resources/not_running.txt" || true
 }
 
 if [ "$gather" == 'gc' ];then
@@ -278,6 +429,27 @@ if [ "$gather" == 'gc' ];then
 	if ! $k_orig get ns|grep -q "$envname" ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k_orig get ns;exit 1;fi
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
+	kubeconfig="$(detect_kubeconfig || true)"
+	test -n "$kubeconfig" && echo -e "[i] kubeconfig: ${kubeconfig}" || echo -e "${orange}[!] no working kubeconfig found; helm output may be empty${nc}"
+
+	# MetalSoft version, read off the license deployment image tag (present in every release).
+	ms_version="$(timeout 30 $k get deploy license -o jsonpath='{.spec.template.spec.containers[*].image}' 2>/dev/null \
+		| tr ' ' '\n' | grep -oP ':v?\K[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
+	# bsi was removed in 7.0.0. Gate on the deployment actually existing (authoritative,
+	# also covers unparsable tags like :latest) and keep the version for the report.
+	timeout 30 $k get deploy bsi &>/dev/null && bsi_present=1
+	test -n "$ms_version" && echo -e "[i] MetalSoft version: \e[1;32m${ms_version}\e[0m"
+	if [ -z "$bsi_present" ];then
+		if version_ge "${ms_version:-0}" 7.0.0; then
+			echo "[i] bsi deployment absent (expected on >= 7.0.0): skipping BSI checks"
+		elif [ -n "$ms_version" ];then
+			# bsi should exist below 7.0.0 - its absence is itself a finding, not a skip.
+			echo -e "${orange}[!] bsi deployment MISSING on MetalSoft ${ms_version} (< 7.0.0), where it is expected: skipping BSI checks${nc}"
+		else
+			echo "[i] bsi deployment absent (MetalSoft version undetermined): skipping BSI checks"
+		fi
+	fi
+
 	create_dirs
 	get_system
 	get_network
@@ -287,12 +459,24 @@ if [ "$gather" == 'gc' ];then
 
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
 		echo "[i] checking disk latency [100mb temp file] .."
-		echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disk/bsi_df.txt"
-		$k exec -it deploy/bsi -- bash -c "df -h" >> "${backupFolder}/disk/bsi_df.txt" 2>&1
-		echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
-		echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-		$k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
+		if [ -n "$bsi_present" ];then
+			echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disk/bsi_df.txt"
+			timeout 60 $k exec -it deploy/bsi -- bash -c "df -h" >> "${backupFolder}/disk/bsi_df.txt" 2>&1
+			echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+			timeout 300 $k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
+			echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+			timeout 300 $k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
+		else
+			# No bsi container to write into (>= 7.0.0). Measure the node's own disks
+			# instead, otherwise every 7.x dump ships an empty latency.txt.
+			echo "############ bsi deployment absent${ms_version:+ (MetalSoft ${ms_version})}: measured on the node instead of inside bsi" >> "${backupFolder}/disk/bsi_df.txt"
+			for _dlpath in "${backupFolder}" /var/log;do
+				echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+				{ time timeout 300 dd if=/dev/zero of="${_dlpath}/testfile" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
+				rm -f "${_dlpath}/testfile"
+			done
+			unset _dlpath
+		fi
 	else
 		echo "[-] Skipping disk latency check"
 		echo "############ disk latency check skipped" >> "${backupFolder}/disk/latency.txt"
@@ -304,13 +488,13 @@ if [ "$gather" == 'gc' ];then
 		echo "[i] backing up mysql databases.."
 		#backup all mysql DBs:
 		mysqldump_opts='--skip-comments'
-		all_dbs="$($k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
+		all_dbs="$(timeout 60 $k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read -r z;do
 			_outfile="${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz"
 			if [ "$z" == "mysql" ];then
-				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "$_outfile"
+				timeout 1800 $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "$_outfile"
 			else
-				$k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
+				timeout 1800 $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
 			fi
 			_pipe_rc=("${PIPESTATUS[@]}")
 			if (( ${_pipe_rc[0]} + ${_pipe_rc[1]:-0} + ${_pipe_rc[2]:-0} )) || ! gzip -t "$_outfile" 2>/dev/null; then
@@ -321,18 +505,18 @@ if [ "$gather" == 'gc' ];then
 
 	echo "[i] backing up mysql locks.."
 	# get information_schema.innodb_trx
-	$k exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
-	$k exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
-	$k exec deploy/mysql -- mysql -Ae 'show global variables\G' &> "${backupFolder}/mysql/mysql_show_global_variables" || true
-	$k exec deploy/mysql -- mysql -Ae 'show session variables\G' &> "${backupFolder}/mysql/mysql_show_session_variables" || true
-	$k exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> "${backupFolder}/mysql/mysql_information_schema.innodb_trx" || true
-	$k exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> "${backupFolder}/mysql/mysql_performance_schema.data_locks" || true
-	$k exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' &> "${backupFolder}/mysql/mysql_database_version" || true
-	$k exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' &> "${backupFolder}/mysql/mysql_database_size" || true
-	$k exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_events_latest" || true
-	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history" || true
-	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log" || true
-	$k exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show global variables\G' &> "${backupFolder}/mysql/mysql_show_global_variables" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show session variables\G' &> "${backupFolder}/mysql/mysql_show_session_variables" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> "${backupFolder}/mysql/mysql_information_schema.innodb_trx" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> "${backupFolder}/mysql/mysql_performance_schema.data_locks" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT TABLE_SCHEMA,table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_name = "_database_version"' &> "${backupFolder}/mysql/mysql_database_version" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT table_schema "DB Name", ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) "DB Size in MB" FROM information_schema.tables GROUP BY table_schema' &> "${backupFolder}/mysql/mysql_database_size" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from events order by event_occurred_timestamp desc limit 2000' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_events_latest" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue" || true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
 	timeout 180 $k exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
@@ -366,21 +550,38 @@ if [ "$gather" == 'gc' ];then
 	test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz";done || true
 
 	echo "[i] backing up k8s pod runtime logs.."
-	$k get pod --no-headers|awk '{print $1}'|while read -r z;do $k logs "$z" > "${backupFolder}/k8s/logs/pod_${z}.log" 2>&1; $k describe pod "$z" > "${backupFolder}/k8s/logs/describe_pod_${z}.txt" 2>&1;done
-	$k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/k8s/bsi/supervisorctl.txt" 2>&1
+	# --all-containers + --prefix so init-container output is captured too (kubectl
+	# otherwise silently picks one container: "Defaulted container X out of: X, Y (init)").
+	# --timestamps because plenty of containers log without a clock of their own, which
+	# makes them impossible to line up against events/dmesg.
+	# --previous for anything that has restarted: the current log only shows the newest
+	# crash cycle, and the interesting failure is usually in the one before.
+	$k get pod --no-headers|awk '{print $1" "$4+0}'|while read -r z restarts;do
+		timeout 300 $k logs "$z" --timestamps --all-containers=true --prefix=true > "${backupFolder}/k8s/logs/pod_${z}.log" 2>&1
+		if [ "${restarts:-0}" -gt 0 ] 2>/dev/null;then
+			previous_logs "$envname" "$z" > "${backupFolder}/k8s/logs/pod_${z}_previous.log" 2>&1
+		fi
+		timeout 60 $k describe pod "$z" > "${backupFolder}/k8s/logs/describe_pod_${z}.txt" 2>&1
+	done
+	# bsi was dropped in MetalSoft 7.0.0; skip its checks entirely when it is not deployed.
+	if [ -n "$bsi_present" ];then
+	timeout 60 $k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/k8s/bsi/supervisorctl.txt" 2>&1
 	bsipod="$($k get pod --no-headers|grep ^bsi|awk '{print $1}')"
 	test -n "$bsipod" && while read -r bsi;do
 	if [ -z "$sqlUpgradeLogs" ];then
-		varlogs="$($k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
+		varlogs="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
 	else
-		varlogs="$($k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
+		varlogs="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
 	fi
 
-	test -n "$varlogs" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
+	test -n "$varlogs" && while read -r z;do timeout 120 $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
 
-	varlogsbsi="$($k exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
-	test -n "$varlogsbsi" && while read -r z;do $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
+	varlogsbsi="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
+	test -n "$varlogsbsi" && while read -r z;do timeout 120 $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
 done <<< "$bsipod"
+	else
+		echo "bsi deployment not present${ms_version:+ (MetalSoft ${ms_version})}: BSI checks skipped (bsi was removed in 7.0.0)" > "${backupFolder}/k8s/bsi/supervisorctl.txt"
+	fi
 
 $k get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get secret "$z" -o yaml;done > "${backupFolder}/k8s/resources/secrets.yaml"
 $k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get cm "$z" -o yaml;done > "${backupFolder}/k8s/resources/configmaps.yaml"
@@ -394,8 +595,34 @@ $k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k ge
 			$k_orig -n "$ns_name" get secret "$sec_name" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -subject -enddate 2>/dev/null || echo "  (unable to decode)"
 		done
 	} > "${backupFolder}/ssl/k8s_tls_certs.txt" 2>&1 || true
-	# GC-specific SSL: traefik cert logs
-	$k_orig -n traefik logs deploy/traefik 2>&1 | grep -i cert > "${backupFolder}/ssl/traefik_certs.txt" || true
+	# GC-specific SSL: traefik cert logs.
+	# There is no 'traefik' namespace: traefik is deployed per environment inside the
+	# environment's own namespace (traefik-<ns>), so a cluster can hold several. Select
+	# by chart label in the namespace being collected, and fall back to a name match.
+	{
+		traefik_deploys="$(timeout 30 $k get deploy -l app.kubernetes.io/name=traefik -o name 2>/dev/null)"
+		test -z "$traefik_deploys" && traefik_deploys="$(timeout 30 $k get deploy -o name 2>/dev/null | grep traefik)"
+		if [ -z "$traefik_deploys" ];then
+			echo ":: no traefik deployment found in namespace ${envname}"
+		else
+			while read -r tdeploy;do
+				test -n "$tdeploy" || continue
+				echo ":::: ${envname}/${tdeploy} (cert lines only; full log in k8s/logs/pod_traefik-*.log)"
+				# Piping kubectl's stderr straight into 'grep -i cert' turns a failed
+				# fetch into "(no cert lines)" and hides it - that invisibility is what
+				# kept the old '-n traefik' bug alive. Check PIPESTATUS instead of
+				# buffering the log in a variable: traefik access logs can be huge.
+				timeout 120 $k logs "$tdeploy" --timestamps 2>&1 | grep -i cert
+				_trc=("${PIPESTATUS[@]}")
+				if [ "${_trc[0]}" -ne 0 ];then
+					echo "  (log fetch failed, kubectl/timeout exit ${_trc[0]})"
+				elif [ "${_trc[1]}" -ne 0 ];then
+					echo "  (log fetched, no cert-related lines)"
+				fi
+			done <<< "$traefik_deploys"
+			unset _trc
+		fi
+	} > "${backupFolder}/ssl/traefik_certs.txt" 2>&1 || true
 
 if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s resources.."
