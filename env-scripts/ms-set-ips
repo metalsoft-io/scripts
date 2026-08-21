@@ -89,22 +89,23 @@ function nextIP() {
 
 # --- self-contained bash completion -----------------------------------------
 # Lives here, not in an image build script, so completion never drifts from the
-# executable (which self-updates via metalsoft-updates).
+# executable (which self-updates via ms-selfupdate).
 
 _ms_print_completion() {
     cat <<'EOCOMP'
-_ms_update_k8s_ips_completion()
+_ms_set_ips_completion()
 {
     local cur exe base i argpos cand list
     cur="${COMP_WORDS[COMP_CWORD]}"
     COMPREPLY=()
 
-    # Locate the command itself, so a "sudo "/"env " prefix or the
-    # ms-update-k8s-ips symlink does not shift the argument positions.
+    # Locate the command itself, so a "sudo "/"env " prefix does not shift the
+    # argument positions. Matched by exact basename: sibling names in this family
+    # share suffixes (ms-sc-set-gc-ip ends with set-gc-ip).
     base=0
     for ((i = 0; i < ${#COMP_WORDS[@]}; i++)); do
         case "${COMP_WORDS[i]}" in
-            *update-k8s-ips) base=$i; break ;;
+            ms-set-ips|*/ms-set-ips) base=$i; break ;;
         esac
     done
     exe="${COMP_WORDS[base]}"
@@ -145,7 +146,7 @@ _ms_update_k8s_ips_completion()
         __ltrim_colon_completions "$cur"
     fi
 }
-complete -F _ms_update_k8s_ips_completion metalsoft-update-k8s-ips ms-update-k8s-ips
+complete -F _ms_set_ips_completion ms-set-ips
 EOCOMP
 }
 
@@ -159,16 +160,12 @@ _ms_install_completion() {
     [ -d "$dir" ] || { echo "[i] Error: no bash-completion directory found"; return 1; }
 
     printf '%s\n' \
-        '# managed by metalsoft-update-k8s-ips --install-completion' \
-        'source <(metalsoft-update-k8s-ips --completion)' > "$dir/metalsoft-update-k8s-ips" || return 1
-    # Independent completion file per command name, no symlinks.
-    printf '%s\n' \
-        '# managed by metalsoft-update-k8s-ips --install-completion' \
-        'source <(metalsoft-update-k8s-ips --completion)' > "$dir/ms-update-k8s-ips" || return 1
+        '# managed by ms-set-ips --install-completion' \
+        'source <(ms-set-ips --completion)' > "$dir/ms-set-ips" || return 1
 
     # Drop the stale eager-loaded copy once the lazy directory is in use.
-    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/metalsoft-update-k8s-ips /etc/bash_completion.d/ms-update-k8s-ips
-    echo "[i] Installed bash completion to $dir/metalsoft-update-k8s-ips and $dir/ms-update-k8s-ips"
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/ms-set-ips
+    echo "[i] Installed bash completion to $dir/ms-set-ips"
     return 0
 }
 
@@ -275,7 +272,7 @@ if [ "${#_localip}" -le 3 ]; then
 fi
 
 _nextip="$(nextIP "$_localip")"
-test $age -gt $consider_old && echo -e "${lightred}This file seems old, please update to latest by running: metalsoft-updates${nc}" 2>/dev/null
+test $age -gt $consider_old && echo -e "${lightred}This file seems old, please update to latest by running: ms-selfupdate${nc}" 2>/dev/null
 
 if [ "$EUID" -ne 0 ];then
     echo -e "[\e[1;31m✗\e[0m] Please run as root"
