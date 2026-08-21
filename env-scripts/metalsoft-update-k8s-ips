@@ -55,14 +55,12 @@ function nextIPv6() {
     # Try using python3 first
     if command -v python3 >/dev/null 2>&1; then
         local expanded=$(python3 -c "
-        import ipaddress
-        try:
-        ip = ipaddress.IPv6Address('$ipv6')
-        next_ip = ip + 1
-        print(str(next_ip))
-        except:
-        print('$ipv6')
-        " 2>/dev/null)
+import ipaddress
+try:
+    print(str(ipaddress.IPv6Address('$ipv6') + 1))
+except Exception:
+    print('$ipv6')
+" 2>/dev/null)
         echo "$expanded"
     else
         # Fallback: simple increment of last digit (basic approach)
@@ -88,6 +86,94 @@ function nextIP() {
         echo "$1"
     fi
 }
+
+# --- self-contained bash completion -----------------------------------------
+# Lives here, not in an image build script, so completion never drifts from the
+# executable (which self-updates via metalsoft-updates).
+
+_ms_print_completion() {
+    cat <<'EOCOMP'
+_ms_update_k8s_ips_completion()
+{
+    local cur exe base i argpos cand list
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY=()
+
+    # Locate the command itself, so a "sudo "/"env " prefix or the
+    # ms-update-k8s-ips symlink does not shift the argument positions.
+    base=0
+    for ((i = 0; i < ${#COMP_WORDS[@]}; i++)); do
+        case "${COMP_WORDS[i]}" in
+            *update-k8s-ips) base=$i; break ;;
+        esac
+    done
+    exe="${COMP_WORDS[base]}"
+    argpos=$((COMP_CWORD - base))
+
+    cand=()
+    case $argpos in
+        1)  # GlobalController / k8s VIP
+            cand+=( $(grep -m1 '^MS_GC_IP=' /etc/metalsoft 2>/dev/null | cut -d= -f2) )
+            cand+=( $(ip -o a 2>/dev/null | awk '$2 != "lo" {print $4}' \
+                      | cut -d/ -f1 | grep -Ev '^(fe80|::1$|127\.)') )
+            ;;
+        2)  # SiteController / agent IP
+            cand+=( $(grep -m1 '^MS_SC_IP=' /etc/metalsoft 2>/dev/null | cut -d= -f2) )
+            local nxt
+            nxt="$("$exe" --next-ip "${COMP_WORDS[base + 1]}" 2>/dev/null)"
+            # nextIP echoes its input back unchanged when it is not an IP.
+            [ -n "$nxt" ] && [ "$nxt" != "${COMP_WORDS[base + 1]}" ] && cand+=( "$nxt" )
+            ;;
+        3)  # optional proxy URL
+            local pip
+            pip="$("$exe" --next-ip "${COMP_WORDS[base + 2]}" 2>/dev/null)"
+            if [ -n "$pip" ] && [ "$pip" != "${COMP_WORDS[base + 2]}" ]; then
+                case "$pip" in
+                    *:*:*) cand+=( "http://[$pip]:3128/" ) ;;
+                    *)     cand+=( "http://$pip:3128/" ) ;;
+                esac
+            fi
+            ;;
+        *)  return 0 ;;
+    esac
+
+    list="$(printf '%s\n' "${cand[@]}" | grep -v '^$' | awk '!seen[$0]++')"
+    COMPREPLY=( $(compgen -W "$list" -- "$cur") )
+
+    # IPv6 candidates contain ':', which bash treats as a word break.
+    if declare -F __ltrim_colon_completions >/dev/null 2>&1; then
+        __ltrim_colon_completions "$cur"
+    fi
+}
+complete -F _ms_update_k8s_ips_completion metalsoft-update-k8s-ips ms-update-k8s-ips
+EOCOMP
+}
+
+_ms_install_completion() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "[i] Error: --install-completion must run as root"
+        return 1
+    fi
+    local dir=/usr/share/bash-completion/completions
+    [ -d "$dir" ] || dir=/etc/bash_completion.d
+    [ -d "$dir" ] || { echo "[i] Error: no bash-completion directory found"; return 1; }
+
+    printf '%s\n' \
+        '# managed by metalsoft-update-k8s-ips --install-completion' \
+        'source <(metalsoft-update-k8s-ips --completion)' > "$dir/metalsoft-update-k8s-ips" || return 1
+    ln -sf metalsoft-update-k8s-ips "$dir/ms-update-k8s-ips"
+
+    # Drop the stale eager-loaded copy once the lazy directory is in use.
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/metalsoft-update-k8s-ips
+    echo "[i] Installed bash completion to $dir/metalsoft-update-k8s-ips"
+    return 0
+}
+
+case "$1" in
+    --completion)         _ms_print_completion; exit 0 ;;
+    --install-completion) _ms_install_completion; exit $? ;;
+    --next-ip)            nextIP "$2"; exit 0 ;;
+esac
 
 function getIPv6PodCIDR() {
     # Get pod CIDRs from all nodes and find IPv6 ones
@@ -198,6 +284,7 @@ if [ -z "$2" ];then
     echo "[i] example: ${me} ${_localip:-10.0.0.1} ${_nextip:-10.0.0.2} http://$(nextIP "$_nextip"):3128/"
     #echo "[i] IPv6 example: ${me} 2001:db8::1 2001:db8::2 http://[2001:db8::proxy]:3128/"
     echo -e "${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests"
+    echo -e "${gray}Also: ${nc}${bold}--completion${nc}${gray} prints the bash completion script, ${nc}${bold}--install-completion${nc}${gray} installs it (root).${nc}"
     exit 3;
 fi
 
