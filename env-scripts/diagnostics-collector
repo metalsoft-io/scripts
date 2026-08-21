@@ -28,6 +28,14 @@ export BASH_XTRACEFD="19"
 export PS4='+[${SECONDS}s] '
 set -x
 
+# Nothing in this script may ever read the terminal, except the explicit send-to-MetalSoft
+# prompt at the very end (which reads </dev/tty). Without this, a kubeconfig that has no
+# usable credentials makes kubectl print "Please enter Username:" and block FOREVER -
+# verified: `kubectl get ns` against a credential-less kubeconfig hangs, while the same
+# call with </dev/null fails instantly with "error: EOF". A diagnostics collector that
+# waits on stdin on a broken cluster is worse than one that fails.
+exec 0</dev/null
+
 #test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
 thedate="$(date +"%F-%H%M")"
 backupFolder=/var/backups/metalsoft
@@ -36,13 +44,14 @@ backupFolder="${backupFolder%/}"
 function usage {
 	echo -e "[i] $( basename "$0") gathers diagnostics for MetalSoft. Optional parameters:
 	${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}
-	${bold}-k${nc} ${gray}specify an alternative kubectl [ -k microk8s.kubectl ]${nc}
+	${bold}-k${nc} ${gray}specify an alternative kubectl [ -k /usr/local/bin/kubectl ]${nc}
 	${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
 	${bold}-c${nc} ${gray}Flag [ Use for Global Controller ]${nc}
 	${bold}-a${nc} ${gray}Flag [ Use for Site Controller or Agent ]${nc}
 	${bold}-d${nc} ${gray}Flag [ skip disk latency check ]${nc}
 	${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
-	${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}"
+	${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}
+	${bold}-j${nc} ${gray}parallel workers for per-pod/per-DB collection, default 4 [ -j 1 = fully serial ]${nc}"
 	exit 0
 }
 
@@ -63,7 +72,6 @@ envname=""
 k=""
 test -f /opt/metalsoft/agents/docker-compose.yaml && type docker &>/dev/null && gather='sc' && envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
 type kubectl &>/dev/null && gather='gc' && k='kubectl '
-type microk8s &>/dev/null && gather='gc' && k='microk8s.kubectl '
 test "$gather" == 'gc' && test -n "${ns:-}" && envname="$ns"
 pushfile=
 extended=
@@ -75,11 +83,20 @@ SKIP_DISK_LATENCY_CHECK=""
 curl_no_proxy=""
 newbackupFolder=""
 mysqldump_exitcode_error=""
+cluster_unreachable=""
+ns_list=""
+ns_rc=0
+autopush_tried=""
+mysql_total_mb=""
+mysqldump_timeout=1800
+_dlfile="ms-diag-latency.$$"
 kubeconfig=""
 ms_version=""
 bsi_present=""
+parallel=4
+have_wait_n=""
 
-while getopts ":k:n:b:P:capezsxd" flag
+while getopts ":k:n:b:P:j:capezsxd" flag
 do
 	case "${flag}" in
 		p) pushfile="1" ;;
@@ -94,11 +111,19 @@ do
 		z) doNotAutoSend=1 ;;
 		x) debugOn=1 ;;
 		d) SKIP_DISK_LATENCY_CHECK=1 ;;
+		j) parallel="${OPTARG}" ;;
 		:) echo "Error: -${OPTARG} requires an argument." && exit 1;;
 		h | *) usage;;
 	esac
 done
 shift "$(( OPTIND - 1 ))"
+
+# -j must be a positive integer. A bad value silently serialising (or forking wildly)
+# is worse than refusing, so fall back to 1 and say so.
+if ! [[ "$parallel" =~ ^[0-9]+$ ]] || [ "$parallel" -lt 1 ];then
+	echo "[!] -j '${parallel}' is not a positive integer; using -j 1 (serial)"
+	parallel=1
+fi
 
 if [ -n "$pushfileFromArg" ];then
 	test -f "$pushfileFromArg" || { echo -e "[\e[1;31m✗\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
@@ -124,6 +149,9 @@ backupFolder=${backupFolder}/ms-diagnostics-${thedate}_${envname}__${gather}
 
 function finish {
 	echo "[i] cleaning up.."
+	# the disk-latency probe writes outside backupFolder (into /var/log), so clear that
+	# too - matched by pid, so a concurrent run's probe is never touched
+	rm -f "/var/log/${_dlfile}"
 	rm -rf "${backupFolder}"
 	test -n "$newbackupFolder" && test "$newbackupFolder" != "$backupFolder" && rm -rf "${newbackupFolder}"
 	exit 3
@@ -138,7 +166,7 @@ env | grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy
 
 # Echo the path of a kubeconfig that actually talks to the cluster.
 # kubectl finds its own config, but helm (and other tools) only honour
-# $KUBECONFIG / ~/.kube/config, so on k3s/rke2/microk8s/kubeadm nodes where
+# $KUBECONFIG / ~/.kube/config, so on k3s/rke2/kubeadm nodes where
 # root has no ~/.kube/config they fall back to localhost:8080 and fail.
 # The probe is 'get ns', not 'get --raw /version': /version answers for any
 # authenticated identity, so a node-level kubeconfig would pass the probe and then
@@ -151,7 +179,6 @@ function detect_kubeconfig ()
 		/etc/rancher/k3s/k3s.yaml \
 		/etc/rancher/rke2/rke2.yaml \
 		/etc/kubernetes/admin.conf \
-		/var/snap/microk8s/current/credentials/client.config \
 		/var/lib/rancher/k3s/server/cred/admin.kubeconfig
 	do
 		test -n "$c" && test -r "$c" || continue
@@ -229,11 +256,141 @@ function get_events_wide ()
 	fi
 }
 
+# host_cmd <outfile> <timeout> <binary> [args...]
+# Run a host command into a file. If the binary is not installed the file SAYS so
+# rather than being absent or empty - a missing file cannot be told apart from a failed
+# collection, which is how the old empty traefik_certs.txt hid a bug for months.
+# Never returns non-zero: a missing tool must never stop the collector.
+function host_cmd ()
+{
+	local out="$1" t="$2" bin="$3"; shift 3
+	if ! command -v "$bin" &>/dev/null; then
+		printf ':: skipped: %s is not installed on this host\n' "$bin" > "$out"
+		return 0
+	fi
+	if ! timeout "$t" "$bin" "$@" > "$out" 2>&1; then
+		printf '\n:: (%s exited non-zero or timed out after %ss - output above may be partial)\n' "$bin" "$t" >> "$out"
+	fi
+	return 0
+}
+
+# k_cmd <outfile> <timeout> [kubectl args...] - same contract as host_cmd, for $k_orig.
+function k_cmd ()
+{
+	local out="$1" t="$2"; shift 2
+	if ! timeout "$t" $k_orig "$@" > "$out" 2>&1; then
+		printf '\n:: (kubectl %s exited non-zero or timed out after %ss)\n' "$*" "$t" >> "$out"
+	fi
+	return 0
+}
+
+# In-cluster DNS probe, by exec-ing into pods that are ALREADY running. Deliberately
+# creates nothing: a fresh probe pod gets a fresh sandbox, and a fresh sandbox is the
+# one thing that resolved fine on the customer cluster where every existing pod failed -
+# so a probe pod would have reported all-green while the environment was broken.
+# Every step tolerates an image with no shell and no DNS tooling.
+function dns_probe ()
+{
+	local out="${backupFolder}/k8s/dns/probe.txt" pods p names script
+	# Up to 3 Running pods in our namespace, oldest sandbox first: those have been alive
+	# longest and are the most likely to have drifted (a pod's netns state survives every
+	# container restart). Default `get pod` order is alphabetical, not by age, so the sort
+	# is explicit - and it falls back to unsorted because a --sort-by kubectl cannot
+	# resolve returns "No resources found" with exit 0 rather than an error.
+	pods="$(timeout 60 $k get pod --no-headers --sort-by=.metadata.creationTimestamp 2>/dev/null \
+		| awk '$3=="Running"{print $1}' | head -3)"
+	test -n "$pods" || pods="$(timeout 60 $k get pod --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | head -3)"
+	names="kubernetes.default.svc.cluster.local mysql-service mysql-service.${envname}.svc.cluster.local"
+	# Body is single-quoted so OUR shell expands nothing: it is interpreted by the pod's
+	# shell. The names are passed as positional arguments rather than interpolated into
+	# the script text, so a namespace containing a quote or ';' cannot inject into the
+	# command that runs inside the container.
+	script='echo "--- id: $(id -u 2>/dev/null) ---"
+echo "--- /etc/resolv.conf ---"; cat /etc/resolv.conf 2>&1
+echo "--- /etc/nsswitch.conf ---"; cat /etc/nsswitch.conf 2>&1 || echo "(absent)"
+echo "--- tools present ---"; for t in getent nslookup dig host node python3; do
+  p=$(command -v $t 2>/dev/null) && echo "  $t: $p" || echo "  $t: -"
+done
+for n in "$@"; do
+  echo "--- resolving $n ---"
+  if command -v getent >/dev/null 2>&1; then
+    getent hosts "$n" 2>&1 || echo "  getent: FAILED (rc=$?)"
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "$n" 2>&1 | tail -6 || echo "  nslookup: FAILED"
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node -e "const d=require(\"dns\");const n=process.argv[1];
+      d.lookup(n,{all:true},(e,r)=>console.log(\"  getaddrinfo:\",e?e.code:JSON.stringify(r)));
+      d.resolve4(n,(e,r)=>console.log(\"  A  via c-ares:\",e?e.code:String(r)));
+      d.resolve6(n,(e,r)=>console.log(\"  AAAA via c-ares:\",e?e.code:String(r)));" "$n" 2>&1 || echo "  node: FAILED"
+  fi
+done'
+	mkdir -p "${backupFolder}/k8s/dns"
+	{
+		echo ":: In-cluster DNS as seen from pods that are already running (nothing was created)."
+		echo ":: getaddrinfo failing while c-ares succeeds = resolver/NSS issue inside the image."
+		echo ":: AAAA erroring while A succeeds = glibc returns EAI_AGAIN even though A worked."
+		echo ":: Everything timing out = the pod's egress is broken, DNS is only the symptom."
+		echo ":: CAVEAT: the c-ares lines do NOT apply the pod's search/ndots list, so a SHORT"
+		echo ":: name (no dots) returning ENOTFOUND there while getaddrinfo succeeds is normal."
+		echo ":: Judge c-ares only on the fully-qualified names. ENODATA on AAAA is also normal"
+		echo ":: for an IPv4-only Service; SERVFAIL or a timeout on AAAA is NOT."
+		echo
+		if [ -z "$pods" ];then
+			echo ":: no Running pods found in namespace ${envname}; nothing to probe."
+		fi
+		for p in $pods;do
+			echo "================================================================"
+			echo ":::: pod ${envname}/${p}"
+			# $names must word-split into separate argv entries, one per name
+			# shellcheck disable=SC2086
+			timeout 90 $k exec "$p" -- sh -c "$script" _ $names 2>&1 \
+				|| echo ":: (exec failed - image may have no shell, or the pod is not execable)"
+		done
+	} > "$out" 2>&1 || true
+	return 0
+}
+
 # version_ge 7.4.3 7.0.0 -> true when $1 >= $2 (dotted versions, sort -V)
 function version_ge ()
 {
 	test -n "$1" && test -n "$2" || return 1
 	test "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2"
+}
+
+# throttle <max> - block until fewer than <max> background jobs of THIS shell remain.
+# Used to fan out loops whose iterations each write their OWN file. Loops that append
+# to a shared file (stats.txt, not_running.txt, metallb_logs.txt, pod_netns.txt) are
+# deliberately NOT parallelised: concurrent appends interleave and corrupt them.
+# With max=1 this blocks until the previous job finished, i.e. exactly serial - so -j 1
+# reproduces the old behaviour without a second code path.
+#
+# NEVER use a bare `wait` to join these jobs. This script redirects stdout/stderr into
+# `tee` process substitutions at startup; those are children that never exit while the
+# script runs, and a bare `wait` waits for them too - verified hanging forever on bash
+# 5.2.21 (it happens to return on 5.3.9, which is why a single test host can hide it).
+# `jobs -rp` does NOT list process substitutions, so `throttle 1` is the safe join.
+#
+# Portability: `wait -n` needs bash 4.3 (2014). RHEL 7 ships bash 4.2, so on those
+# hosts we poll the job table instead - same semantics, just a 0.2s granularity. The
+# version is checked once here rather than letting `wait -n` fail on every call.
+# (The script as a whole already requires bash 4.0+ for ${gather^}.)
+if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 3 ]; };then
+	have_wait_n=1
+else
+	have_wait_n=""
+fi
+function throttle ()
+{
+	local max="$1"
+	while [ "$(jobs -rp | grep -c .)" -ge "$max" ];do
+		if [ -n "$have_wait_n" ];then
+			wait -n 2>/dev/null || true
+		else
+			sleep 0.2
+		fi
+	done
 }
 
 function create_dirs ()
@@ -247,6 +404,7 @@ function create_dirs ()
 		mkdir -p "${backupFolder}/k8s/resources"
 		mkdir -p "${backupFolder}/k8s/ingress"
 		mkdir -p "${backupFolder}/k8s/logs"
+		mkdir -p "${backupFolder}/k8s/dns"
 		mkdir -p "${backupFolder}/k8s/bsi/varlog"
 		mkdir -p "${backupFolder}/k8s/api_resources"
 		mkdir -p "${backupFolder}/mysql"
@@ -285,6 +443,27 @@ function get_system ()
 	command -v journalctl &>/dev/null && journalctl -k --no-pager --since "-14 days" -n 100000 2>&1 \
 		| grep -v -e 'apparmor="' -e 'kauditd_printk_skb' | tail -n 20000 \
 		> "${backupFolder}/system/journalctl_kernel.txt" || true
+	# Runtime journals. The GC side collected none at all, while the SC side already
+	# collects docker's - so a k3s/containerd crash left no trace. Only units that
+	# actually exist on this host are touched; k3s embeds containerd and kubelet, so
+	# most of these are legitimately inactive.
+	if command -v journalctl &>/dev/null && command -v systemctl &>/dev/null;then
+		for _u in k3s k3s-agent rke2-server rke2-agent containerd crio kubelet docker;do
+			systemctl list-unit-files "${_u}.service" &>/dev/null || continue
+			test -n "$(systemctl show -p LoadState --value "${_u}.service" 2>/dev/null | grep -x loaded)" || continue
+			# Filter before the tail, not after: on our own demo controller 89% of 20000
+			# k3s lines were two repeating shapes - kube-router's "Ignoring IPv6 ... IP
+			# blocks" warning and kine's COMPACT bookkeeping - which do not just waste
+			# space, they EVICT real history out of the line budget. Matched on message
+			# text, not source file, so a genuine policy.go error still survives.
+			timeout 180 journalctl -u "${_u}" --no-pager -n 100000 --since "-14 days" 2>&1 \
+				| grep -v -e 'Ignoring IPv6 dest IP blocks' -e 'Ignoring IPv6 source IP blocks' \
+					-e 'msg="COMPACT ' -e 'msg="COMPACT$' \
+				| tail -n 20000 > "${backupFolder}/system/journalctl_${_u}.txt" \
+				|| echo ":: (journalctl -u ${_u} failed or timed out)" >> "${backupFolder}/system/journalctl_${_u}.txt"
+		done
+		unset _u
+	fi
 	command -v timedatectl &>/dev/null && timedatectl > "${backupFolder}/system/timedatectl.txt" 2>&1 || true
 	cat /etc/hosts > "${backupFolder}/system/hosts" 2>&1 || true
 	cat /etc/resolv.conf > "${backupFolder}/system/resolv.conf" 2>&1 || true
@@ -296,8 +475,52 @@ function get_network ()
 	ip r > "${backupFolder}/network/ip_route.txt" 2>&1 || true
 	ip link > "${backupFolder}/network/ip_link.txt" 2>&1 || true
 	command -v iptables &>/dev/null && iptables -t filter -vxnL > "${backupFolder}/network/iptables.txt" 2>&1 || true
-	ss -tlnp > "${backupFolder}/network/ss.txt" 2>&1 || true
+	# -tulnp, not -tlnp: without -u there is not a single UDP listener in the archive,
+	# and DNS - the most common thing to debug here - is UDP.
+	host_cmd "${backupFolder}/network/ss.txt" 60 ss -tulnp
+	host_cmd "${backupFolder}/network/ss_summary.txt" 30 ss -s
 	command -v nft &>/dev/null && nft list ruleset > "${backupFolder}/network/nftables.txt" 2>&1 || true
+	# The nat table is where kube-proxy's service DNAT lives in iptables mode (the k3s
+	# default). nftables.txt covers it on iptables-nft hosts, but not iptables-legacy.
+	host_cmd "${backupFolder}/network/iptables_nat.txt" 60 iptables -t nat -vxnL
+	# ...but a kube-proxy in IPVS mode - common on kubeadm-built clusters, never on k3s -
+	# keeps almost nothing in the nat table: the service backends live in the IPVS table
+	# instead, and without this the whole service datapath is invisible on those clusters.
+	host_cmd "${backupFolder}/network/ipvsadm.txt" 60 ipvsadm -Ln
+
+	# Kernel networking knobs that silently break pod networking when wrong.
+	{
+		for _s in net.ipv4.ip_forward net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter \
+			net.ipv4.conf.all.arp_ignore net.ipv4.conf.all.arp_announce net.ipv4.conf.all.log_martians \
+			net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
+			net.netfilter.nf_conntrack_max net.netfilter.nf_conntrack_count \
+			net.netfilter.nf_conntrack_udp_timeout net.netfilter.nf_conntrack_buckets
+		do
+			printf '%-52s = %s\n' "$_s" "$(cat "/proc/sys/${_s//.//}" 2>/dev/null || echo '(unreadable/not loaded)')"
+		done
+		unset _s
+		echo
+		echo ":: per-interface rp_filter (strict=1 breaks pod networking on some CNIs)"
+		for _f in /proc/sys/net/ipv4/conf/*/rp_filter;do
+			test -r "$_f" && printf '%-52s = %s\n' "$_f" "$(cat "$_f" 2>/dev/null)"
+		done
+		unset _f
+	} > "${backupFolder}/network/sysctl_net.txt" 2>&1 || true
+
+	# conntrack-tools is frequently absent (it is NOT installed on our own demo
+	# controller), so the counters above come from /proc and this is a bonus.
+	if command -v conntrack &>/dev/null;then
+		{
+			echo ":: conntrack -S"
+			timeout 30 conntrack -S 2>&1 || echo ":: (conntrack -S failed)"
+			echo
+			echo ":: conntrack -L -p udp --dport 53 (first 200 DNS flows)"
+			timeout 60 conntrack -L -p udp --dport 53 2>&1 | head -200 || echo ":: (conntrack -L failed)"
+		} > "${backupFolder}/network/conntrack.txt" 2>&1 || true
+	else
+		echo ":: skipped: conntrack is not installed on this host (counts in sysctl_net.txt come from /proc)" \
+			> "${backupFolder}/network/conntrack.txt"
+	fi
 }
 
 function get_ssl ()
@@ -316,8 +539,89 @@ function get_ssl ()
 function get_disks ()
 {
 	df -h > "${backupFolder}/disk/df.txt" 2>&1 || true
+	# Inodes: a filesystem can be 50% full by bytes and still refuse every write.
+	host_cmd "${backupFolder}/disk/df_inodes.txt" 60 df -i
 	lsblk > "${backupFolder}/disk/lsblk.txt" 2>&1 || true
 	fdisk -l > "${backupFolder}/disk/fdisk.txt" 2>&1 || true
+}
+
+# Per-pod network namespace state: neighbour cache, routes, addresses, link state.
+# This is unobtainable after the fact and survives container restarts, so it is the
+# only place a stale gateway ARP entry or a broken veth shows up. Uses `ip netns`
+# (the CNI writes /run/netns/cni-*), so no crictl/nsenter dependency and no exec into
+# containers. Everything is best-effort: needs root, and the netns files may be absent
+# with other CNIs.
+function get_pod_netns ()
+{
+	local out="${backupFolder}/network/pod_netns.txt" ipmap ns podid nslist addr br
+	if ! command -v ip &>/dev/null;then
+		echo ":: skipped: 'ip' is not installed on this host" > "$out"
+		return 0
+	fi
+	nslist="$(ip netns list 2>/dev/null | awk '{print $1}')"
+	if [ -z "$nslist" ];then
+		{
+			echo ":: no network namespaces listed by 'ip netns list'."
+			echo ":: The CNI does not expose them under /run/netns (flannel/k3s does; Calico"
+			echo ":: and others keep them unlinked). Nothing collected."
+		} > "$out"
+		return 0
+	fi
+	# 'ip netns list' succeeds for an unprivileged user - it only reads /run/netns - but
+	# 'ip netns exec' needs CAP_SYS_ADMIN. Verified: as nobody, list returns rc=0 and
+	# exec fails "Operation not permitted". Without this probe a non-root run emits one
+	# "(failed)" block per namespace and never says why.
+	if ! ip netns exec "$(printf '%s\n' "$nslist" | head -1)" true 2>/dev/null;then
+		{
+			echo ":: cannot enter network namespaces (need root / CAP_SYS_ADMIN)."
+			echo ":: $(printf '%s\n' "$nslist" | grep -c .) namespaces are present but unreadable by uid $(id -u)."
+			echo ":: Re-run the collector as root to capture per-pod routes and ARP caches."
+		} > "$out"
+		return 0
+	fi
+	# podIP -> namespace/name, via custom-columns: on -o wide the RESTARTS column
+	# renders as "2 (8d ago)" and shifts every field after it, so positional awk on
+	# -o wide silently yields "ago)" instead of the IP.
+	ipmap="$(timeout 60 $k_orig get pod -A --no-headers \
+		-o custom-columns=IP:.status.podIP,NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null)"
+	{
+		echo ":: SCOPE: this is the LOCAL node only ($(hostname 2>/dev/null)). The cluster has"
+		echo ":: $(timeout 30 $k_orig get nodes --no-headers 2>/dev/null | grep -c .) node(s); pods scheduled elsewhere have no entry here, and the same"
+		echo ":: applies to network/iptables*, network/ss.txt, network/conntrack.txt and"
+		echo ":: network/sysctl_net.txt. Re-run the collector on another node to capture it."
+		echo
+		echo ":: Host CNI bridge state. Compare each bridge's lladdr against the lladdr the"
+		echo ":: pods below have cached for their default gateway - a mismatch is a stale ARP"
+		echo ":: entry, which survives container restarts and breaks all egress from the pod."
+		# Do not assume the bridge is named cni0: that is flannel/k3s. Enumerate instead.
+		for br in $(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1);do
+			echo "-- bridge ${br}"
+			ip -d link show "$br" 2>&1 | head -3 || true
+			ip -o addr show "$br" 2>&1 || true
+			echo "-- host neighbours on ${br}"
+			ip neigh show dev "$br" 2>&1 || true
+		done
+		test -n "$(ip -o link show type bridge 2>/dev/null)" || echo "-- (no bridge interfaces; CNI may be routed-mode)"
+		echo
+		while read -r ns;do
+			test -n "$ns" || continue
+			echo "================================================================"
+			# One exec for the addresses, reused for both the pod label and the dump:
+			# 36 namespaces x an extra exec each is pure waste.
+			addr="$(timeout 10 ip netns exec "$ns" ip -o addr show 2>&1)"
+			podid=""
+			for _ip in $(printf '%s\n' "$addr" | grep -oE 'inet [0-9.]+' | awk '{print $2}');do
+				podid="$(printf '%s\n' "$ipmap" | awk -v i="$_ip" '$1==i{print $2"/"$3;exit}')"
+				test -n "$podid" && break
+			done
+			unset _ip
+			echo ":::: netns ${ns}${podid:+  ->  ${podid}}"
+			echo "-- ip -o addr"; printf '%s\n' "$addr"
+			echo "-- ip route";   timeout 10 ip netns exec "$ns" ip route 2>&1 || echo "   (failed)"
+			echo "-- ip neigh";   timeout 10 ip netns exec "$ns" ip neigh 2>&1 || echo "   (failed)"
+		done <<< "$nslist"
+	} > "$out" 2>&1 || true
+	return 0
 }
 
 function get_k8s_cluster ()
@@ -341,6 +645,23 @@ function get_k8s_cluster ()
 	} > "${backupFolder}/k8s/cluster/events.txt" 2>&1 || true
 	timeout 60 $k_orig get events -A -o yaml > "${backupFolder}/k8s/cluster/events.yaml" 2>&1 || true
 	get_events_wide --field-selector type=Warning > "${backupFolder}/k8s/cluster/events_warnings.txt" 2>&1 || true
+
+	# Service endpoints: which pod IPs actually back a ClusterIP. Without this the only
+	# way to learn that (say) kube-dns points at 10.42.0.4 is to read the NAT rules.
+	k_cmd "${backupFolder}/k8s/cluster/endpoints.txt" 60 get endpoints -A -o wide
+	k_cmd "${backupFolder}/k8s/cluster/endpointslices.txt" 60 get endpointslices -A
+	# Separates "one component is broken" from "the apiserver itself is degraded".
+	k_cmd "${backupFolder}/k8s/cluster/apiserver_readyz.txt" 60 get --raw '/readyz?verbose'
+	k_cmd "${backupFolder}/k8s/cluster/apiservices.txt" 60 get apiservices
+	# CoreDNS Corefile: forward target, cache, plugin order. Read-only, no secrets.
+	k_cmd "${backupFolder}/k8s/cluster/coredns_configmap.yaml" 60 -n kube-system get cm coredns -o yaml
+	# kube-proxy ConfigMap: says whether services are programmed in iptables, ipvs or
+	# nftables mode, which decides which of the network/ dumps is the meaningful one.
+	# k3s has no kube-proxy ConfigMap (it embeds kube-proxy) - the file will say NotFound.
+	k_cmd "${backupFolder}/k8s/cluster/kube-proxy_configmap.yaml" 60 -n kube-system get cm kube-proxy -o yaml
+	# kube-system ConfigMaps only - deliberately NOT secrets: kube-system holds
+	# cluster-admin tokens and pulling them into an uploaded archive is not acceptable.
+	k_cmd "${backupFolder}/k8s/resources/kube-system_configmaps.yaml" 120 -n kube-system get cm -o yaml
 
 	if command -v helm &>/dev/null; then
 		{
@@ -386,6 +707,9 @@ done
 	$k get ingressroutetcp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressroutetcp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressroutetcp_${z}.yaml";done || true
 	$k get ingressrouteudp --no-headers|awk '{print $1}'|while read -r z;do $k get ingressrouteudp "$z" -o yaml > "${backupFolder}/k8s/ingress/ingressrouteudp_${z}.yaml";done || true
 
+	k_cmd "${backupFolder}/k8s/resources/networkpolicies.txt" 60 get networkpolicy -A -o wide
+	k_cmd "${backupFolder}/k8s/resources/networkpolicies.yaml" 60 get networkpolicy -A -o yaml
+
 	{
 		echo ":: pods that are not Running, or Running with containers not ready (READY m/n, m<n)."
 		echo ":: Completed/Succeeded pods are skipped."
@@ -419,16 +743,38 @@ if [ "$gather" == 'gc' ];then
 	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
 	# Store original k for operations that don't need namespace
 	k_orig="$k"
-	test -z "$envname" && envname=$($k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && test -z "$config_hostname" && envnamelabel="-${envname}-gc"
+	test -z "$envname" && envname=$(timeout 60 $k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && test -z "$config_hostname" && envnamelabel="-${envname}-gc"
 	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
 
 	# Update k to include namespace
 	k="$k -n $envname"
 
 	# TODO: in cases where env is not found, we should still collect info on what went wrong
-	if ! $k_orig get ns|grep -q "$envname" ;then echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting..";$k_orig get ns;exit 1;fi
+	# timeout: an unreachable or wedged apiserver must not stall the run indefinitely.
+	# This used to `exit 1`, which produced NO bundle at all - and a dead control plane is
+	# exactly when the host-level data (dmesg, journals, ss, sysctls, conntrack, per-pod
+	# netns, disk) matters most. Now it flags the condition and collects what it still can.
+	# Two very different conditions, deliberately kept apart. Judging both by "the
+	# namespace is not in the output" conflates them: a typo'd -n on a perfectly healthy
+	# cluster would claim the cluster was unreachable, spend ~30s collecting host data,
+	# and emit a bundle labelled CLUSTER_UNREACHABLE - while hiding the one thing the
+	# operator needs, the list of namespaces that DO exist.
+	ns_list="$(timeout 60 $k_orig get ns 2>&1)"; ns_rc=$?
+	if [ "$ns_rc" -ne 0 ];then
+		# apiserver unreachable/wedged: collect what is still reachable (host level).
+		echo -e "[\e[1;31m✗\e[0m] Cluster unreachable (kubectl get ns exited ${ns_rc})."
+		echo -e "${orange}[!] collecting host-level diagnostics only; see CLUSTER_UNREACHABLE.txt in the archive${nc}"
+		cluster_unreachable=1
+	elif ! printf '%s\n' "$ns_list" | grep -q "$envname";then
+		# cluster is fine, the namespace simply is not there - almost always a wrong -n.
+		# Fail fast and show what is available; collecting host data would not help.
+		echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting.."
+		printf '%s\n' "$ns_list"
+		exit 1
+	fi
 	#mysql_pod="$($k -n $envname get pods --no-headers|grep mysql-|awk '{print $1}' | head -n 1)"
 
+	if [ -z "$cluster_unreachable" ];then
 	kubeconfig="$(detect_kubeconfig || true)"
 	test -n "$kubeconfig" && echo -e "[i] kubeconfig: ${kubeconfig}" || echo -e "${orange}[!] no working kubeconfig found; helm output may be empty${nc}"
 
@@ -438,6 +784,7 @@ if [ "$gather" == 'gc' ];then
 	# bsi was removed in 7.0.0. Gate on the deployment actually existing (authoritative,
 	# also covers unparsable tags like :latest) and keep the version for the report.
 	timeout 30 $k get deploy bsi &>/dev/null && bsi_present=1
+	fi
 	test -n "$ms_version" && echo -e "[i] MetalSoft version: \e[1;32m${ms_version}\e[0m"
 	if [ -z "$bsi_present" ];then
 		if version_ge "${ms_version:-0}" 7.0.0; then
@@ -453,8 +800,21 @@ if [ "$gather" == 'gc' ];then
 	create_dirs
 	get_system
 	get_network
+	get_pod_netns
 	get_disks
 	get_ssl
+
+	if [ -n "$cluster_unreachable" ];then
+		{
+			echo ":: The cluster/namespace could not be reached, so only host-level data was"
+			echo ":: collected. Namespace requested: ${envname}"
+			echo
+			echo ":: kubectl get ns"; timeout 60 $k_orig get ns 2>&1
+			echo; echo ":: kubectl cluster-info"; timeout 60 $k_orig cluster-info 2>&1
+			echo; echo ":: kubectl version"; timeout 60 $k_orig version 2>&1
+			echo; echo ":: node resolv.conf / hosts and the runtime journals are in system/"
+		} > "${backupFolder}/CLUSTER_UNREACHABLE.txt" 2>&1 || true
+	else
 	get_k8s_cluster
 
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
@@ -470,10 +830,16 @@ if [ "$gather" == 'gc' ];then
 			# No bsi container to write into (>= 7.0.0). Measure the node's own disks
 			# instead, otherwise every 7.x dump ships an empty latency.txt.
 			echo "############ bsi deployment absent${ms_version:+ (MetalSoft ${ms_version})}: measured on the node instead of inside bsi" >> "${backupFolder}/disk/bsi_df.txt"
+			# PID in the name: /var/log is OUTSIDE the per-run backup folder, so a fixed
+			# "testfile" there is shared state. Two collectors - or one leftover from a
+			# killed run - write the same path and one rm -f pulls the file out from
+			# under the other's dd, making both latency numbers fiction. Verified: run
+			# B's rm makes run A's file vanish mid-write. A killed run also strands
+			# ~96MB, and on the customer node /var/log is a separate 4.0G LV at 51%.
 			for _dlpath in "${backupFolder}" /var/log;do
-				echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-				{ time timeout 300 dd if=/dev/zero of="${_dlpath}/testfile" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
-				rm -f "${_dlpath}/testfile"
+				echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/${_dlfile} bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+				{ time timeout 300 dd if=/dev/zero of="${_dlpath}/${_dlfile}" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
+				rm -f "${_dlpath}/${_dlfile}"
 			done
 			unset _dlpath
 		fi
@@ -482,19 +848,37 @@ if [ "$gather" == 'gc' ];then
 		echo "############ disk latency check skipped" >> "${backupFolder}/disk/latency.txt"
 	fi
 	get_k8s
+	echo "[i] probing in-cluster DNS from running pods.."
+	dns_probe
 
 	mkdir -p "${backupFolder}/mysql"
 	if [ "$extended" == '1' ];then
 		echo "[i] backing up mysql databases.."
 		#backup all mysql DBs:
 		mysqldump_opts='--skip-comments'
+		# Dump ceiling, derived from real data size rather than a flat guess. The original
+		# code had NO timeout here, so a wedged DB hung the collector forever; a flat
+		# ceiling is no better, because it silently truncates a legitimately large dump
+		# and a truncated .sql.gz is worse than a slow one. Our own QA env holds 12.2 GB
+		# across 1237 tables, which a 1800s ceiling would have cut off mid-dump.
+		# 1800s floor + ~1s per 3 MB => a sustained floor of roughly 3 MB/s before we give
+		# up. Falls back to the flat 1800s if the size query itself fails.
+		mysql_total_mb="$(timeout 60 $k exec deploy/mysql -- mysql -ANe \
+			'SELECT COALESCE(ROUND(SUM(data_length+index_length)/1024/1024),0) FROM information_schema.tables' \
+			2>/dev/null | tr -dc '0-9')"
+		if [[ "$mysql_total_mb" =~ ^[0-9]+$ ]] && [ "$mysql_total_mb" -gt 0 ];then
+			mysqldump_timeout=$(( 1800 + mysql_total_mb / 3 ))
+		else
+			mysqldump_timeout=1800
+		fi
+		echo "[i] mysql data ${mysql_total_mb:-?} MB; per-database dump ceiling ${mysqldump_timeout}s"
 		all_dbs="$(timeout 60 $k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read -r z;do
 			_outfile="${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz"
 			if [ "$z" == "mysql" ];then
-				timeout 1800 $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "$_outfile"
+				timeout "$mysqldump_timeout" $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction| sed '/.*DROP DATABASE IF EXISTS `mysql`/d' |gzip > "$_outfile"
 			else
-				timeout 1800 $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
+				timeout "$mysqldump_timeout" $k exec deploy/mysql -- mysqldump $mysqldump_opts --set-gtid-purged=OFF --databases "$z" --triggers --routines --events --add-drop-table --add-drop-database --single-transaction|gzip > "$_outfile"
 			fi
 			_pipe_rc=("${PIPESTATUS[@]}")
 			if (( ${_pipe_rc[0]} + ${_pipe_rc[1]:-0} + ${_pipe_rc[2]:-0} )) || ! gzip -t "$_outfile" 2>/dev/null; then
@@ -547,7 +931,15 @@ if [ "$gather" == 'gc' ];then
 	if ! $curl_no_proxy curl -sS "http://${couchdbUrl}/_all_dbs" | jq -rce . &>/dev/null; then
 		echo "CouchDB: $curl_no_proxy http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > "${backupFolder}/couchdb/couchdb_pull_failed"
 	fi
-	test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" |jq -r ".[]"|while read -r z;do $curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz";done || true
+	# Deliberately SERIAL, unlike the pod-log loop. Measured on demo: this whole phase is
+	# 1 second of a 252s run, so there is nothing to win - while running it -j wide would
+	# multiply peak memory, because each worker pipes a full _all_docs?include_docs=true
+	# response through jq, which buffers the entire document set. Tiny here, not
+	# necessarily tiny on a production install.
+	while read -r z;do
+		test -n "$z" || continue
+		$curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz"
+	done < <(test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" | jq -r ".[]" 2>/dev/null)
 
 	echo "[i] backing up k8s pod runtime logs.."
 	# --all-containers + --prefix so init-container output is captured too (kubectl
@@ -556,13 +948,40 @@ if [ "$gather" == 'gc' ];then
 	# makes them impossible to line up against events/dmesg.
 	# --previous for anything that has restarted: the current log only shows the newest
 	# crash cycle, and the interesting failure is usually in the one before.
-	$k get pod --no-headers|awk '{print $1" "$4+0}'|while read -r z restarts;do
-		timeout 300 $k logs "$z" --timestamps --all-containers=true --prefix=true > "${backupFolder}/k8s/logs/pod_${z}.log" 2>&1
-		if [ "${restarts:-0}" -gt 0 ] 2>/dev/null;then
-			previous_logs "$envname" "$z" > "${backupFolder}/k8s/logs/pod_${z}_previous.log" 2>&1
+	# ALL namespaces, not just ours: coredns, metrics-server, metallb and the CNI live in
+	# kube-system, and their logs are exactly what gets asked for when DNS or LB breaks.
+	# Naming: pods in our own namespace keep their historic pod_<name>.log filenames;
+	# every other namespace is prefixed pod_<ns>_<name>.log, because pod names are only
+	# unique within a namespace (two 'nginx' or two 'traefik-*' would overwrite).
+	# Previous logs sit next to the current ones in the same folder.
+	# Process substitution, NOT "cmd | while": a piped while-loop body runs in a subshell,
+	# so background jobs started inside it are that subshell's children and the `wait`
+	# after the loop - which runs in the parent - cannot see them. The script would then
+	# tar the archive while log fetches were still writing into it.
+	while read -r pns pname prestarts;do
+		if [ -z "$pns" ] || [ -z "$pname" ];then continue;fi
+		if [ "$pns" == "$envname" ];then
+			_lf="pod_${pname}"; _df="describe_pod_${pname}"
+		else
+			_lf="pod_${pns}_${pname}"; _df="describe_pod_${pns}_${pname}"
 		fi
-		timeout 60 $k describe pod "$z" > "${backupFolder}/k8s/logs/describe_pod_${z}.txt" 2>&1
-	done
+		# One subshell per pod: every command below writes its own file, so there is
+		# nothing to serialise. throttle caps concurrency at -j (default 4) - each worker
+		# is a separate kubectl with its own client QPS budget, and this collector runs
+		# against clusters that are already unhealthy, so the cap matters.
+		(
+			timeout 300 $k_orig -n "$pns" logs "$pname" --timestamps --all-containers=true --prefix=true \
+				> "${backupFolder}/k8s/logs/${_lf}.log" 2>&1 || true
+			if [ "${prestarts:-0}" -gt 0 ] 2>/dev/null;then
+				previous_logs "$pns" "$pname" > "${backupFolder}/k8s/logs/${_lf}_previous.log" 2>&1 || true
+			fi
+			timeout 60 $k_orig -n "$pns" describe pod "$pname" > "${backupFolder}/k8s/logs/${_df}.txt" 2>&1 || true
+		) &
+		throttle "$parallel"
+	done < <(timeout 60 $k_orig get pod -A --no-headers 2>/dev/null | awk '{print $1" "$2" "$5+0}')
+	throttle 1   # NOT bare `wait`: see the throttle comment - bare wait blocks on the
+	             # tee process substitutions this script installs on stdout/stderr.
+	unset _lf _df
 	# bsi was dropped in MetalSoft 7.0.0; skip its checks entirely when it is not deployed.
 	if [ -n "$bsi_present" ];then
 	timeout 60 $k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/k8s/bsi/supervisorctl.txt" 2>&1
@@ -632,6 +1051,8 @@ if [ "$extended" == '1' ];then
 	echo "[i] backing up k8s container logs.."
 	test -d /var/log/containers && mkdir -p "${backupFolder}/container_logs" && rsync -azL /var/log/containers/* "${backupFolder}/container_logs/" || true
 fi
+
+	fi   # end of the cluster-reachable branch
 
 else # if gather=sc
 	envname="$(grep -oP '\s+- URL=.*' /opt/metalsoft/agents/docker-compose.yaml|tail -1 |cut -d/ -f3)"
@@ -713,17 +1134,24 @@ tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackup
 			if [ -z "$doNotAutoSend" ]; then
 				http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&autopush=1&ns=${envname}" "$resultFilename" "$curl_log")"
 				curl_exit=$?
+				autopush_tried=1
+				# A successful auto-upload says nothing: the operator hands the file over
+				# manually regardless of whether we already received it. No sleep before
+				# exiting either - measured, output is not lost without it (0/12 over ssh),
+				# and the message it used to pace is gone.
 				if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
 					rm -f "$curl_log"
-					sleep 3
-					echo -e "[${lightgreen}✓${nc}] File auto-uploaded to MetalSoft. No further action needed."
 					exit 0
-				else
-					echo -e "${orange}[!] Auto-upload failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: ${curl_log}${nc}"
 				fi
+				# A failure DOES need saying, because the file did not reach us and the
+				# operator has to send it. Offering the interactive upload right after an
+				# upload just failed is noise, so $autopush_tried suppresses that prompt.
+				echo -e "${orange}[!] Auto-upload to MetalSoft failed (HTTP ${http_code:-000}, curl exit ${curl_exit}).${nc}"
+				echo -e "${orange}[!] Please provide the diagnostics file to the MetalSoft Team manually.${nc}"
+				echo -e "${gray}    curl trace: ${curl_log}${nc}"
 			fi
 		fi
-		if [ -z "$doNotAutoSend" ];then
+		if [ -z "$doNotAutoSend" ] && [ -z "$autopush_tried" ];then
 			# stderr is redirected into bash_log via tee; route prompt to /dev/tty so the user can see it.
 			read -r -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn </dev/tty 2>/dev/tty
 			case $yn in
