@@ -1,27 +1,138 @@
 #!/usr/bin/env bash
-# couch.sh - CouchDB CLI tool for k8s-deployed CouchDB (curl + jq)
+# ms-couchdb - CouchDB CLI tool for k8s-deployed CouchDB (curl + jq)
 set -euo pipefail
 
-GREEN='\033[32m'
-LRED='\033[91m'
-DIM='\033[2m'
-RESET='\033[0m'
-BOLD='\033[1m'
+ME="$(basename "$0")"
 
-# Strip --no-color from args (can appear anywhere) and disable colors if found
+GREEN=$'\033[32m'
+LRED=$'\033[91m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
+BOLD=$'\033[1m'
+
+# Strip global flags (they may appear anywhere) before the command router runs
+ASSUME_YES=0
 ARGS=()
 for arg in "$@"; do
-    if [[ "$arg" == "--no-color" ]]; then
-        GREEN=''
-        LRED=''
-        DIM=''
-        RESET=''
-        BOLD=''
-    else
-        ARGS+=("$arg")
-    fi
+    case "$arg" in
+        --no-color)
+            GREEN=''
+            LRED=''
+            DIM=''
+            RESET=''
+            BOLD=''
+            ;;
+        -y|--yes)
+            ASSUME_YES=1
+            ;;
+        *)
+            ARGS+=("$arg")
+            ;;
+    esac
 done
 set -- "${ARGS[@]}"
+
+# --- self-contained bash completion -----------------------------------------
+# Lives here, not in an image build script, so completion never drifts from the
+# executable (which self-updates via metalsoft-updates).
+# Kept above the jq and $ns checks below: --completion must work on a host that
+# has neither.
+
+_ms_print_completion() {
+    cat <<'EOCOMP'
+_ms_couchdb_json_files()
+{
+    COMPREPLY=( $(compgen -d -- "$1") )
+    COMPREPLY+=( $(compgen -f -- "$1" | grep -E '\.json$') )
+    return 0
+}
+
+_ms_couchdb_completion()
+{
+    local cur exe base i argpos cmd list cword
+    local -a words
+    # Real docids contain ':' (e.g. ai-chat-messages:1:app:fabric-manager), which
+    # bash treats as a word break. Ask bash-completion for colon-joined words so
+    # both the argument positions and the partial word stay correct.
+    if declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
+        _get_comp_words_by_ref -n : cur words cword
+    else
+        words=( "${COMP_WORDS[@]}" )
+        cword=$COMP_CWORD
+        cur="${COMP_WORDS[COMP_CWORD]}"
+    fi
+    COMPREPLY=()
+
+    # Locate the command itself, so a "sudo "/"env " prefix does not shift the
+    # argument positions.
+    base=0
+    for ((i = 0; i < ${#words[@]}; i++)); do
+        case "${words[i]}" in
+            *ms-couchdb) base=$i; break ;;
+        esac
+    done
+    exe="${words[base]}"
+    argpos=$((cword - base))
+    cmd="${words[base + 1]:-}"
+
+    case "$cur" in
+        -*) COMPREPLY=( $(compgen -W '-y --yes --no-color -h --help --completion --install-completion' -- "$cur") )
+            return 0 ;;
+    esac
+
+    # Database and document names come from the live cluster, so they need $ns
+    # exported in this shell -- the same requirement the script itself has.
+    case $argpos in
+        1)  list='info dbs list-docs pull push create rm help' ;;
+        2)  case "$cmd" in
+                list-docs|pull|push|create|rm) list="$("$exe" --complete-dbs 2>/dev/null)" ;;
+                *) return 0 ;;
+            esac ;;
+        3)  case "$cmd" in
+                pull|create|rm) list="$("$exe" --complete-docs "${words[base + 2]:-}" 2>/dev/null)" ;;
+                push)        _ms_couchdb_json_files "$cur"; return 0 ;;
+                *) return 0 ;;
+            esac ;;
+        4)  case "$cmd" in
+                pull|create) _ms_couchdb_json_files "$cur"; return 0 ;;
+                *) return 0 ;;
+            esac ;;
+        *)  return 0 ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "$list" -- "$cur") )
+
+    if declare -F __ltrim_colon_completions >/dev/null 2>&1; then
+        __ltrim_colon_completions "$cur"
+    fi
+}
+complete -o filenames -F _ms_couchdb_completion ms-couchdb
+EOCOMP
+}
+
+_ms_install_completion() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "[i] Error: --install-completion must run as root"
+        return 1
+    fi
+    local dir=/usr/share/bash-completion/completions
+    [ -d "$dir" ] || dir=/etc/bash_completion.d
+    [ -d "$dir" ] || { echo "[i] Error: no bash-completion directory found"; return 1; }
+
+    printf '%s\n' \
+        '# managed by ms-couchdb --install-completion' \
+        'source <(ms-couchdb --completion)' > "$dir/ms-couchdb" || return 1
+
+    # Drop the stale eager-loaded copy once the lazy directory is in use.
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/ms-couchdb
+    echo "[i] Installed bash completion to $dir/ms-couchdb"
+    return 0
+}
+
+case "${1:-}" in
+    --completion)         _ms_print_completion; exit 0 ;;
+    --install-completion) _ms_install_completion; exit $? ;;
+esac
 
 _err() { printf "${LRED}%s${RESET}\n" "$*" >&2; }
 _ok()  { printf "${GREEN}●${RESET} %s\n" "$*"; }
@@ -57,11 +168,65 @@ _init() {
     if [[ -z "${COUCH_USER:-}" || -z "${COUCH_PASS:-}" ]]; then
         _get_creds
     fi
-    COUCH_URL="http://${COUCH_USER}:${COUCH_PASS}@${COUCH_IP}:${COUCH_PORT}"
+    COUCH_URL="http://${COUCH_IP}:${COUCH_PORT}"
 }
 
+# Every request goes through here: credentials arrive on stdin via --config,
+# never on the command line, because `ps -eo args` is readable by any local user.
 _curl() {
-    curl -sf --connect-timeout 5 "$@"
+    # Quoted, and \ / " escaped: curl's config parser cuts an unquoted value at
+    # the first space, which would silently truncate the password.
+    local u="${COUCH_USER//\\/\\\\}" p="${COUCH_PASS//\\/\\\\}"
+    printf 'user = "%s:%s"\n' "${u//\"/\\\"}" "${p//\"/\\\"}" \
+        | curl -s --connect-timeout 5 --config - "$@"
+}
+
+# GET whose failure must not kill the script: curl -f exits non-zero on any HTTP
+# error and curl itself on a transport error, and with `set -e` either would
+# abort before the caller prints its own message. -f also keeps the error body
+# out of stdout, so callers just check for empty output.
+_get() {
+    _curl -f "$@" || true
+}
+
+_reachable() {
+    _curl -o /dev/null "${COUCH_URL}/"
+}
+
+# Split a "<body>\n__HTTP_CODE__:<code>" response written by _curl -w. Parameter
+# expansion, not grep: a response body can itself contain the sentinel (the doc
+# id is echoed back and is user-chosen).
+_http_code() {
+    local code=""
+    case "$1" in *__HTTP_CODE__:*) code="${1##*__HTTP_CODE__:}" ;; esac
+    printf '%s' "${code:-000}"
+}
+_http_body() {
+    case "$1" in
+        *__HTTP_CODE__:*) printf '%s' "${1%__HTTP_CODE__:*}" ;;
+        *)                printf '%s' "$1" ;;
+    esac
+}
+
+# Why a _get came back empty: the caller's reason, or an unreachable server.
+# The extra request only happens on a path that has already failed.
+_why() {
+    if _reachable; then
+        echo "$1"
+    else
+        echo "No answer from CouchDB at ${COUCH_IP}:${COUCH_PORT}"
+    fi
+}
+
+# Report a failed write and exit. $1=what, $2=status code, $3=response body
+_fail_http() {
+    if [[ "$2" == "000" ]]; then
+        _err "ERROR: No answer from CouchDB at ${COUCH_IP}:${COUCH_PORT}"
+    else
+        _err "ERROR: $1 failed (HTTP $2)"
+        _err "$3"
+    fi
+    exit 1
 }
 
 # Print doc rows from _all_docs JSON on stdin: "  <id>  [rev: N]" with rev in green
@@ -81,13 +246,19 @@ cmd_info() {
     _init
     echo "  Service IP : $COUCH_IP"
     echo "  URL        : http://${COUCH_USER}:****@${COUCH_IP}:${COUCH_PORT}"
-    echo "  Version    : $(_curl "${COUCH_URL}/" | jq -r '.version')"
+    local ver
+    ver=$(_get "${COUCH_URL}/" | jq -r '.version // empty')
+    [[ -n "$ver" ]] || { _err "ERROR: $(_why "Could not read the CouchDB root document")"; exit 1; }
+    echo "  Version    : $ver"
 }
 
 cmd_list_dbs() {
     _init
     local dbs
-    dbs=$(_curl "${COUCH_URL}/_all_dbs" | jq -r '.[]' | sort)
+    local raw
+    raw=$(_get "${COUCH_URL}/_all_dbs")
+    [[ -n "$raw" ]] || { _err "ERROR: $(_why "Could not list databases")"; exit 1; }
+    dbs=$(printf '%s' "$raw" | jq -r '.[]?' | sort)
 
     printf "${BOLD}Databases:${RESET}\n"
     while IFS= read -r db; do
@@ -97,20 +268,25 @@ cmd_list_dbs() {
             continue
         fi
         printf "  ${BOLD}%s${RESET}\n" "$db"
-        _curl "${COUCH_URL}/${db}/_all_docs" 2>/dev/null | _print_docs
+        _get "${COUCH_URL}/${db}/_all_docs" 2>/dev/null | _print_docs
     done <<< "$dbs"
 }
 
 cmd_list_docs() {
-    [[ $# -ge 1 ]] || { _err "Usage: $0 list-docs <db>"; exit 1; }
+    [[ $# -ge 1 ]] || { _err "Usage: $ME list-docs <db>"; exit 1; }
     local db="$1"
     _init
+
+    local json
+    json=$(_get "${COUCH_URL}/${db}/_all_docs")
+    [[ -n "$json" ]] || { _err "ERROR: $(_why "Database '$db' not found")"; exit 1; }
+
     printf "${BOLD}Docs in '%s':${RESET}\n" "$db"
-    _curl "${COUCH_URL}/${db}/_all_docs" | _print_docs
+    printf '%s' "$json" | _print_docs
 }
 
 cmd_pull() {
-    [[ $# -ge 2 ]] || { _err "Usage: $0 pull <db> <docid> [outfile.json]"; exit 1; }
+    [[ $# -ge 2 ]] || { _err "Usage: $ME pull <db> <docid> [outfile.json]"; exit 1; }
     local db="$1"
     local docid="$2"
     local outfile="${3:-couchdb_${db}_${docid//\//_}.json}"
@@ -119,7 +295,11 @@ cmd_pull() {
     local encoded_id
     encoded_id=$(jq -rn --arg x "$docid" '$x|@uri')
 
-    _curl "${COUCH_URL}/${db}/${encoded_id}" | jq . > "$outfile"
+    local json
+    json=$(_get "${COUCH_URL}/${db}/${encoded_id}")
+    [[ -n "$json" ]] || { _err "ERROR: $(_why "Document '$docid' not found in '$db'")"; exit 1; }
+
+    printf '%s' "$json" | jq . > "$outfile"
 
     local rev
     rev=$(jq -r '._rev' "$outfile")
@@ -129,7 +309,7 @@ cmd_pull() {
 }
 
 cmd_push() {
-    [[ $# -ge 2 ]] || { _err "Usage: $0 push <db> <file.json>"; exit 1; }
+    [[ $# -ge 2 ]] || { _err "Usage: $ME push <db> <file.json>"; exit 1; }
     local db="$1"
     local file="$2"
     [[ -f "$file" ]] || { _err "ERROR: File not found: $file"; exit 1; }
@@ -143,7 +323,12 @@ cmd_push() {
     encoded_id=$(jq -rn --arg x "$local_id" '$x|@uri')
 
     local server_rev
-    server_rev=$(_curl "${COUCH_URL}/${db}/${encoded_id}" | jq -r '._rev')
+    server_rev=$(_get "${COUCH_URL}/${db}/${encoded_id}" | jq -r '._rev // empty')
+    [[ -n "$server_rev" ]] || {
+        _err "ERROR: $(_why "Document '$local_id' not found in '$db'")"
+        if _reachable; then _err "Use 'create' for a new document."; fi
+        exit 1
+    }
 
     if [[ "$server_rev" != "$local_rev" ]]; then
         _err "ERROR: Revision conflict!"
@@ -154,13 +339,13 @@ cmd_push() {
     fi
 
     local response http_code body
-    response=$(curl -sf -w "\n__HTTP_CODE__:%{http_code}" \
+    response=$(_curl -w "\n__HTTP_CODE__:%{http_code}" \
         -X PUT \
         -H "Content-Type: application/json" \
         -d @"$file" \
-        "${COUCH_URL}/${db}/${encoded_id}" 2>&1)
-    http_code=$(echo "$response" | grep '__HTTP_CODE__:' | cut -d: -f2)
-    body=$(echo "$response" | grep -v '__HTTP_CODE__:')
+        "${COUCH_URL}/${db}/${encoded_id}" 2>&1 || true)
+    http_code=$(_http_code "$response")
+    body=$(_http_body "$response")
 
     if [[ "$http_code" == "201" || "$http_code" == "200" ]]; then
         local new_rev
@@ -172,14 +357,64 @@ cmd_push() {
         echo "  new rev : $new_rev"
         _ok "file updated in place"
     else
-        _err "ERROR: Push failed (HTTP $http_code)"
-        _err "$body"
-        exit 1
+        _fail_http "Push" "$http_code" "$body"
+    fi
+}
+
+_delete() {
+    local path="$1" okmsg="$2"
+    local response http_code body
+    response=$(_curl -w "\n__HTTP_CODE__:%{http_code}" -X DELETE "${COUCH_URL}/${path}" 2>&1 || true)
+    http_code=$(_http_code "$response")
+    body=$(_http_body "$response")
+
+    if [[ "$http_code" == "200" ]]; then
+        _ok "$okmsg"
+    else
+        _fail_http "Delete" "$http_code" "$body"
+    fi
+}
+
+# rm <db>          delete a whole database (confirm by retyping its name)
+# rm <db> <docid>  delete one document (y/N)
+cmd_rm() {
+    [[ $# -ge 1 ]] || { _err "Usage: $ME rm <db> [docid]   (without <docid> the whole database goes)"; exit 1; }
+    local db="$1" docid="${2:-}" answer=""
+    _init
+
+    if [[ -n "$docid" ]]; then
+        local encoded_id rev
+        encoded_id=$(jq -rn --arg x "$docid" '$x|@uri')
+        rev=$(_get "${COUCH_URL}/${db}/${encoded_id}" | jq -r '._rev // empty')
+        [[ -n "$rev" ]] || { _err "ERROR: $(_why "Document '$docid' not found in '$db'")"; exit 1; }
+
+        if [[ "$ASSUME_YES" -eq 1 ]]; then
+            echo "Deleting document '$docid' (rev $rev) from '$db' (-y)"
+        else
+            printf "Delete document '%s' (rev %s) from '%s'? [y/N] " "$docid" "$rev" "$db"
+            read -r answer || true
+            [[ "$answer" == [yY] ]] || { echo "Aborted"; exit 1; }
+        fi
+        _delete "${db}/${encoded_id}?rev=${rev}" "Deleted '$docid' from '$db'"
+    else
+        local count
+        count=$(_get "${COUCH_URL}/${db}/_all_docs" | jq -r '.total_rows // empty')
+        [[ -n "$count" ]] || { _err "ERROR: $(_why "Database '$db' not found")"; exit 1; }
+
+        _err "About to delete database '$db' and its $count document(s). This cannot be undone."
+        if [[ "$ASSUME_YES" -eq 1 ]]; then
+            echo "Deleting it anyway (-y)"
+        else
+            printf "Type the database name to confirm: "
+            read -r answer || true
+            [[ "$answer" == "$db" ]] || { echo "Aborted"; exit 1; }
+        fi
+        _delete "$db" "Deleted database '$db'"
     fi
 }
 
 cmd_create() {
-    [[ $# -ge 3 ]] || { _err "Usage: $0 create <db> <docid> <file.json>"; exit 1; }
+    [[ $# -ge 3 ]] || { _err "Usage: $ME create <db> <docid> <file.json>"; exit 1; }
     local db="$1"
     local docid="$2"
     local file="$3"
@@ -189,7 +424,7 @@ cmd_create() {
     local encoded_id
     encoded_id=$(jq -rn --arg x "$docid" '$x|@uri')
 
-    if _curl "${COUCH_URL}/${db}/${encoded_id}" >/dev/null 2>&1; then
+    if [[ -n "$(_get "${COUCH_URL}/${db}/${encoded_id}")" ]]; then
         _err "ERROR: Document '$docid' already exists in '$db'"
         _err "Use 'pull' + 'push' to update an existing document."
         exit 1
@@ -199,13 +434,13 @@ cmd_create() {
     body_json=$(jq --arg id "$docid" '. + {_id: $id} | del(._rev)' "$file")
 
     local response http_code body
-    response=$(curl -sf -w "\n__HTTP_CODE__:%{http_code}" \
+    response=$(_curl -w "\n__HTTP_CODE__:%{http_code}" \
         -X PUT \
         -H "Content-Type: application/json" \
         -d "$body_json" \
-        "${COUCH_URL}/${db}/${encoded_id}" 2>&1)
-    http_code=$(echo "$response" | grep '__HTTP_CODE__:' | cut -d: -f2)
-    body=$(echo "$response" | grep -v '__HTTP_CODE__:')
+        "${COUCH_URL}/${db}/${encoded_id}" 2>&1 || true)
+    http_code=$(_http_code "$response")
+    body=$(_http_body "$response")
 
     if [[ "$http_code" == "201" || "$http_code" == "200" ]]; then
         local new_rev
@@ -213,9 +448,7 @@ cmd_create() {
         _ok "Created '$docid' in '$db'"
         echo "  rev  : $new_rev"
     else
-        _err "ERROR: Create failed (HTTP $http_code)"
-        _err "$body"
-        exit 1
+        _fail_http "Create" "$http_code" "$body"
     fi
 }
 
@@ -223,25 +456,35 @@ cmd_create() {
 
 usage() {
     cat <<EOF
-couch.sh — CouchDB CLI (curl + jq, k8s auto-discovery)
+${ME} — CouchDB CLI (curl + jq, k8s auto-discovery)
 
 Usage:
-  $0 info                         Show connection info
-  $0 dbs                          List all databases with their documents
-  $0 list-docs <db>               List documents in one database
-  $0 pull <db> <docid> [file]     Pull document to JSON file (default: couchdb_<db>_<docid>.json)
-  $0 push <db> <file.json>        Push file back; aborts if server _rev changed
-  $0 create <db> <docid> <file.json>  Create new doc named <docid> from file contents; aborts if doc already exists
+  $ME info                         Show connection info
+  $ME dbs                          List all databases with their documents
+  $ME list-docs <db>               List documents in one database
+  $ME pull <db> <docid> [file]     Pull document to JSON file (default: couchdb_<db>_<docid>.json)
+  $ME push <db> <file.json>        Push file back; aborts if server _rev changed
+  $ME create <db> <docid> <file.json>  Create new doc named <docid> from file contents; aborts if doc already exists
+  $ME rm <db> <docid>              Delete one document (asks for confirmation)
+  $ME rm <db>                      Delete a whole database (asks you to retype its name)
+
+Global flags (anywhere in the command line):
+  -y, --yes                       Skip the rm confirmation prompts
+  --no-color                      Plain output, no ANSI colors
 
 Env overrides:
   COUCH_IP, COUCH_PORT, COUCH_USER, COUCH_PASS   Skip auto-discovery
 
+Also:
+  $ME --completion                 Print the bash completion script
+  $ME --install-completion         Install it (root)
+
 Examples:
-  $0 dbs
-  $0 list-docs orchestrator-microservice
-  $0 pull orchestrator-microservice bsi
+  $ME dbs
+  $ME list-docs orchestrator-microservice
+  $ME pull orchestrator-microservice bsi
   # edit couchdb_orchestrator-microservice_bsi.json ...
-  $0 push orchestrator-microservice couchdb_orchestrator-microservice_bsi.json
+  $ME push orchestrator-microservice couchdb_orchestrator-microservice_bsi.json
 EOF
 }
 
@@ -257,6 +500,9 @@ case "$CMD" in
     pull)               cmd_pull "$@" ;;
     push)               cmd_push "$@" ;;
     create)             cmd_create "$@" ;;
+    rm)                 cmd_rm "$@" ;;
     help|--help|-h)     usage ;;
+    --complete-dbs)     _init; _get "${COUCH_URL}/_all_dbs" | jq -r '.[]?' ;;
+    --complete-docs)    _init; _get "${COUCH_URL}/${1:-}/_all_docs" | jq -r '.rows[]?.id' ;;
     *)  echo "Unknown command: $CMD"; usage; exit 1 ;;
 esac

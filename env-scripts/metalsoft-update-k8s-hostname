@@ -1,6 +1,76 @@
 #!/bin/bash
 # vi: et st=2 sts=2 ts=2 sw=2 cindent bg=dark ft=sh
 
+# --- self-contained bash completion -----------------------------------------
+# Lives here, not in an image build script, so completion never drifts from the
+# executable (which self-updates via metalsoft-updates).
+# Kept above the root check below: completion must run unprivileged.
+
+_ms_print_completion() {
+    cat <<'EOCOMP'
+_ms_update_k8s_hostname_completion()
+{
+    local cur base i argpos cand list
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY=()
+
+    # Locate the command itself, so a "sudo "/"env " prefix or the
+    # ms-update-k8s-hostname symlink does not shift the argument positions.
+    base=0
+    for ((i = 0; i < ${#COMP_WORDS[@]}; i++)); do
+        case "${COMP_WORDS[i]}" in
+            *update-k8s-hostname) base=$i; break ;;
+        esac
+    done
+    argpos=$((COMP_CWORD - base))
+
+    case $argpos in
+        1)  # newHostname.com
+            cand=( $(grep -m1 '^MS_HOSTNAME=' /etc/metalsoft 2>/dev/null | cut -d= -f2) )
+            cand+=( "$(hostname -f 2>/dev/null)" )
+            list="$(printf '%s\n' "${cand[@]}" | grep -v '^$' | awk '!seen[$0]++')"
+            COMPREPLY=( $(compgen -W "$list" -- "$cur") )
+            ;;
+        2|3|4)  # ssl key.pem, ssl crt.pem, ca crt.pem
+            # Own filter instead of bash-completion's _filedir: no dependency on
+            # its internals, and it also works when extglob is off.
+            COMPREPLY=( $(compgen -d -- "$cur") )
+            COMPREPLY+=( $(compgen -f -- "$cur" | grep -E '\.(pem|crt|key|cer)$') )
+            return 0
+            ;;
+        *)  return 0 ;;
+    esac
+    return 0
+}
+complete -o filenames -F _ms_update_k8s_hostname_completion metalsoft-update-k8s-hostname ms-update-k8s-hostname
+EOCOMP
+}
+
+_ms_install_completion() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "[i] Error: --install-completion must run as root"
+        return 1
+    fi
+    local dir=/usr/share/bash-completion/completions
+    [ -d "$dir" ] || dir=/etc/bash_completion.d
+    [ -d "$dir" ] || { echo "[i] Error: no bash-completion directory found"; return 1; }
+
+    printf '%s\n' \
+        '# managed by metalsoft-update-k8s-hostname --install-completion' \
+        'source <(metalsoft-update-k8s-hostname --completion)' > "$dir/metalsoft-update-k8s-hostname" || return 1
+    ln -sf metalsoft-update-k8s-hostname "$dir/ms-update-k8s-hostname"
+
+    # Drop the stale eager-loaded copy once the lazy directory is in use.
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/metalsoft-update-k8s-hostname
+    echo "[i] Installed bash completion to $dir/metalsoft-update-k8s-hostname"
+    return 0
+}
+
+case "$1" in
+    --completion)         _ms_print_completion; exit 0 ;;
+    --install-completion) _ms_install_completion; exit $? ;;
+esac
+
 if [ "$EUID" -ne 0 ];then
 	echo -e "[\e[1;31m✗\e[0m] Please run as root"
 	exit 1
@@ -35,7 +105,7 @@ MS_MANIFESTS_FOLDER=${MS_MANIFESTS_FOLDER:-/root/manifests}
 
 usage ()
 {
-	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}] [${bold}path_to_ca_ssl_crt.pem${nc}]\n${lightred}Note: All certificate files must be in PEM format${nc}\n\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt (must decode to PEM format)\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests\n"
+	echo -e "Usage: ${bold}${me}${nc} ${lightgreen}newHostname.com${nc} [${bold}path_to_ssl_key.pem path_to_ssl_crt.pem${nc}] [${bold}path_to_ca_ssl_crt.pem${nc}]\n${lightred}Note: All certificate files must be in PEM format${nc}\n\n${bold}MS_SSL_KEY${nc} & ${bold}MS_SSL_CRT${nc} env variables can be used instead of PEM files to provide base64 encoded key and crt (must decode to PEM format)\n${bold}MS_MANIFESTS_FOLDER${nc} env variable can optionally be used to specify the manifests folder. Default is: /root/manifests\n\nAlso: ${bold}--completion${nc} prints the bash completion script, ${bold}--install-completion${nc} installs it (root).\n"
 }
 
 function isIPv6() {

@@ -129,6 +129,8 @@ Options:
   -y, --yes                   Non-interactive: assume "yes" to all prompts
       --dry-run               Show what would be done without changing state
   -h, --help                  Show this help
+      --completion            Print the bash completion script (as first arg)
+      --install-completion    Install the bash completion (root, as first arg)
 
 Examples:
   ms-upgrade /root/k8s-images/license-v7.3.5.tar.gz
@@ -143,6 +145,93 @@ Exit codes:
   6  apply failure            7  user declined
 EOF
 }
+
+# ── Bash completion ──────────────────────────────────────────────────────
+# Self-contained on purpose: the executable self-updates via metalsoft-updates,
+# so completion shipped elsewhere would drift from it.
+
+_ms_print_completion() {
+    cat <<'EOCOMP'
+# Tags known to the local image store, for --new-tag/--old-tag.
+_ms_upgrade_tags()
+{
+    local all
+    all="$( { ctr -n k8s.io images ls -q 2>/dev/null
+              docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null
+            } | grep -iE 'metalsoft|license' )"
+    # Fall back to every image when nothing looks MetalSoft-ish.
+    [ -n "$all" ] || all="$( { ctr -n k8s.io images ls -q 2>/dev/null
+                               docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null
+                             } )"
+    printf '%s\n' "$all" | awk -F: 'NF > 1 {print $NF}' | grep -E '^v?[0-9]' | sort -uV
+}
+
+_ms_upgrade_completion()
+{
+    local cur prev opts list
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev=""
+    ((COMP_CWORD > 0)) && prev="${COMP_WORDS[COMP_CWORD - 1]}"
+    COMPREPLY=()
+
+    opts='--mode -m --manifests-dir --agents-dir -n --namespace --license-match
+          --new-tag --old-tag --skip-import --skip-manifest-update --skip-apply
+          -y --yes --dry-run -h --help --completion --install-completion'
+
+    case "$prev" in
+        --mode)
+            COMPREPLY=( $(compgen -W 'k8s docker' -- "$cur") ); return 0 ;;
+        -m|--manifests-dir|--agents-dir)
+            COMPREPLY=( $(compgen -d -- "$cur") ); return 0 ;;
+        -n|--namespace)
+            list="$(kubectl get ns --no-headers 2>/dev/null | awk '{print $1}')"
+            COMPREPLY=( $(compgen -W "$list" -- "$cur") ); return 0 ;;
+        --new-tag|--old-tag)
+            COMPREPLY=( $(compgen -W "$(_ms_upgrade_tags)" -- "$cur") ); return 0 ;;
+        --license-match)
+            return 0 ;;
+    esac
+
+    case "$cur" in
+        -*) COMPREPLY=( $(compgen -W "$opts" -- "$cur") ); return 0 ;;
+    esac
+
+    # Positional argument: the image tarball / bundle.
+    COMPREPLY=( $(compgen -d -- "$cur") )
+    COMPREPLY+=( $(compgen -f -- "$cur" | grep -E '\.(tar|tar\.gz)$') )
+    # Nothing typed yet: list the options too, otherwise the only hint that they
+    # exist is typing '-' first.
+    [[ -n "$cur" ]] || COMPREPLY+=( $(compgen -W "$opts" -- "") )
+    return 0
+}
+complete -o filenames -F _ms_upgrade_completion ms-upgrade
+EOCOMP
+}
+
+_ms_install_completion() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "[i] Error: --install-completion must run as root"
+        return 1
+    fi
+    local dir=/usr/share/bash-completion/completions
+    [ -d "$dir" ] || dir=/etc/bash_completion.d
+    [ -d "$dir" ] || { echo "[i] Error: no bash-completion directory found"; return 1; }
+
+    printf '%s\n' \
+        '# managed by ms-upgrade --install-completion' \
+        'source <(ms-upgrade --completion)' > "$dir/ms-upgrade" || return 1
+
+    # Drop the stale eager-loaded copy once the lazy directory is in use.
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/ms-upgrade
+    echo "[i] Installed bash completion to $dir/ms-upgrade"
+    return 0
+}
+
+case "${1:-}" in
+    --completion)         _ms_print_completion; exit 0 ;;
+    # && / || form on purpose: keeps a failed install off the ERR trap set above.
+    --install-completion) _ms_install_completion && exit 0; exit 1 ;;
+esac
 
 # ── Args ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do

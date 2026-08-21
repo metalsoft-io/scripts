@@ -21,7 +21,7 @@ if ! docker images | grep -q "$image_name";then
 fi
 
 usage() {
-    echo "Usage: $0 -r <redfish_host> -u <username> -p <password> -f <folder> -h <help> -a '<other_redfish-mockup-creator_args>'"
+    echo "Usage: $(basename "$0") -r <redfish_host> -u <username> -p <password> -f <folder> -h <help> -a '<other_redfish-mockup-creator_args>'"
     exit 1
 }
 
