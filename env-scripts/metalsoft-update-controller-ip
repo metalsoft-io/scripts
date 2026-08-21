@@ -24,8 +24,8 @@ _ms_update_controller_ip_completion()
     cur="${COMP_WORDS[COMP_CWORD]}"
     COMPREPLY=()
 
-    # Locate the command itself, so a "sudo "/"env " prefix or the
-    # ms-update-controller-ip symlink does not shift the argument positions.
+    # Locate the command itself, so a "sudo "/"env " prefix does not shift the
+    # argument positions.
     base=0
     for ((i = 0; i < ${#COMP_WORDS[@]}; i++)); do
         case "${COMP_WORDS[i]}" in
@@ -60,7 +60,7 @@ _ms_update_controller_ip_completion()
         __ltrim_colon_completions "$cur"
     fi
 }
-complete -F _ms_update_controller_ip_completion metalsoft-update-controller-ip ms-update-controller-ip
+complete -F _ms_update_controller_ip_completion metalsoft-update-controller-ip
 EOCOMP
 }
 
@@ -76,14 +76,10 @@ _ms_install_completion() {
     printf '%s\n' \
         '# managed by metalsoft-update-controller-ip --install-completion' \
         'source <(metalsoft-update-controller-ip --completion)' > "$dir/metalsoft-update-controller-ip" || return 1
-    # Independent completion file per command name, no symlinks.
-    printf '%s\n' \
-        '# managed by metalsoft-update-controller-ip --install-completion' \
-        'source <(metalsoft-update-controller-ip --completion)' > "$dir/ms-update-controller-ip" || return 1
 
     # Drop the stale eager-loaded copy once the lazy directory is in use.
-    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/metalsoft-update-controller-ip /etc/bash_completion.d/ms-update-controller-ip
-    echo "[i] Installed bash completion to $dir/metalsoft-update-controller-ip and $dir/ms-update-controller-ip"
+    [ "$dir" != /etc/bash_completion.d ] && rm -f /etc/bash_completion.d/metalsoft-update-controller-ip
+    echo "[i] Installed bash completion to $dir/metalsoft-update-controller-ip"
     return 0
 }
 
