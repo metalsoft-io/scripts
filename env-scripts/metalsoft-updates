@@ -3,7 +3,7 @@
 test "$EUID" -ne 0 && { echo "Please run as root"; exit 1; }
 
 cd /tmp/
-for z in metalsoft-updates ms-selfupdate metalsoft-update-controller-ip ms-sc-set-gc-ip metalsoft-update-k8s-ips ms-set-ips metalsoft-update-k8s-hostname ms-set-hostname metalsoft-update-k8s-tag ms-set-tag netplan-cli diagnostics-collector redfish-mockup-creator ms-couchdb ms-upgrade-helper ms-upgrade
+for z in metalsoft-updates ms-selfupdate metalsoft-update-controller-ip ms-sc-set-gc-ip metalsoft-update-k8s-ips ms-set-ips metalsoft-update-k8s-hostname ms-set-hostname metalsoft-update-k8s-tag ms-set-tag netplan-cli diagnostics-collector redfish-mockup-creator ms-couchdb ms-upgrade
 do
         if [ -f /usr/local/bin/${z} -o "${z}" == "metalsoft-updates" -o "${z}" == "ms-selfupdate" ];then
                 curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} > /tmp/${z} || wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/${z} -O /tmp/${z}
