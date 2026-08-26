@@ -994,11 +994,15 @@ function get_ssl ()
 
 function get_disks ()
 {
-	df -h > "${backupFolder}/disk/df.txt" 2>&1 || true
+	# host_cmd, like df -i below: df walks every mount, so one slow or remounting
+	# network filesystem stalls the collector before any of the rest is written.
+	host_cmd "${backupFolder}/disk/df.txt" 15 df -h
 	# Inodes: a filesystem can be 50% full by bytes and still refuse every write.
 	host_cmd "${backupFolder}/disk/df_inodes.txt" 60 df -i
-	lsblk > "${backupFolder}/disk/lsblk.txt" 2>&1 || true
-	fdisk -l > "${backupFolder}/disk/fdisk.txt" 2>&1 || true
+	# Both read every block device, which is where a stuck controller or a dead disk
+	# shows up - and where they hang.
+	host_cmd "${backupFolder}/disk/lsblk.txt" 30 lsblk
+	host_cmd "${backupFolder}/disk/fdisk.txt" 30 fdisk -l
 	# What actually consumes the filesystem. df reports /var at 81%; this says whether that
 	# is container images, PV data under the k3s data-dir, or logs - the difference between
 	# "prune images" and "move the PVs onto the big volume". -x keeps a separately mounted
@@ -1555,7 +1559,9 @@ if [ "$gather" == 'gc' ];then
 	test -n "${HTTP_PROXY:-}" && test -n "$couchdbUrl" && curl_no_proxy="env NO_PROXY=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 	test -n "${http_proxy:-}" && test -n "$couchdbUrl" && curl_no_proxy="env no_proxy=$(echo -n "$couchdbUrl"|cut -d: -f1)"
 
-    if [ "$($curl_no_proxy curl -s -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
+    # --max-time on every couchdb call: a Service IP with no endpoint behind it does
+    # not refuse the connection, it black-holes it, and curl waits indefinitely.
+    if [ "$($curl_no_proxy curl -s --max-time 15 -o /dev/null -w "%{http_code}" "${couchdbUrl}/_all_dbs")" != "200" ];then
       couchdb_admin_user="$($k get configmap common -o json|jq -r .data.couchdb_admin_user)"
       couchdb_admin_password="$($k get configmap common -o json|jq -r .data.couchdb_admin_password)"
       if [ -n "$couchdb_admin_user" ] && [ -n "$couchdb_admin_password" ];then
@@ -1569,7 +1575,7 @@ if [ "$gather" == 'gc' ];then
 	else
 		echo "[i] backing up couchdb: [${couchdbUrl}]"
 	fi
-	if ! $curl_no_proxy curl -sS "http://${couchdbUrl}/_all_dbs" | jq -rce . &>/dev/null; then
+	if ! $curl_no_proxy curl -sS --max-time 15 "http://${couchdbUrl}/_all_dbs" | jq -rce . &>/dev/null; then
 		echo "CouchDB: $curl_no_proxy http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > "${backupFolder}/couchdb/couchdb_pull_failed"
 	fi
 	# Deliberately SERIAL, unlike the pod-log loop. Measured on demo: this whole phase is
@@ -1579,8 +1585,8 @@ if [ "$gather" == 'gc' ];then
 	# necessarily tiny on a production install.
 	while read -r z;do
 		test -n "$z" || continue
-		$curl_no_proxy curl -sk "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz"
-	done < <(test -n "$couchdbUrl" && $curl_no_proxy curl -sk "http://${couchdbUrl}/_all_dbs" | jq -r ".[]" 2>/dev/null)
+		$curl_no_proxy curl -sk --max-time 300 "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz"
+	done < <(test -n "$couchdbUrl" && $curl_no_proxy curl -sk --max-time 15 "http://${couchdbUrl}/_all_dbs" | jq -r ".[]" 2>/dev/null)
 
 	echo "[i] backing up k8s pod runtime logs.."
 	# --all-containers + --prefix so init-container output is captured too (kubectl
@@ -1704,7 +1710,10 @@ if [ "$extended" == '1' ];then
 	$k api-resources --no-headers|awk '{print $1}'|while read -r z;do mkdir -p "${backupFolder}/k8s/api_resources/${z}";$k get "$z" --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get "$z" "$a" -o yaml > "${backupFolder}/k8s/api_resources/${z}/${z}_${a}.yaml" 2>/dev/null;done;done || true
 
 	echo "[i] backing up k8s container logs.."
-	test -d /var/log/containers && mkdir -p "${backupFolder}/container_logs" && rsync -azL /var/log/containers/* "${backupFolder}/container_logs/" || true
+	# -L follows the symlinks /var/log/containers is made of, so this reads through to
+	# the real log files: bounded, because a full log directory on slow storage is
+	# exactly the state being investigated.
+	test -d /var/log/containers && mkdir -p "${backupFolder}/container_logs" && timeout 300 rsync -azL /var/log/containers/* "${backupFolder}/container_logs/" || true
 fi
 
 	fi   # end of the cluster-reachable branch
@@ -1751,29 +1760,48 @@ else # if gather=sc
 	get_container_netns
 	echo "[i] probing DNS from running containers.."
 	docker_dns_probe
-	test -f /opt/metalsoft/agents/docker-compose.yaml && rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker/agents/" || true
-	test -d /opt/metalsoft/nfs-storage && ls -lahR /opt/metalsoft/nfs-storage/ > "${backupFolder}/nfs/storage_ls.txt" || true
-	systemctl status docker > "${backupFolder}/docker/status.txt" || true
-	docker ps -a > "${backupFolder}/docker/ps.txt" || true
-	docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt" || true
+	test -f /opt/metalsoft/agents/docker-compose.yaml && timeout 120 rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker/agents/" || true
+	# Recursive walk of an NFS mount. Bounded, and it says so when it was cut short:
+	# a truncated listing otherwise reads as a directory with fewer files in it.
+	if [ -d /opt/metalsoft/nfs-storage ];then
+		timeout 30 ls -lahR /opt/metalsoft/nfs-storage/ > "${backupFolder}/nfs/storage_ls.txt" 2>&1 \
+			|| echo ":: (ls exited non-zero or timed out after 30s - the listing above may be partial)" >> "${backupFolder}/nfs/storage_ls.txt"
+	fi
+	# Every call to the daemon is bounded from here down. Verified: with DOCKER_HOST
+	# pointed at an unreachable address the CLI was still blocked at 25s, so a wedged
+	# dockerd - the state an SC bundle is usually collected in - stopped the run here
+	# and produced no archive at all. host_cmd where the call is a plain command, so a
+	# timed-out or failed collection says so in its own file instead of looking empty.
+	host_cmd "${backupFolder}/docker/status.txt" 30 systemctl status docker
+	host_cmd "${backupFolder}/docker/ps.txt"     60 docker ps -a
+	timeout 60 docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt" || true
 	# timeout, like the GC pod-log loop already has: `docker logs` against a wedged daemon
 	# never returns, and a collector that hangs produces no bundle at all. It does not
 	# truncate anything in the normal case.
-	docker ps|grep Restarting|awk '{print $1}'|while read -r z;do timeout 300 docker logs "$z" --tail=1000 > "${backupFolder}/docker/restarting_${z}.txt" 2>&1;done || true
-	docker images -a > "${backupFolder}/docker/images.txt" || true
-	docker info > "${backupFolder}/docker/info.txt" 2>&1 || true
-	docker system df > "${backupFolder}/docker/system_df.txt" 2>&1 || true
-	docker network ls > "${backupFolder}/docker/networks.txt" 2>&1 || true
-	docker volume ls > "${backupFolder}/docker/volumes.txt" 2>&1 || true
+	timeout 60 docker ps|grep Restarting|awk '{print $1}'|while read -r z;do timeout 300 docker logs "$z" --tail=1000 > "${backupFolder}/docker/restarting_${z}.txt" 2>&1;done || true
+	host_cmd "${backupFolder}/docker/images.txt"    60 docker images -a
+	host_cmd "${backupFolder}/docker/info.txt"      60 docker info
+	host_cmd "${backupFolder}/docker/system_df.txt" 60 docker system df
+	host_cmd "${backupFolder}/docker/networks.txt"  60 docker network ls
+	host_cmd "${backupFolder}/docker/volumes.txt"   60 docker volume ls
 	test -f /etc/docker/daemon.json && cp /etc/docker/daemon.json "${backupFolder}/docker/daemon.json" || true
-	journalctl -u docker -n 500 --no-pager > "${backupFolder}/docker/journalctl.txt" 2>&1 || true
+	host_cmd "${backupFolder}/docker/journalctl.txt" 60 journalctl -u docker -n 500 --no-pager
 	test -f /opt/metalsoft/agents/docker-compose.yaml && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read -r z;do echo "$z"|while read -r f;do find "$f" -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} "${backupFolder}/docker/agents-logs/" \;;done;done
 	# Full logs, deliberately untruncated - but bounded in time, same reason as above.
-	test -f /opt/metalsoft/agents/docker-compose.yaml && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do timeout 300 docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
+	test -f /opt/metalsoft/agents/docker-compose.yaml && timeout 60 docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do timeout 300 docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
 	# SC-specific SSL: openssl to GC
 	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl/openssl_443.txt" 2>&1
-	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:9091" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl/openssl_9091.txt" 2>&1
+	# s_client blocks for the kernel's SYN-retry window against a controller that does
+	# not answer - measured still blocked at 120s against a blackholed address - and "the
+	# agent cannot reach the controller" is the condition this bundle is usually collected
+	# under. host_cmd bounds it and writes the file whatever happens, including when
+	# openssl is absent; </dev/null on the call, or s_client sits waiting on stdin after
+	# the handshake instead of exiting.
+	if [ -n "$GCURL" ];then
+		host_cmd "${backupFolder}/ssl/openssl_443.txt" 20 openssl s_client -connect "${GCURL}:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null
+	else
+		echo ":: skipped: no CONTROLLER_TCP_ADDRESS in /opt/metalsoft/agents/docker-compose.yaml" > "${backupFolder}/ssl/openssl_443.txt"
+	fi
 	test -d /opt/metalsoft/ansible-jobs && tar czf "${backupFolder}/ansible-jobs.tar.gz" /opt/metalsoft/ansible-jobs &>/dev/null
 fi
 
