@@ -494,22 +494,32 @@ function get_system ()
 	{
 		if command -v sestatus &>/dev/null || command -v getenforce &>/dev/null;then
 			echo ":: sestatus"
-			sestatus 2>&1 || true
+			timeout 15 sestatus 2>&1 || true
 			echo; echo ":: getenforce"
-			getenforce 2>&1 || true
+			timeout 15 getenforce 2>&1 || true
 			echo; echo ":: policy packages"
 			if command -v rpm &>/dev/null;then
-				rpm -q k3s-selinux container-selinux 2>&1 || true
+				# rpm -q waits on the rpmdb lock behind a running dnf/yum transaction, which is
+				# a normal state on a host someone is mid-patching when support asks for a bundle.
+				timeout 30 rpm -q k3s-selinux container-selinux 2>&1 || true
 			else
 				echo ":: skipped: rpm is not installed on this host"
 			fi
 			echo; echo ":: labels on the runtime and storage paths"
-			ls -Zd /var/lib/rancher/k3s /var/lib/rancher/rke2 /var/lib/kubelet \
+			timeout 15 ls -Zd /var/lib/rancher/k3s /var/lib/rancher/rke2 /var/lib/kubelet \
 				/var/lib/containerd /var/lib/docker /var/lib/containers /var/lib/etcd \
 				/etc/kubernetes /var/log 2>&1 || true
 			echo; echo ":: recent AVC denials (ausearch -m AVC,USER_AVC -ts today, last 200)"
 			if command -v ausearch &>/dev/null;then
-				ausearch -m AVC,USER_AVC -ts today 2>&1 | tail -n 200 || true
+				# Scans every rotated audit.log, so it grows with the audit configuration, not
+				# with the window asked for: -ts today does not stop it reading the old files.
+				# No `|| true` on the pipeline: it would run `true`, whose own PIPESTATUS then
+				# overwrites the 124 the check below reads. The enclosing group already tolerates
+				# a failure here.
+				timeout 60 ausearch -m AVC,USER_AVC -ts today 2>&1 | tail -n 200
+				# PIPESTATUS, as in disk/usage_breakdown.txt: tail prints whatever arrived before
+				# the kill, so a timed-out scan otherwise reads as a host with few denials.
+				test "${PIPESTATUS[0]}" -eq 124 && echo ":: (ausearch timed out after 60s - the list above is partial)"
 			else
 				echo ":: skipped: ausearch is not installed on this host"
 			fi
@@ -1208,8 +1218,12 @@ function get_k8s_cluster ()
 				echo ":: path does not exist on this node"
 				continue
 			fi
-			df -h "$_p" 2>&1 || true
-			ls -Zd "$_p" 2>&1 || true
+			# Bounded like the du below: a PV path is the one place in this archive where a
+			# network filesystem is expected, and df/stat on a slow or remounting mount is
+			# where the collector would otherwise sit. (A hard-mounted NFS server that is gone
+			# blocks in D state, which no timeout can interrupt - this covers slow, not dead.)
+			timeout 15 df -h "$_p" 2>&1 || true
+			timeout 15 ls -Zd "$_p" 2>&1 || true
 			if [ $(( SECONDS - _pvt0 )) -ge "$_pvbudget" ];then
 				echo ":: du skipped: the ${_pvbudget}s budget for this file was spent on earlier paths"
 				continue
