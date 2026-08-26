@@ -21,6 +21,10 @@ which tee &>/dev/null || { echo "ERROR: Please install 'tee'. Exiting..."; exit 
 # next line yield an empty path, and the script then dies at the exec below with
 # "Bad file descriptor" and "tee: ''" instead of saying what is wrong.
 which mktemp &>/dev/null || { echo "ERROR: Please install 'mktemp'. Exiting..."; exit 1; }
+# 129 calls in this script are wrapped in `timeout`, and several of them swallow their own
+# stderr, so without it the collection does not fail loudly - it produces a bundle that is
+# largely empty with nothing in it saying why. Same coreutils package as the two above.
+which timeout &>/dev/null || { echo "ERROR: Please install 'timeout' (coreutils). Exiting..."; exit 1; }
 
 # https://askubuntu.com/a/1001404/1113727
 bash_log=$(mktemp)
@@ -586,15 +590,40 @@ function get_runtime_config ()
 		done
 		if command -v systemctl &>/dev/null;then
 			for f in k3s k3s-agent rke2-server rke2-agent kubelet containerd crio docker;do
-				systemctl list-unit-files "${f}.service" &>/dev/null || continue
+				# Both bounded. Measured against a bus socket that accepts and never answers:
+				# `systemctl cat` was STILL blocked at 60s (rc=124 under timeout) - it does
+				# NOT inherit a dbus timeout - while list-unit-files self-bounds at ~29s.
+				# A wedged systemd is a normal state on a host someone collects a bundle
+				# from, and 8 units x an unbounded call is the shape that produces no archive
+				# at all.
+				timeout 30 systemctl list-unit-files "${f}.service" &>/dev/null
+				_slrc=$?
+				# One message, then stop: systemd that did not answer for the first unit will
+				# not answer for the other seven, and saying so once beats 8x30s of silence
+				# followed by a file that looks like a host with no runtime units.
+				test "$_slrc" -eq 124 && { echo -e "\n:: systemd did not answer within 30s - no unit definitions were collected"; break; }
+				test "$_slrc" -eq 0 || continue
 				echo -e "\n:::: systemctl cat ${f}\n"
-				systemctl cat "${f}" 2>&1 || true
+				timeout 30 systemctl cat "${f}" 2>&1 || echo ":: (systemctl cat exited non-zero or timed out after 30s)"
 			done
+			unset _slrc
 		fi
 		# k3s/RKE2 record the server flags on the node object; kubeadm has no equivalent
 		# annotation, and the static pod manifests above carry the same information there.
 		echo -e "\n:::: node annotations: k3s.io/node-args, kubeadm.alpha.kubernetes.io/cri-socket\n"
-		timeout 60 $k_orig get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.k3s\.io/node-args}{"\t"}{.metadata.annotations.kubeadm\.alpha\.kubernetes\.io/cri-socket}{"\n"}{end}' 2>&1 || true
+		# Gated, because this function now also runs on a Site Controller, where there is no
+		# kubectl at all: an empty $k_orig would expand to `timeout 60 get nodes ...` and
+		# write "timeout: failed to run command 'get'" into the archive, which reads as a
+		# broken collector rather than a host that has no cluster. Also skipped when the
+		# cluster is known unreachable - the 60s would be spent to reprint what
+		# CLUSTER_UNREACHABLE.txt already says.
+		if [ -z "${k_orig:-}" ];then
+			echo ":: skipped: no kubectl on this host, so there is no node object to read"
+		elif [ -n "${cluster_unreachable:-}" ];then
+			echo ":: skipped: the cluster is unreachable (see CLUSTER_UNREACHABLE.txt)"
+		else
+			timeout 60 $k_orig get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.k3s\.io/node-args}{"\t"}{.metadata.annotations.kubeadm\.alpha\.kubernetes\.io/cri-socket}{"\n"}{end}' 2>&1 || true
+		fi
 	} > "$out" 2>&1 || true
 }
 
@@ -1025,6 +1054,14 @@ function get_disks ()
 		# cover every runtime) cannot multiply into 20 minutes of collector runtime.
 		_dubudget=300
 		_dut0=$SECONDS
+		# One scratch file for du's stderr, reused per path rather than created inside the
+		# loop, so there is nothing to leak on the `continue` paths. /dev/null when mktemp
+		# fails: `[ -s /dev/null ]` is false, so the reporting below simply goes quiet.
+		# Tested for emptiness, not just exit status, like the two other mktemp call sites
+		# in this file: an empty path would make `: > ""` and `du 2>""` fail on every
+		# iteration and take the du output down with them.
+		_duerr="$(mktemp 2>/dev/null)"
+		test -n "$_duerr" || _duerr=/dev/null
 		for _dp in /var/lib/rancher/k3s /var/lib/rancher/rke2 /var/lib/kubelet \
 			/var/lib/containerd /var/lib/docker /var/lib/containers /var/lib/etcd \
 			/etc/kubernetes /var/log;do
@@ -1037,12 +1074,24 @@ function get_disks ()
 				echo ":: skipped: the ${_dubudget}s budget for this file was spent on earlier paths"
 				continue
 			fi
+			: > "$_duerr"
 			# PIPESTATUS because the pipeline's status is sort's, so a du that timed out
 			# would otherwise look like a directory that is genuinely empty.
-			timeout 120 du -hx --max-depth=1 "$_dp" 2>/dev/null | sort -h
+			timeout 120 du -hx --max-depth=1 "$_dp" 2>"$_duerr" | sort -h
 			test "${PIPESTATUS[0]}" -eq 124 && echo ":: (du timed out after 120s - not walked)"
+			# NOT 2>/dev/null: an unreadable subdirectory makes du UNDERCOUNT, and a silent
+			# undercount reads as an authoritative size - so "/var is 81% full but nothing
+			# accounts for it" becomes a dead end. The root check at the top of this script
+			# is commented out, so a non-root run is reachable and yields one such line per
+			# directory; bounded to a count plus a sample for that reason.
+			if [ -s "$_duerr" ];then
+				echo ":: NOTE: du could not read $(grep -c . "$_duerr") path(s) below this one, so"
+				echo ":: the sizes above are an UNDERCOUNT. First lines of du's own output:"
+				head -3 "$_duerr" | sed 's/^/::   /'
+			fi
 		done
-		unset _dp _dubudget _dut0
+		test "$_duerr" != /dev/null && rm -f "$_duerr"
+		unset _dp _dubudget _dut0 _duerr
 	} > "${backupFolder}/disk/usage_breakdown.txt" 2>&1 || true
 	# Cached image inventory. An image a pod references that is NOT listed here was
 	# garbage-collected by kubelet - which is exactly what DiskPressure triggers - turning
@@ -1769,16 +1818,26 @@ else # if gather=sc
 		unset _cenv
 	fi
 
-	# Use extracted hostname if available, otherwise fall back to envname
-	if [ -n "$config_hostname" ]; then
-		envnamelabel="${envname}-${config_hostname}-sc"
-	else
-		envnamelabel="-${envname}-sc"
-	fi
+	# Assembled from the parts that actually have a value. A site controller has no
+	# namespace of its own - on this demo agent $envname is empty (collection_info.txt
+	# reports "namespace: <none>"), because the compose file carries no URL= line and -n
+	# is not required on the SC side - so interpolating it unconditionally produced
+	# ms-diagnostics-<date>--<host>-sc.tar.gz. Anything absent now contributes no segment
+	# rather than an empty one, and the shape when both are known is unchanged.
+	envnamelabel=""
+	test -n "$envname"         && envnamelabel="${envnamelabel}-${envname}"
+	test -n "$config_hostname" && envnamelabel="${envnamelabel}-${config_hostname}"
+	envnamelabel="${envnamelabel}-sc"
 	test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}/")"
 
 	create_dirs
 	get_system
+	# Also on the SC side: the containerd config, the docker unit and its drop-ins, and
+	# /etc/docker/daemon.json in context are what decide where an agent pulls from and how
+	# dockerd was started, and none of it is reproduced anywhere else in an SC bundle. The
+	# k3s/RKE2 paths in there simply report themselves absent on a compose host, which is
+	# an answer; a missing runtime_config.txt is not.
+	get_runtime_config
 	get_network
 	get_disks
 	get_ssl
@@ -1808,7 +1867,19 @@ else # if gather=sc
 	# container is restarting" - a health signal - and without this it says exactly the
 	# same thing when the daemon timed out and nothing was ever listed.
 	timeout 60 docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt"
-	test "${PIPESTATUS[0]}" -eq 124 && echo ":: (docker ps timed out after 60s - this file is not a clean bill of health)" >> "${backupFolder}/docker/restarting.txt"
+	# Any non-zero from `docker ps`, not only the 124 of a timeout: docker absent exits 127
+	# and a daemon that answers with an error exits 1, and BOTH leave this file empty, i.e.
+	# saying the same thing as a healthy host. Captured into a variable first because
+	# PIPESTATUS is overwritten by the next pipeline that runs.
+	_psrc="${PIPESTATUS[0]}"
+	if [ "$_psrc" -ne 0 ];then
+		{
+			echo ":: (docker ps exited ${_psrc} - 124 is the 60s timeout, 127 is docker not"
+			echo ":: installed, anything else is the daemon refusing. Nothing was listed, so"
+			echo ":: an empty file here is NOT a clean bill of health - see docker/ps.txt.)"
+		} >> "${backupFolder}/docker/restarting.txt"
+	fi
+	unset _psrc
 	# timeout, like the GC pod-log loop already has: `docker logs` against a wedged daemon
 	# never returns, and a collector that hangs produces no bundle at all. It does not
 	# truncate anything in the normal case.
