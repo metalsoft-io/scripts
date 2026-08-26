@@ -292,28 +292,15 @@ function k_cmd ()
 	return 0
 }
 
-# In-cluster DNS probe, by exec-ing into pods that are ALREADY running. Deliberately
-# creates nothing: a fresh probe pod gets a fresh sandbox, and a fresh sandbox is the
-# one thing that resolved fine on the customer cluster where every existing pod failed -
-# so a probe pod would have reported all-green while the environment was broken.
-# Every step tolerates an image with no shell and no DNS tooling.
-function dns_probe ()
+# The probe body, shared by the k8s and docker DNS probes so the two cannot drift.
+# Pure POSIX sh, and single-quoted here so OUR shell expands nothing - it is interpreted
+# by the target container's shell. Names to resolve arrive as positional arguments
+# rather than interpolated into the text, so a name containing a quote or ';' cannot
+# inject into the command that runs inside the container.
+function dns_probe_script ()
 {
-	local out="${backupFolder}/k8s/dns/probe.txt" pods p names script
-	# Up to 3 Running pods in our namespace, oldest sandbox first: those have been alive
-	# longest and are the most likely to have drifted (a pod's netns state survives every
-	# container restart). Default `get pod` order is alphabetical, not by age, so the sort
-	# is explicit - and it falls back to unsorted because a --sort-by kubectl cannot
-	# resolve returns "No resources found" with exit 0 rather than an error.
-	pods="$(timeout 60 $k get pod --no-headers --sort-by=.metadata.creationTimestamp 2>/dev/null \
-		| awk '$3=="Running"{print $1}' | head -3)"
-	test -n "$pods" || pods="$(timeout 60 $k get pod --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | head -3)"
-	names="kubernetes.default.svc.cluster.local mysql-service mysql-service.${envname}.svc.cluster.local"
-	# Body is single-quoted so OUR shell expands nothing: it is interpreted by the pod's
-	# shell. The names are passed as positional arguments rather than interpolated into
-	# the script text, so a namespace containing a quote or ';' cannot inject into the
-	# command that runs inside the container.
-	script='echo "--- id: $(id -u 2>/dev/null) ---"
+	cat <<'MSDNSPROBE'
+echo "--- id: $(id -u 2>/dev/null) ---"
 echo "--- /etc/resolv.conf ---"; cat /etc/resolv.conf 2>&1
 echo "--- /etc/nsswitch.conf ---"; cat /etc/nsswitch.conf 2>&1 || echo "(absent)"
 echo "--- tools present ---"; for t in getent nslookup dig host node python3; do
@@ -333,7 +320,28 @@ for n in "$@"; do
       d.resolve4(n,(e,r)=>console.log(\"  A  via c-ares:\",e?e.code:String(r)));
       d.resolve6(n,(e,r)=>console.log(\"  AAAA via c-ares:\",e?e.code:String(r)));" "$n" 2>&1 || echo "  node: FAILED"
   fi
-done'
+done
+MSDNSPROBE
+}
+
+# In-cluster DNS probe, by exec-ing into pods that are ALREADY running. Deliberately
+# creates nothing: a fresh probe pod gets a fresh sandbox, and a fresh sandbox is the
+# one thing that resolved fine on the customer cluster where every existing pod failed -
+# so a probe pod would have reported all-green while the environment was broken.
+# Every step tolerates an image with no shell and no DNS tooling.
+function dns_probe ()
+{
+	local out="${backupFolder}/k8s/dns/probe.txt" pods p names script
+	# Up to 3 Running pods in our namespace, oldest sandbox first: those have been alive
+	# longest and are the most likely to have drifted (a pod's netns state survives every
+	# container restart). Default `get pod` order is alphabetical, not by age, so the sort
+	# is explicit - and it falls back to unsorted because a --sort-by kubectl cannot
+	# resolve returns "No resources found" with exit 0 rather than an error.
+	pods="$(timeout 60 $k get pod --no-headers --sort-by=.metadata.creationTimestamp 2>/dev/null \
+		| awk '$3=="Running"{print $1}' | head -3)"
+	test -n "$pods" || pods="$(timeout 60 $k get pod --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | head -3)"
+	names="kubernetes.default.svc.cluster.local mysql-service mysql-service.${envname}.svc.cluster.local"
+	script="$(dns_probe_script)"
 	mkdir -p "${backupFolder}/k8s/dns"
 	{
 		echo ":: In-cluster DNS as seen from pods that are already running (nothing was created)."
@@ -580,7 +588,11 @@ function get_runtime_config ()
 # cluster's own pods reference, so the list stays correct as the deployment changes.
 function get_egress ()
 {
-	local out="${backupFolder}/network/egress_reachability.txt" hosts h t=2 tmpd i=0 maxhosts=20 found=0
+	local out="${backupFolder}/network/egress_reachability.txt" hosts h t=2 tmpd i=0 maxhosts=20 found=0 ctrl
+	# Two steps, not ${config_hostname%%:*} directly: that form aborts the whole run under
+	# set -u if the variable is ever unset, and a collector must not die over a target list.
+	ctrl="${config_hostname:-}"
+	ctrl="${ctrl%%:*}"
 	hosts="$(
 		{
 			# Defaults FIRST, and deduped with awk rather than sort -u, so that the order is
@@ -588,11 +600,25 @@ function get_egress ()
 			# MetalSoft endpoints past the cap below. (An image with no registry prefix
 			# implies Docker Hub, which is why it is in this list.)
 			printf 'registry.metalsoft.dev\nrepo.metalsoft.io\ndiagnostics-report.metalsoft.io\nregistry-1.docker.io\nquay.io\n'
-			# 15s, not the usual 60: this call only ENRICHES the target list, the defaults
-			# above stand on their own, and a black-holed apiserver is exactly when someone
-			# runs diagnostics - it must not stall the whole check.
-			timeout 15 $k_orig get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{range .spec.initContainers[*]}{.image}{"\n"}{end}{end}' 2>/dev/null \
-				| awk -F/ 'NF>1 && $1 ~ /[.:]/ {print $1}' | cut -d: -f1
+			# 15s, not the usual 60: these calls only ENRICH the target list, the defaults
+			# above stand on their own, and a black-holed apiserver (or a wedged dockerd) is
+			# exactly when someone runs diagnostics - it must not stall the whole check.
+			if [ "$gather" == 'gc' ];then
+				timeout 15 $k_orig get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{range .spec.initContainers[*]}{.image}{"\n"}{end}{end}' 2>/dev/null \
+					| awk -F/ 'NF>1 && $1 ~ /[.:]/ {print $1}' | cut -d: -f1
+			else
+				# SC: the registries this host actually pulls from, plus the controller it
+				# talks to - which is the one endpoint an agent cannot work without, and the
+				# thing the existing openssl s_client check cannot distinguish a DNS failure
+				# from a connect failure on.
+				command -v docker &>/dev/null && timeout 15 docker images --format '{{.Repository}}' 2>/dev/null \
+					| awk -F/ 'NF>1 && $1 ~ /[.:]/ {print $1}' | cut -d: -f1
+				# $ctrl is config_hostname with any port stripped: cut -d/ -f3 on a
+				# CONTROLLER_*_URI yields host:port when the URI carries one, and the
+				# hostname allowlist below would reject that outright, silently dropping
+				# the single endpoint an agent cannot work without.
+				printf '%s\n' "$ctrl"
+			fi
 		} | grep -v '^$' | awk '!seen[$0]++'
 	)"
 	# Host count is the one input here that is not otherwise bounded, and it multiplies
@@ -684,6 +710,209 @@ function get_egress ()
 		cat "${tmpd}"/* 2>/dev/null
 	} > "$out" 2>&1 || true
 	rm -rf "$tmpd"
+}
+
+# DNS as the CONTAINERS see it - the SC counterpart to dns_probe. Not redundant with the
+# host's /etc/resolv.conf: on a user-defined network Docker puts its own embedded resolver
+# at 127.0.0.11 inside the container and forwards from there, so the host can resolve
+# perfectly while every agent container fails. Same discipline as dns_probe: exec only
+# into containers that are ALREADY running, create nothing, and share the probe body.
+function docker_dns_probe ()
+{
+	local out="${backupFolder}/docker/dns_probe.txt" ctrs c names script ctrl
+	if ! command -v docker &>/dev/null;then
+		echo ":: skipped: docker is not installed on this host" > "$out" 2>&1
+		return 0
+	fi
+	# Oldest sandbox first, for the same reason dns_probe sorts pods by creationTimestamp:
+	# the longest-lived containers are the ones most likely to have drifted. `docker ps`
+	# defaults to NEWEST first, which would pick exactly the wrong three.
+	ctrs="$(timeout 60 docker ps --format '{{.CreatedAt}}	{{.Names}}' 2>/dev/null | sort | head -3 | cut -f2)"
+	# The controller is the one name an agent MUST resolve; the registries are what it
+	# pulls from. config_hostname is derived from the compose file earlier in the sc block,
+	# and %%:* strips a port: the CONTROLLER_WS_URI / REMOTE_CONSOLE_URI branches take
+	# `cut -d/ -f3`, which yields host:port when the URI carries one, and
+	# `getent hosts gc.example.com:9001` fails - reporting the controller as unresolvable
+	# when it resolves perfectly well.
+	ctrl="${config_hostname:-}"
+	names="${ctrl%%:*} registry.metalsoft.dev repo.metalsoft.io"
+	script="$(dns_probe_script)"
+	{
+		echo ":: DNS as seen from containers that are already running (nothing was created)."
+		echo ":: Docker attaches an embedded resolver at 127.0.0.11 on user-defined networks,"
+		echo ":: so a container's view differs from the host's - compare against"
+		echo ":: system/resolv.conf before concluding the host DNS is fine."
+		echo ":: getaddrinfo failing while c-ares succeeds = resolver/NSS issue inside the image."
+		echo ":: Everything timing out = the container's egress is broken, DNS is the symptom."
+		echo ":: CAVEAT: the c-ares lines do NOT apply any search list, so a SHORT name"
+		echo ":: returning ENOTFOUND there while getaddrinfo succeeds is normal."
+		echo
+		if [ -z "$ctrs" ];then
+			echo ":: no running containers; nothing to probe."
+		fi
+		for c in $ctrs;do
+			echo "================================================================"
+			echo ":::: container ${c}"
+			# $names must word-split into separate argv entries, one per name
+			# shellcheck disable=SC2086
+			timeout 90 docker exec "$c" sh -c "$script" _ $names 2>&1 \
+				|| echo ":: (exec failed - image may have no shell, or the container is not execable)"
+		done
+	} > "$out" 2>&1 || true
+	return 0
+}
+
+# Docker state, the SC counterpart to get_k8s/get_k8s_cluster. `docker ps -a` is one line
+# per container; everything that explains a failure - restart policy, health, OOMKilled,
+# exit code, mounts, DNS config, a network's subnet - lives in inspect output.
+function get_docker ()
+{
+	local d="${backupFolder}/docker" ctrs nets dfcap f
+	if ! command -v docker &>/dev/null;then
+		# Every file this function is expected to produce, not just the first one: an
+		# absent file cannot be told apart from a collection that was never attempted.
+		for f in version.txt stats.txt system_df_v.txt events.txt network_inspect.json \
+			inspect.json compose_config.yaml;do
+			echo ":: skipped: docker is not installed on this host" > "${d}/${f}" 2>/dev/null || true
+		done
+		return 0
+	fi
+	host_cmd "${d}/version.txt"     30 docker version
+	host_cmd "${d}/stats.txt"       60 docker stats --no-stream
+	host_cmd "${d}/system_df_v.txt" 60 docker system df -v
+	# Measured 6007 lines / 536KB on a host with many anonymous volumes, ~95% of it the
+	# Local Volumes tail. Images and Containers are printed first, so a head-cap keeps
+	# what matters - and this says so rather than truncating silently.
+	# wc -l, not grep -c .: head counts ALL lines, so counting only non-empty ones would
+	# cap at a different threshold than the one being applied. Staged through a file in
+	# TMPDIR rather than beside the target, so a failed rewrite cannot leave a stray
+	# .part inside the archive.
+	if [ "$(wc -l < "${d}/system_df_v.txt" 2>/dev/null || echo 0)" -gt 2000 ];then
+		dfcap="$(mktemp 2>/dev/null)" || dfcap=""
+		if [ -n "$dfcap" ];then
+			{
+				head -n 2000 "${d}/system_df_v.txt"
+				echo
+				echo ":: (truncated to 2000 lines - the per-volume tail was dropped."
+				echo ":: Summary totals are in docker/system_df.txt)"
+			} > "$dfcap" && mv -f "$dfcap" "${d}/system_df_v.txt"
+			rm -f "$dfcap"
+		fi
+	fi
+	# Restart, OOM and health-transition history: the SC counterpart to kubectl events,
+	# and it reaches further back than the k8s API's 1h event TTL. --until is REQUIRED -
+	# without it `docker events` streams and never returns (verified: rc=124 under
+	# timeout). "now" is rejected by the parser ("failed to parse value as time or
+	# duration"); 0s is accepted. The exec_* lines are healthcheck bookkeeping and on a
+	# host with 5s healthchecks they are almost all of the output, evicting real events.
+	{
+		echo ":: docker events --since 24h --until 0s"
+		_evt="$(mktemp 2>/dev/null)" || _evt=""
+		if [ -z "$_evt" ];then
+			echo ":: skipped: could not create a temporary file"
+		else
+			# Via a file, not a variable: a busy daemon can emit six figures of events in
+			# 24h and holding that in shell memory is not free.
+			timeout 90 docker events --since 24h --until 0s > "$_evt" 2>&1 || true
+			echo ":: $(grep -c . "$_evt") events in the window, $(grep -cE ' container exec_(create|start|die)' "$_evt") of them healthcheck exec_* bookkeeping (removed below)"
+			echo
+			grep -vE ' container exec_(create|start|die)' "$_evt" | tail -n 2000 || true
+			rm -f "$_evt"
+		fi
+		unset _evt
+	} > "${d}/events.txt" 2>&1 || true
+	# Networks in full: subnet, gateway, driver, attached containers. `network ls` gives
+	# names only, and a container that cannot reach its peers is usually explained here.
+	{
+		echo ":: docker network inspect, every network"
+		echo
+		nets="$(timeout 30 docker network ls -q 2>/dev/null | tr '\n' ' ')"
+		if [ -n "$nets" ];then
+			# shellcheck disable=SC2086
+			timeout 60 docker network inspect $nets 2>&1 || true
+		else
+			echo ":: no networks listed, or the listing failed"
+		fi
+	} > "${d}/network_inspect.json" 2>&1 || true
+	# Every container in ONE call, not one call per container: `docker inspect` accepts
+	# many names, whereas a loop is N timeouts deep - 30 containers against a wedged
+	# daemon would be 30x30s. One call is bounded whatever the container count, and it
+	# also avoids shipping an empty inspect/ directory when there are none.
+	{
+		echo ":: docker inspect, every container from docker ps -a"
+		echo
+		ctrs="$(timeout 30 docker ps -a --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
+		if [ -n "$ctrs" ];then
+			# Docker restricts names to [a-zA-Z0-9][a-zA-Z0-9_.-]*, so the split is safe
+			# shellcheck disable=SC2086
+			timeout 90 docker inspect $ctrs 2>&1 || true
+		else
+			echo ":: no containers listed, or the listing failed"
+		fi
+	} > "${d}/inspect.json" 2>&1 || true
+	# The RESOLVED compose config - variables interpolated, defaults applied - as opposed
+	# to the raw file rsynced into docker/agents/.
+	{
+		if [ ! -f /opt/metalsoft/agents/docker-compose.yaml ];then
+			echo ":: /opt/metalsoft/agents/docker-compose.yaml is not present on this host"
+		elif docker compose version &>/dev/null;then
+			timeout 60 docker compose -f /opt/metalsoft/agents/docker-compose.yaml config 2>&1
+		elif command -v docker-compose &>/dev/null;then
+			timeout 60 docker-compose -f /opt/metalsoft/agents/docker-compose.yaml config 2>&1
+		else
+			echo ":: skipped: neither 'docker compose' nor 'docker-compose' is available"
+		fi
+	} > "${d}/compose_config.yaml" 2>&1 || true
+	return 0
+}
+
+# Per-container netns: the SC counterpart to get_pod_netns. Read from the host with
+# nsenter against the container's PID rather than `docker exec ip addr`, so it works on
+# images that carry no 'ip' binary. Needs root; says so when it cannot.
+function get_container_netns ()
+{
+	local out="${backupFolder}/docker/container_netns.txt" cids cmap
+	{
+		echo ":: Network namespace of each running container: addresses, routes, neighbours."
+		echo ":: Unobtainable after the fact - a stale gateway ARP entry or a half-built veth"
+		echo ":: only shows here."
+		echo
+		if ! command -v docker &>/dev/null;then
+			echo ":: skipped: docker is not installed on this host"
+		elif ! command -v nsenter &>/dev/null;then
+			echo ":: skipped: nsenter is not installed on this host (util-linux)"
+		else
+			# Names and PIDs in ONE docker call. A per-container `docker inspect` is N
+			# timeouts deep against a wedged daemon; after this, nsenter only touches
+			# /proc, which cannot hang on the daemon. get_pod_netns takes the same shape on
+			# the GC side by reading /run/netns instead of calling kubectl per pod.
+			cids="$(timeout 60 docker ps -q 2>/dev/null | tr '\n' ' ')"
+			if [ -z "$cids" ];then
+				echo ":: no running containers, or the listing failed"
+			else
+				# container ids are hex, so the split is safe
+				# shellcheck disable=SC2086
+				cmap="$(timeout 60 docker inspect -f '{{.Name}} {{.State.Pid}}' $cids 2>&1)"
+				if [ -z "$cmap" ];then
+					echo ":: docker inspect returned nothing for the running containers"
+				else
+					printf '%s\n' "$cmap" | while read -r _cn _cpid;do
+						test -n "$_cn" || continue
+						# {{.Name}} carries a leading slash
+						echo -e "\n:::: ${_cn#/} (pid ${_cpid:-unknown})\n"
+						if [ -z "$_cpid" ] || [ "$_cpid" = "0" ];then
+							echo ":: no PID - the container is not running"
+							continue
+						fi
+						echo "-- ip -o addr"; timeout 10 nsenter -t "$_cpid" -n ip -o addr 2>&1 || echo "   (failed)"
+						echo "-- ip route";   timeout 10 nsenter -t "$_cpid" -n ip route 2>&1 || echo "   (failed)"
+						echo "-- ip neigh";   timeout 10 nsenter -t "$_cpid" -n ip neigh 2>&1 || echo "   (failed)"
+					done
+				fi
+			fi
+		fi
+	} > "$out" 2>&1 || true
+	return 0
 }
 
 function get_network ()
@@ -1045,8 +1274,51 @@ function get_k8s ()
 	# hold an EXTERNAL-IP that nothing is announcing: the pool assigns the address, the
 	# L2Advertisement/BGPAdvertisement is what puts it on the wire. Without these the
 	# pool alone reads as "configured" when the VIP is unreachable.
-	k_cmd "${backupFolder}/k8s/resources/metallb.txt" 60 -n metallb-system get all,ipaddresspool,l2advertisement,bgpadvertisement,bgppeer,bfdprofile,community -o wide
-	k_cmd "${backupFolder}/k8s/resources/metallb.yaml" 60 -n metallb-system get ipaddresspool,l2advertisement,bgpadvertisement,bgppeer,bfdprofile,community -o yaml
+	# `get all` on its own, NOT combined with the CRs: kubectl fails the entire request if
+	# any single requested type is unknown - verified against a live cluster,
+	# `get all,ipaddresspool,doesnotexist` returns rc=1 and no output at all - so on a GC
+	# without MetalLB a combined call would throw away the workload listing too.
+	k_cmd "${backupFolder}/k8s/resources/metallb.txt" 60 -n metallb-system get all -o wide
+	# Ask the API which metallb.io types exist instead of hardcoding a list. A fixed list
+	# goes stale in both directions: a live 0.16 cluster also exposes configurationstates
+	# (which carries a Valid/ERRORSUMMARY column worth having) and servicel2statuses, while
+	# an older install without communities/bfdprofiles would make a fixed list fail
+	# outright by the rule above.
+	# Keep the exit status, not just the output: a degraded discovery API returns NOTHING
+	# with its error on stderr, and reporting that as "MetalLB is not installed" would be
+	# a false statement made exactly when the cluster is unwell. Verified against a live
+	# apiserver - discovery failure exits 1, an unknown api-group exits 0 with no output,
+	# so rc separates "could not ask" from "asked, none exist".
+	_mlbraw="$(timeout 30 $k_orig api-resources --api-group=metallb.io --no-headers -o name 2>&1)"
+	_mlbrc=$?
+	if [ "$_mlbrc" -eq 0 ];then
+		_mlbtypes="$(printf '%s\n' "$_mlbraw" | grep -v '^$' | tr '\n' ',' | sed 's/,$//')"
+	else
+		_mlbtypes=""
+	fi
+	{
+		if [ "$_mlbrc" -ne 0 ];then
+			echo ":: could not list metallb.io types (api-resources exited ${_mlbrc}). This is"
+			echo ":: NOT evidence that MetalLB is absent - the discovery API did not answer:"
+			printf '%s\n' "$_mlbraw" | head -5
+		elif [ -z "$_mlbtypes" ];then
+			echo ":: no metallb.io resource types are registered on this cluster"
+		else
+			echo ":: types: ${_mlbtypes}"
+			echo
+			timeout 60 $k_orig get "$_mlbtypes" -A -o wide 2>&1 || true
+		fi
+	} > "${backupFolder}/k8s/resources/metallb_crs.txt" 2>&1 || true
+	{
+		if [ "$_mlbrc" -ne 0 ];then
+			echo ":: could not list metallb.io types (api-resources exited ${_mlbrc}); see metallb_crs.txt"
+		elif [ -z "$_mlbtypes" ];then
+			echo ":: no metallb.io resource types are registered on this cluster"
+		else
+			timeout 60 $k_orig get "$_mlbtypes" -A -o yaml 2>&1 || true
+		fi
+	} > "${backupFolder}/k8s/resources/metallb_crs.yaml" 2>&1 || true
+	unset _mlbtypes _mlbraw _mlbrc
 
 	$k_orig -n metallb-system get pods --no-headers | unhealthy_pods | while read -r pod
 do
@@ -1459,13 +1731,21 @@ else # if gather=sc
 	get_disks
 	get_ssl
 
+	get_egress
 	echo "[i] backing up docker stats.."
+	get_docker
+	get_container_netns
+	echo "[i] probing DNS from running containers.."
+	docker_dns_probe
 	test -f /opt/metalsoft/agents/docker-compose.yaml && rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker/agents/" || true
 	test -d /opt/metalsoft/nfs-storage && ls -lahR /opt/metalsoft/nfs-storage/ > "${backupFolder}/nfs/storage_ls.txt" || true
 	systemctl status docker > "${backupFolder}/docker/status.txt" || true
 	docker ps -a > "${backupFolder}/docker/ps.txt" || true
 	docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt" || true
-	docker ps|grep Restarting|awk '{print $1}'|while read -r z;do docker logs "$z" --tail=1000 > "${backupFolder}/docker/restarting_${z}.txt";done || true
+	# timeout, like the GC pod-log loop already has: `docker logs` against a wedged daemon
+	# never returns, and a collector that hangs produces no bundle at all. It does not
+	# truncate anything in the normal case.
+	docker ps|grep Restarting|awk '{print $1}'|while read -r z;do timeout 300 docker logs "$z" --tail=1000 > "${backupFolder}/docker/restarting_${z}.txt" 2>&1;done || true
 	docker images -a > "${backupFolder}/docker/images.txt" || true
 	docker info > "${backupFolder}/docker/info.txt" 2>&1 || true
 	docker system df > "${backupFolder}/docker/system_df.txt" 2>&1 || true
@@ -1474,7 +1754,8 @@ else # if gather=sc
 	test -f /etc/docker/daemon.json && cp /etc/docker/daemon.json "${backupFolder}/docker/daemon.json" || true
 	journalctl -u docker -n 500 --no-pager > "${backupFolder}/docker/journalctl.txt" 2>&1 || true
 	test -f /opt/metalsoft/agents/docker-compose.yaml && grep -oP '\s+\-\s+\K/opt/metalsoft/logs[^\:]*' /opt/metalsoft/agents/docker-compose.yaml|while read -r z;do echo "$z"|while read -r f;do find "$f" -type f \( -iname "*.log" -o -iname "*.log.1" \) -exec cp {} "${backupFolder}/docker/agents-logs/" \;;done;done
-	test -f /opt/metalsoft/agents/docker-compose.yaml && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
+	# Full logs, deliberately untruncated - but bounded in time, same reason as above.
+	test -f /opt/metalsoft/agents/docker-compose.yaml && docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do timeout 300 docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
 	# SC-specific SSL: openssl to GC
 	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
 	test -n "$GCURL" && which openssl &>/dev/null && openssl s_client -connect "$GCURL:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null > "${backupFolder}/ssl/openssl_443.txt" 2>&1
