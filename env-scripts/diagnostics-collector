@@ -543,6 +543,9 @@ function get_runtime_config ()
 {
 	local out="${backupFolder}/system/runtime_config.txt" f
 	{
+		# /etc/cni/net.d is empty on k3s - verified on k3s v1.36: the conflist, flannel's
+		# net-conf.json (pod CIDR and backend) and the kubelet drop-ins that carry the
+		# eviction thresholds all live under the agent dir instead, so both are listed.
 		for f in /etc/rancher/k3s/config.yaml \
 			/etc/rancher/k3s/config.yaml.d/* \
 			/etc/rancher/k3s/registries.yaml \
@@ -558,6 +561,10 @@ function get_runtime_config ()
 			/etc/kubernetes/manifests/*.yaml \
 			/etc/containerd/config.toml \
 			/etc/containerd/certs.d/*/hosts.toml \
+			/var/lib/rancher/k3s/agent/etc/cni/net.d/* \
+			/var/lib/rancher/k3s/agent/etc/flannel/* \
+			/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/* \
+			/var/lib/rancher/rke2/agent/etc/cni/net.d/* \
 			/etc/crio/crio.conf \
 			/etc/crio/crio.conf.d/* \
 			/etc/docker/daemon.json \
@@ -996,7 +1003,7 @@ function get_disks ()
 {
 	# host_cmd, like df -i below: df walks every mount, so one slow or remounting
 	# network filesystem stalls the collector before any of the rest is written.
-	host_cmd "${backupFolder}/disk/df.txt" 15 df -h
+	host_cmd "${backupFolder}/disk/df.txt" 60 df -h
 	# Inodes: a filesystem can be 50% full by bytes and still refuse every write.
 	host_cmd "${backupFolder}/disk/df_inodes.txt" 60 df -i
 	# Both read every block device, which is where a stuck controller or a dead disk
@@ -1731,13 +1738,35 @@ else # if gather=sc
 	# Extract hostname from docker-compose.yaml
 	config_hostname=""
 	if [ -f /opt/metalsoft/agents/docker-compose.yaml ]; then
-		config_hostname="$(grep CONTROLLER_WS_URI= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
+		# grep -v on comment lines first: the shipped compose template carries commented
+		# KEY=value examples (HTTP_PROXY, HTTPS_PORT, ...), so a stale commented-out
+		# CONTROLLER_* line is a realistic shape - and head -1 would take it in preference
+		# to the live one, pointing the archive name, both DNS probes, the egress matrix
+		# and the TLS check at a host this agent does not talk to. Verified.
+		config_hostname="$(grep -v '^[[:space:]]*#' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | grep CONTROLLER_WS_URI= | cut -d/ -f3 | head -1)"
 		if [ -z "$config_hostname" ]; then
-			config_hostname="$(grep CONTROLLER_REMOTE_CONSOLE_URI= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d/ -f3 | head -1)"
+			config_hostname="$(grep -v '^[[:space:]]*#' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | grep CONTROLLER_REMOTE_CONSOLE_URI= | cut -d/ -f3 | head -1)"
 		fi
 		if [ -z "$config_hostname" ]; then
-			config_hostname="$(grep CONTROLLER_TCP_ADDRESS= /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | cut -d= -f2 | cut -d: -f1 | head -1)"
+			config_hostname="$(grep -v '^[[:space:]]*#' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | grep CONTROLLER_TCP_ADDRESS= | cut -d= -f2 | cut -d: -f1 | head -1)"
 		fi
+	fi
+	# Last resort, and the most truthful source of the three: the environment the agent
+	# container is ACTUALLY running with. The compose file can disagree with it - edited
+	# after the last `up`, the CONTROLLER_* lines commented out, or the file replaced -
+	# whereas this is what the running agent is talking to. Without it the controller,
+	# the one endpoint an agent cannot work without, silently drops out of the DNS probe
+	# and the egress matrix and the TLS check reports itself skipped.
+	# ms-agent only, by name: it is the container that holds the controller URIs, and
+	# naming it directly means no `docker ps` call and no reading of environments that
+	# have nothing to do with the controller. Absent or not running, inspect fails and
+	# the hostname simply stays empty.
+	if [ -z "$config_hostname" ] && command -v docker &>/dev/null;then
+		_cenv="$(timeout 60 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ms-agent 2>/dev/null)"
+		config_hostname="$(printf '%s\n' "$_cenv" | grep -m1 'CONTROLLER_WS_URI=' | cut -d/ -f3)"
+		test -n "$config_hostname" || config_hostname="$(printf '%s\n' "$_cenv" | grep -m1 'CONTROLLER_REMOTE_CONSOLE_URI=' | cut -d/ -f3)"
+		test -n "$config_hostname" || config_hostname="$(printf '%s\n' "$_cenv" | grep -m1 'CONTROLLER_TCP_ADDRESS=' | cut -d= -f2 | cut -d: -f1)"
+		unset _cenv
 	fi
 
 	# Use extracted hostname if available, otherwise fall back to envname
@@ -1774,7 +1803,12 @@ else # if gather=sc
 	# timed-out or failed collection says so in its own file instead of looking empty.
 	host_cmd "${backupFolder}/docker/status.txt" 30 systemctl status docker
 	host_cmd "${backupFolder}/docker/ps.txt"     60 docker ps -a
-	timeout 60 docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt" || true
+	# No `|| true`: grep exits 1 when nothing is restarting, which would run `true` and
+	# overwrite PIPESTATUS with 0 (verified). An empty restarting.txt reads as "no
+	# container is restarting" - a health signal - and without this it says exactly the
+	# same thing when the daemon timed out and nothing was ever listed.
+	timeout 60 docker ps|grep Restarting > "${backupFolder}/docker/restarting.txt"
+	test "${PIPESTATUS[0]}" -eq 124 && echo ":: (docker ps timed out after 60s - this file is not a clean bill of health)" >> "${backupFolder}/docker/restarting.txt"
 	# timeout, like the GC pod-log loop already has: `docker logs` against a wedged daemon
 	# never returns, and a collector that hangs produces no bundle at all. It does not
 	# truncate anything in the normal case.
@@ -1790,7 +1824,14 @@ else # if gather=sc
 	# Full logs, deliberately untruncated - but bounded in time, same reason as above.
 	test -f /opt/metalsoft/agents/docker-compose.yaml && timeout 60 docker ps -a --format '{{.Names}}.{{.ID}}'|while read -r z;do timeout 300 docker logs "${z%%.*}" > "${backupFolder}/docker/logs/${z}.log" 2>&1;done
 	# SC-specific SSL: openssl to GC
-	GCURL="$(grep -oP 'CONTROLLER_TCP_ADDRESS=\K[^\:]+' /opt/metalsoft/agents/docker-compose.yaml)"
+	# config_hostname, not a CONTROLLER_TCP_ADDRESS grep: that variable is commented out
+	# as of agent v7.2.0 ("should not be needed as of v7.2.0", verified in the compose
+	# file on a current agent), so the grep returned nothing and this check was silently
+	# skipped on every modern site controller. config_hostname is derived above from
+	# CONTROLLER_WS_URI, then REMOTE_CONSOLE_URI, then TCP_ADDRESS, so it still resolves
+	# on old agents. %%:* strips a port the URI forms carry.
+	GCURL="${config_hostname:-}"
+	GCURL="${GCURL%%:*}"
 	# s_client blocks for the kernel's SYN-retry window against a controller that does
 	# not answer - measured still blocked at 120s against a blackholed address - and "the
 	# agent cannot reach the controller" is the condition this bundle is usually collected
@@ -1800,7 +1841,7 @@ else # if gather=sc
 	if [ -n "$GCURL" ];then
 		host_cmd "${backupFolder}/ssl/openssl_443.txt" 20 openssl s_client -connect "${GCURL}:443" -servername "$GCURL" -tlsextdebug -status -bugs < /dev/null
 	else
-		echo ":: skipped: no CONTROLLER_TCP_ADDRESS in /opt/metalsoft/agents/docker-compose.yaml" > "${backupFolder}/ssl/openssl_443.txt"
+		echo ":: skipped: no controller hostname found in /opt/metalsoft/agents/docker-compose.yaml (CONTROLLER_WS_URI / CONTROLLER_REMOTE_CONSOLE_URI / CONTROLLER_TCP_ADDRESS)" > "${backupFolder}/ssl/openssl_443.txt"
 	fi
 	test -d /opt/metalsoft/ansible-jobs && tar czf "${backupFolder}/ansible-jobs.tar.gz" /opt/metalsoft/ansible-jobs &>/dev/null
 fi
