@@ -37,10 +37,12 @@ _ms_sc_set_gc_ip_completion()
 
     cand=()
     case $argpos in
-        1)  # new Controller IP
-            cand+=( $(grep -m1 '^MS_GC_IP=' /etc/metalsoft 2>/dev/null | cut -d= -f2) )
-            cand+=( $(ip -o a 2>/dev/null | awk '$2 != "lo" {print $4}' \
-                      | cut -d/ -f1 | grep -Ev '^(fe80|::1$|127\.)') )
+        1)  # new Controller IP: by convention one below this host's routable IP
+            local myip
+            myip="$(ip r get 1 2>/dev/null | head -1 | awk '{print $7}')"
+            case "$myip" in
+                *.*.*.*) cand+=( "${myip%.*}.$(( ${myip##*.} - 1 ))" ) ;;
+            esac
             ;;
         2)  # optional proxy URL, derived from the Controller IP already typed
             local cip="${COMP_WORDS[base + 1]}"
