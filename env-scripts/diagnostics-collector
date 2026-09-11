@@ -4,6 +4,14 @@
 # How to install:
 # wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/diagnostics-collector -O /usr/local/bin/diagnostics-collector && chmod +x /usr/local/bin/diagnostics-collector
 
+# Every check in this script parses the output of another command, and a decimal comma
+# or a translated label silently defeats those patterns: dd reporting "17,6 MB/s" and
+# systemd reporting a translated "System clock synchronized" both make a check go quiet
+# rather than fail. One export fixes the class instead of each site, and it also makes
+# every bundle comparable regardless of the customer's locale. Commands run inside a
+# container still need their own, since this environment does not reach them.
+export LC_ALL=C
+
 if tput sgr0 &>/dev/null; then
 	nc=$(tput sgr0)
 	bold=$(tput bold)
@@ -448,10 +456,17 @@ function get_system ()
 	env > "${backupFolder}/system/env.txt"
 	test -f /etc/metalsoft && cp /etc/metalsoft "${backupFolder}/system/etc_metalsoft" 2>/dev/null
 	stat "$(realpath "$0")" > "${backupFolder}/system/stat.txt" 2>&1 || true
-	uptime > "${backupFolder}/system/uptime.txt" 2>&1 || true
+	{ uptime
+	  # The alert pass needs the boot time as a number, not "up 19 min": a bundle taken
+	  # minutes after a reboot is full of probe failures and restart counts that are
+	  # expected, and telling those apart from a real fault needs seconds, not prose.
+	  echo "uptime_seconds: $(cut -d. -f1 /proc/uptime 2>/dev/null)"
+	  echo "boot_time: $(uptime -s 2>/dev/null)"; } > "${backupFolder}/system/uptime.txt" 2>&1 || true
 	cat /etc/os-release > "${backupFolder}/system/os-release" 2>&1 || true
 	uname -a > "${backupFolder}/system/uname.txt" 2>&1 || true
-	free -h > "${backupFolder}/system/memory.txt" 2>&1 || true
+	# free -h for a human, /proc/meminfo for the alert pass: "4.0Gi" cannot be compared
+	# numerically, and MemAvailable/SwapTotal are what the checks actually read.
+	{ free -h; echo; echo ":: /proc/meminfo"; cat /proc/meminfo; } > "${backupFolder}/system/memory.txt" 2>&1 || true
 	# Whole ring buffer, not tail -500: kernel messages that matter (martian source,
 	# conntrack table full, OOM, EXT4 errors, link flaps) are usually older than the
 	# last 500 lines. Timestamped where util-linux supports it, plain otherwise.
@@ -488,7 +503,17 @@ function get_system ()
 		done
 		unset _u
 	fi
-	command -v timedatectl &>/dev/null && timedatectl > "${backupFolder}/system/timedatectl.txt" 2>&1 || true
+	# Clock sync decides whether TLS validation, kubelet auth and log correlation can be
+	# trusted at all, so it must be recorded even where timedatectl does not exist.
+	{
+		if command -v timedatectl &>/dev/null;then
+			timeout 15 timedatectl 2>&1
+		else
+			echo ":: timedatectl is not installed on this host"
+		fi
+		command -v chronyc &>/dev/null && { echo; echo ":: chronyc tracking"; timeout 15 chronyc tracking 2>&1; }
+		command -v ntpq   &>/dev/null && { echo; echo ":: ntpq -pn";        timeout 15 ntpq -pn 2>&1; }
+	} > "${backupFolder}/system/timedatectl.txt" 2>&1 || true
 	cat /etc/hosts > "${backupFolder}/system/hosts" 2>&1 || true
 	cat /etc/resolv.conf > "${backupFolder}/system/resolv.conf" 2>&1 || true
 	# SELinux. A denial is invisible everywhere else in this archive: the container simply
@@ -1033,7 +1058,41 @@ function get_ssl ()
 # ALERT_CRITICAL line when the cert is already expired. $1 is the label, the PEM comes
 # on stdin (never through a pipe: the caller needs the two variables back, and a pipe
 # would run this in a subshell). openssl x509 reads the first cert of a chain = the leaf.
-ssl_expiry_lines="" ssl_alerts=""
+ssl_expiry_lines="" alerts="" alerts_other="" recent_boot=""
+
+# Collect one alert. $1 is CRITICAL, WARNING or INFO, $2 the message, $3 the namespace
+# it concerns, if any.
+#
+# A shared cluster hosts several environments, and a bundle is collected for exactly
+# one of them. Everything from the others - a shut-down environment's expired
+# certificate, a sealed Vault, another team's node exporters - is context, not this
+# customer's problem, and on the real cluster it outnumbered the local findings eight
+# to one and pushed them off the screen. So those still go in the file, under their own
+# heading, and only the collected namespace, kube-system and everything host- or
+# cluster-wide (no namespace passed) reaches the console.
+function add_alert ()
+{
+	local line
+	case "$1" in
+		INFO) line="INFO: ${2}" ;;
+		*)    line="ALERT_${1}: ${2}" ;;
+	esac
+	if [ -z "${3:-}" ] || [ "$3" == "$envname" ] || [ "$3" == "kube-system" ];then
+		alerts+="${line}"$'\n'
+	else
+		alerts_other+="${line} [namespace ${3}]"$'\n'
+	fi
+}
+
+# The namespace inside an ssl_expiry_line label, empty for a node cert file path.
+function ssl_label_ns ()
+{
+	case "$1" in
+		"secret "*) local r="${1#secret }"; printf '%s' "${r%%/*}" ;;
+		*) : ;;
+	esac
+}
+
 function ssl_expiry_line ()
 {
 	local pem cn san end
@@ -1046,10 +1105,35 @@ function ssl_expiry_line ()
 	san="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -oP 'DNS:\K[^,\s]+' | paste -sd, -)"
 	local who="CN=${cn}${san:+ SAN=${san}}"
 	if printf '%s\n' "$pem" | openssl x509 -noout -checkend 0 &>/dev/null;then
-		ssl_expiry_lines+="${1}: ${who} notAfter=${end}"$'\n'
+		if printf '%s\n' "$pem" | openssl x509 -noout -checkend 604800 &>/dev/null;then
+			ssl_expiry_lines+="${1}: ${who} notAfter=${end}"$'\n'
+		else
+			# Still valid, but not for long. This is the only window where anyone can
+			# still act: once it lapses the alert above is a description of an outage.
+			# The day count is cosmetic - date -d parses openssl's format on GNU but not
+			# everywhere, so the alert has to read correctly without it.
+			local secs left
+			secs="$(date -d "$end" +%s 2>/dev/null)"
+			# Empty when date cannot parse openssl's format: the alert still has to be
+			# correct without a day count, so the phrase is built, not interpolated.
+			if [ -n "$secs" ] && [ "$secs" -gt 0 ] 2>/dev/null;then
+				left=$(( (secs - $(date +%s)) / 86400 ))
+				case "$left" in
+					0|-*) left="in less than a day" ;;
+					1)    left="in 1 day" ;;
+					*)    left="in ${left} days" ;;
+				esac
+			else
+				left="within 7 days"
+			fi
+			ssl_expiry_lines+="${1}: ${who} notAfter=${end} EXPIRES ${left}"$'\n'
+			add_alert WARNING "SSL for ${1} (${who}) expires ${left}, at ${end} - renew it before it lapses, the same certificate expired is a full outage" "$(ssl_label_ns "$1")"
+		fi
 	else
 		ssl_expiry_lines+="${1}: ${who} notAfter=${end} EXPIRED"$'\n'
-		ssl_alerts+="ALERT_CRITICAL: SSL for ${1} (${who}) has expired at ${end} (now is $(date -u '+%F %T %Z'))"$'\n'
+		# "secret <ns>/<name>" carries a namespace; a node cert is a file path and
+		# belongs to the whole host, so it has none and always reaches the console.
+		add_alert CRITICAL "SSL for ${1} (${who}) has expired at ${end} (now is $(date -u '+%F %T %Z'))" "$(ssl_label_ns "$1")"
 	fi
 }
 
@@ -1083,13 +1167,277 @@ function gc_ssl_expiry ()
 	fi
 }
 
+# Alert passes. They read the files this run already wrote rather than asking the host
+# or the cluster a second time: no extra load, no second chance to hang, and they still
+# produce a verdict when whatever they describe died half way through the collection.
+# Every check degrades to silence when its input file is missing, so a host without
+# timedatectl or a cluster that was never reached simply yields fewer lines.
+
+# Rows of "<percent> <mount>" from a df table, for mounts at or above $1 percent that
+# represent real writable capacity. $2 is the file. Read-only images and the kernel's
+# own pseudo filesystems are never "full" in any sense a human can act on.
+function df_alert_rows ()
+{
+	awk -v lim="$1" '
+		NR==1 { hasT = ($2=="Type"); next }
+		{
+			# Loop devices first and by name, not only by type: every one of them is a
+			# mounted image file, full by construction, and nothing a person can free
+			# space on. This is the check that matters on an Ubuntu host, where each
+			# installed snap contributes one.
+			if ($1 ~ /^\/dev\/loop/) next
+			if (hasT && $2 ~ /^(squashfs|iso9660|tmpfs|devtmpfs|ramfs|overlay|efivarfs|autofs|nsfs|fuse\.snapfuse)$/) next
+			if (!hasT && $1=="tmpfs") next
+			if ($NF ~ /^\/(var\/lib\/kubelet|run|dev\/shm|snap\/)/) next
+			p=$(NF-1); gsub("%","",p)
+			if (p+0>=lim) print p+0, $NF
+		}' "$2" 2>/dev/null
+}
+
+# OS-level, identical on a Global Controller and a Site Controller.
+function os_alerts ()
+{
+	local upsec dd_path mbs pct mnt swapkb blocked
+
+	grep -q 'System clock synchronized: no' "${backupFolder}/system/timedatectl.txt" 2>/dev/null && \
+		add_alert WARNING "the system clock is NOT synchronized. Certificate validity, kubelet authentication and every timestamp in this bundle are only as good as this clock - check the NTP configuration first, it changes how the rest of this report should be read"
+
+	# Read before the checks that follow: everything probe- and restart-shaped is
+	# expected for a while after a boot, and calling that a fault sends people hunting
+	# a component that is merely still starting.
+	upsec="$(grep -oP '^uptime_seconds: \K[0-9]+' "${backupFolder}/system/uptime.txt" 2>/dev/null)"
+	if [ -n "$upsec" ] && [ "$upsec" -lt 1800 ];then
+		recent_boot=1
+		add_alert INFO "this host booted $((upsec/60)) minutes ago: readiness-probe failures and restart counts reported below are the expected consequence and not necessarily a fault"
+	fi
+
+	# The probe writes to two different paths, and on a real host those are two
+	# different devices - a backup volume on NVMe and /var/log on the root SATA disk.
+	# Reporting a bare number from whichever ran last named neither and threw the other
+	# measurement away, so pair each rate with the path from the "of=" header above it.
+	# Units vary with speed (kB/s on a truly sick disk, GB/s on NVMe): normalise to MB/s.
+	# One alert per MOUNT, not per probed path. Both probe targets often sit on the
+	# same filesystem - on the demo controller the backup folder and /var/log are both
+	# on / - and two alerts for one disk describe the same problem twice. Where a mount
+	# was measured more than once the slowest result wins, since a disk that was slow
+	# once is slow.
+	while read -r dd_path mbs;do
+		test -n "$mbs" || continue
+		if awk -v n="$mbs" 'BEGIN{exit !(n<5)}';then
+			add_alert CRITICAL "disk write throughput on ${dd_path} is ${mbs} MB/s on the 4k O_DIRECT probe. MySQL commits, etcd writes and container startup are all paced by this number - investigate the storage behind this path before chasing slow application behaviour"
+		elif awk -v n="$mbs" 'BEGIN{exit !(n<20)}';then
+			add_alert WARNING "disk write throughput on ${dd_path} is ${mbs} MB/s on the 4k O_DIRECT probe, which is low for a controller node - expect slow database commits under load"
+		fi
+	done < <(awk '
+		/of=/ { if (match($0, /of=[^ ]+/)) { p=substr($0, RSTART+3, RLENGTH-3); sub(/\/[^\/]*$/, "", p); if (p=="") p="/" } }
+		{
+			line=$0
+			# Keep the LAST rate on the line: dd rewrites its progress with \r, so a
+			# whole run can arrive as one line ending in the final summary.
+			while (match(line, /copied, [0-9.]+ s, [0-9.]+ [kMG]B\/s/)) {
+				m=substr(line, RSTART, RLENGTH); line=substr(line, RSTART+RLENGTH)
+			}
+			if (m != "" && p != "") { split(m, f, " "); n=f[4]+0; u=f[5]
+				if (u=="kB/s") n=n/1000; else if (u=="GB/s") n=n*1000
+				rate[p]=n }
+			m=""
+		}
+		END { for (q in rate) printf "%s %.1f\n", q, rate[q] }' "${backupFolder}/disk/latency.txt" 2>/dev/null \
+		| while read -r _p _r;do
+			# "/root/ms-diag-out/ms-diagnostics-2026-09-11_gc" names a directory, not a
+			# disk. Resolve it to the mount it sits on, by longest matching mount point
+			# in the df table this run already collected, so the alert names something
+			# the customer can go and look at.
+			# Longest mount that is a PATH prefix: the next character must be a slash
+			# or the string must end, otherwise a mount called /v would claim /var/log.
+			_m="$(awk -v d="$_p" 'NR>1{m=$NF
+					if (substr(d,1,length(m))==m && (length(d)==length(m) || m=="/" || substr(d,length(m)+1,1)=="/") && length(m)>length(best)) best=m
+				} END{print best}' "${backupFolder}/disk/df.txt" 2>/dev/null)"
+			echo "${_m:-$_p} $_r"
+		done \
+		| awk '{ if (!($1 in best) || $2+0 < best[$1]) best[$1]=$2+0 } END { for (m in best) printf "%s %.1f\n", m, best[m] }' | sort)
+
+	# df -h and df -i share a layout: the mount path is the last field, the percentage
+	# the one before it, and with -T the type is the second.
+	#
+	# Filtering on type rather than on the mount path is the whole point here. Every
+	# installed snap is a read-only squashfs image mounted from a loop device, and a
+	# read-only image is 100% full and 100% inodes by definition - a fifteen-snap
+	# Ubuntu host produced thirty CRITICAL alerts that were all noise, and buried the
+	# expired certificate underneath them. Same for the tmpfs and overlay mounts the
+	# kubelet creates per pod. The path exclusions stay for the hosts whose df has no
+	# -T, where the type column is simply absent and the header tells us so.
+	while read -r pct mnt;do
+		test -n "$mnt" || continue
+		if [ "$pct" -ge 95 ];then
+			add_alert CRITICAL "filesystem ${mnt} is ${pct}% full - writes are about to start failing"
+		else
+			add_alert WARNING "filesystem ${mnt} is ${pct}% full"
+		fi
+	done < <(df_alert_rows 85 "${backupFolder}/disk/df.txt")
+	while read -r pct mnt;do
+		test -n "$mnt" || continue
+		add_alert CRITICAL "filesystem ${mnt} has used ${pct}% of its inodes - it will report 'no space left on device' while df still shows free space"
+	done < <(df_alert_rows 90 "${backupFolder}/disk/df_inodes.txt")
+
+	swapkb="$(grep -oP '^SwapTotal:\s+\K[0-9]+' "${backupFolder}/system/memory.txt" 2>/dev/null)"
+	if [ -n "$swapkb" ] && [ "$swapkb" -gt 0 ];then
+		# Integer division truncates: 4194300 kB is 4.0 GiB, not the 3 GiB that
+		# $((kb/1024/1024)) reports, and a number that disagrees with free -h in the
+		# same bundle costs the reader more time than it saves.
+		add_alert WARNING "swap is enabled ($(awk -v k="$swapkb" 'BEGIN{printf "%.1f", k/1048576}') GiB). Kubernetes schedules against real memory, so a node that starts swapping goes slow rather than evicting, and the symptom reaching the customer is latency with no obvious cause"
+	fi
+
+	grep -qiE 'Out of memory: Kill|invoked oom-killer' "${backupFolder}/system/dmesg.txt" 2>/dev/null && \
+		add_alert CRITICAL "the kernel OOM killer has run on this host (system/dmesg.txt) - a process was killed for memory, which usually reads as an unexplained restart higher up"
+	grep -qiE 'EXT4-fs error|XFS.*(corruption|Corruption)|Buffer I/O error|blk_update_request: I/O error' "${backupFolder}/system/dmesg.txt" 2>/dev/null && \
+		add_alert CRITICAL "the kernel logged filesystem or block I/O errors (system/dmesg.txt) - treat this host's storage as suspect"
+	grep -qE 'blocked for more than [0-9]+ seconds' "${backupFolder}/system/dmesg.txt" 2>/dev/null && \
+		add_alert WARNING "the kernel logged tasks blocked for more than 120 seconds (system/dmesg.txt), which is what a stalled disk or an unresponsive NFS mount looks like"
+
+	blocked="$(awk '/^:::: /{h=$2} /BLOCKED or timed out/{if(h!=""){print h; h=""}}' "${backupFolder}/network/egress_reachability.txt" 2>/dev/null | paste -sd, -)"
+	test -n "$blocked" && \
+		add_alert WARNING "no outbound HTTPS to: ${blocked}. On an air-gapped site this is by design; otherwise image pulls, MetalSoft updates and the automatic upload of this bundle will all fail"
+}
+
+# Cluster-level. Only meaningful on a Global Controller whose cluster answered.
+function k8s_alerts ()
+{
+	local pods="${backupFolder}/k8s/resources/pods_wide.txt" bad sev
+	local nodes="${backupFolder}/k8s/cluster/nodes.txt"
+
+	grep -qE '^\s+Ready\s+(False|Unknown)' "$nodes" 2>/dev/null && \
+		add_alert CRITICAL "a node is not Ready (k8s/cluster/nodes.txt) - workloads on it are unschedulable or already being evicted"
+	bad="$(grep -oE '^\s+(MemoryPressure|DiskPressure|PIDPressure)\s+True' "$nodes" 2>/dev/null | awk '{print $1}' | paste -sd, -)"
+	test -n "$bad" && add_alert WARNING "node pressure conditions are active: ${bad} (k8s/cluster/nodes.txt)"
+
+	if [ -s "$pods" ];then
+		# One line per namespace, and one entry per pod carrying everything known about
+		# it. The three separate checks this replaces - not Ready, restart count, and
+		# the BackOff event - named the same two pods three times on a real cluster.
+		# STATUS already reads CrashLoopBackOff, so the event lookup added nothing that
+		# the pod table does not say more precisely; events_warnings.txt still has it.
+		#
+		# unhealthy_pods encodes what "broken" means for a pod table and skips Completed
+		# jobs. Same definition as not_running.txt, one source of truth. Column
+		# positions come from the READY cell rather than being counted: -o wide adds
+		# columns on the right and a restart cell can read "8 (19m ago)".
+		while read -r ns list;do
+			test -n "$ns" || continue
+			add_alert CRITICAL "pods not Running or not Ready: ${list} - k8s/resources/not_running.txt carries describe output and the pre-restart logs for each" "$ns"
+		done < <(awk 'NR>1{
+				for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\/[0-9]+$/){
+					st=$(i+1); split($i,r,"/")
+					# Same predicate as unhealthy_pods, which cannot be reused here: it
+					# prints only namespace and name, and this line needs the status and
+					# the restart count that follow.
+					if (st!="Completed" && st!="Succeeded" && (st!="Running" || r[1]!=r[2])) {
+						# Built in steps: "st(" on one line reads as a function call.
+						rc = $(i+2)+0
+						extra = (rc>0 ? ", " rc " restarts" : "")
+						d = $2 " (" st extra ")"
+						acc[$1] = (acc[$1]=="" ? d : acc[$1] ", " d)
+					}
+					break
+				}
+			} END { for(n in acc) print n, acc[n] }' "$pods" | sort)
+
+		# Pods that are up right now but have restarted a lot: the flapping component
+		# that looks healthy in a snapshot. Those already reported above are skipped so
+		# nothing is said twice.
+		while read -r ns list;do
+			test -n "$ns" || continue
+			# After a reboot every counter is legitimately non-zero, so the same fact is
+			# worth recording but not worth waking anyone.
+			test -n "$recent_boot" && sev=INFO || sev=WARNING
+			add_alert "$sev" "pods restarting repeatedly but currently up: ${list}" "$ns"
+		done < <(awk 'NR>1{
+				for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\/[0-9]+$/){
+					st=$(i+1); split($i,r,"/")
+					if (st=="Running" && r[1]==r[2] && ($(i+2)+0)>5)
+						acc[$1] = (acc[$1]=="" ? $2"="($(i+2)+0) : acc[$1]", "$2"="($(i+2)+0))
+					break
+				}
+			} END { for(n in acc) print n, acc[n] }' "$pods" | sort)
+	fi
+
+	# A namespace whose services ALL have no endpoints is a shut-down environment, not
+	# thirty faults. On a shared cluster hosting several environments the flat list ran
+	# to sixty entries and pushed everything else off the screen, so collapse those to
+	# one line per namespace and only name individual services where the rest of the
+	# namespace is up - which is what a genuinely missing backend looks like.
+	while read -r ns dead total names;do
+		test -n "$ns" || continue
+		# Not "all of them": a shut-down environment still keeps a couple of services
+		# answering, and on the real cluster the two dormant namespaces sat at 29 of 31
+		# and 27 of 29, so an equality test collapsed neither. More than three is the
+		# line between a missing backend and an environment nobody is running.
+		if [ "$dead" -gt 3 ];then
+			add_alert WARNING "namespace ${ns}: ${dead} of ${total} services have no endpoints, so the whole environment looks shut down rather than broken" "$ns"
+		else
+			add_alert WARNING "services with no endpoints behind them: ${names}. Anything calling these gets a connection refused, and the caller's error will name itself rather than the missing backend" "$ns"
+		fi
+	done < <(awk 'NR>1 && NF>2 {
+			total[$1]++
+			if ($3=="<none>") { dead[$1]++; names[$1] = (names[$1]=="" ? $1"/"$2 : names[$1]","$1"/"$2) }
+		}
+		END { for (n in dead) print n, dead[n], total[n], names[n] }' "${backupFolder}/k8s/cluster/endpoints.txt" 2>/dev/null | sort)
+
+	bad="$(grep -oP '^\[-\]\K\S+' "${backupFolder}/k8s/cluster/apiserver_readyz.txt" 2>/dev/null | paste -sd, -)"
+	test -n "$bad" && \
+		add_alert CRITICAL "the apiserver reports these checks as not ready: ${bad} - this is the control plane itself, not a workload"
+
+	# 'get pv,pvc -A' prints TWO tables whose columns do not line up: a PV row starts
+	# with persistentvolume/<name> and carries STATUS four fields later, a PVC row
+	# starts with the NAMESPACE and carries STATUS one field after its own name. Keying
+	# off the resource prefix rather than a column number keeps both right - matching
+	# the whole line instead reported the namespace as if it were the claim. Released
+	# and Available are normal states for a PV, so only a claim nobody can bind, or a
+	# volume that actually failed, is worth waking someone for.
+	bad="$(awk '{for(i=1;i<=NF;i++){
+			if($i ~ /^persistentvolumeclaim\//){ if($(i+1)!="Bound") print $i" ("$(i+1)")"; break }
+			if($i ~ /^persistentvolume\//)     { if($(i+4)=="Failed") print $i" ("$(i+4)")"; break }
+		}}' "${backupFolder}/k8s/cluster/pv_pvc.txt" 2>/dev/null | paste -sd, -)"
+	test -n "$bad" && \
+		add_alert CRITICAL "persistent volumes or claims are not Bound: ${bad} - the pods that need them cannot start"
+}
+
+# MetalSoft application level.
+function app_alerts ()
+{
+	local st="${backupFolder}/mysql/mysql_show_global_status" vr="${backupFolder}/mysql/mysql_show_global_variables"
+	local up ovf aborted conns maxconns rate
+
+	test -s "$st" || return 0
+	up="$(grep -m1 -P '^Uptime\t' "$st" | cut -f2)"
+	ovf="$(grep -m1 -P '^Table_open_cache_overflows\t' "$st" | cut -f2)"
+	aborted="$(grep -m1 -P '^Aborted_connects\t' "$st" | cut -f2)"
+	conns="$(grep -m1 -P '^Threads_connected\t' "$st" | cut -f2)"
+	# global variables come back one field per line from \G, not as a two-column table.
+	maxconns="$(awk '/^Variable_name: max_connections$/{getline; sub(/^ *Value: /,""); print; exit}' "$vr" 2>/dev/null)"
+
+	# A rate, not a total: the counter only means something against how long the server
+	# has been up, and after a restart every total is small and every total is a lie.
+	if [ -n "$ovf" ] && [ -n "$up" ] && [ "$up" -gt 0 ] && [ "$ovf" -gt 0 ];then
+		rate=$((ovf*3600/up))
+		test "$rate" -gt 100 && \
+			add_alert WARNING "MySQL is evicting open tables at ~${rate}/hour (Table_open_cache_overflows) - table_open_cache is too small for this workload and every eviction is a reopened file"
+	fi
+	test -n "$aborted" && test "$aborted" -gt 100 && \
+		add_alert WARNING "MySQL has ${aborted} aborted connections - clients are failing to authenticate or losing the connection mid-session"
+	if [ -n "$conns" ] && [ -n "$maxconns" ] && [ "$maxconns" -gt 0 ];then
+		test $((conns*100/maxconns)) -ge 80 && \
+			add_alert WARNING "MySQL is at ${conns} of ${maxconns} connections - new connections start failing at the limit"
+	fi
+}
+
 function get_disks ()
 {
 	# host_cmd, like df -i below: df walks every mount, so one slow or remounting
 	# network filesystem stalls the collector before any of the rest is written.
-	host_cmd "${backupFolder}/disk/df.txt" 60 df -h
+	host_cmd "${backupFolder}/disk/df.txt" 60 df -hT
 	# Inodes: a filesystem can be 50% full by bytes and still refuse every write.
-	host_cmd "${backupFolder}/disk/df_inodes.txt" 60 df -i
+	host_cmd "${backupFolder}/disk/df_inodes.txt" 60 df -iT
 	# Both read every block device, which is where a stuck controller or a dead disk
 	# shows up - and where they hang.
 	host_cmd "${backupFolder}/disk/lsblk.txt" 30 lsblk
@@ -1293,6 +1641,13 @@ function get_k8s_cluster ()
 	# Service endpoints: which pod IPs actually back a ClusterIP. Without this the only
 	# way to learn that (say) kube-dns points at 10.42.0.4 is to read the NAT rules.
 	k_cmd "${backupFolder}/k8s/cluster/endpoints.txt" 60 get endpoints -A -o wide
+	# The whole-cluster pod table. not_running.txt holds only the broken ones, and the
+	# describe files hold restart counts one pod per file - neither answers "which pods
+	# have restarted a lot but are healthy right now", which is what a flapping
+	# component looks like from the outside.
+	k_cmd "${backupFolder}/k8s/resources/pods_wide.txt" 60 get pods -A -o wide
+	# pv_pvc.yaml is the detail; this is the one line per claim a Bound/Pending check reads.
+	k_cmd "${backupFolder}/k8s/cluster/pv_pvc.txt" 60 get pv,pvc -A
 	k_cmd "${backupFolder}/k8s/cluster/endpointslices.txt" 60 get endpointslices -A
 	# Separates "one component is broken" from "the apiserver itself is degraded".
 	k_cmd "${backupFolder}/k8s/cluster/apiserver_readyz.txt" 60 get --raw '/readyz?verbose'
@@ -1592,12 +1947,38 @@ if [ "$gather" == 'gc' ];then
 			# under the other's dd, making both latency numbers fiction. Verified: run
 			# B's rm makes run A's file vanish mid-write. A killed run also strands
 			# ~96MB, and on the customer node /var/log is a separate 4.0G LV at 51%.
+			_dlslow=""
 			for _dlpath in "${backupFolder}" /var/log;do
+				# Every skip is recorded where the measurement would have been. An
+				# absent section otherwise reads as "the probe failed", and the reason
+				# is exactly what the reader needs.
+				if [ -n "$_dlslow" ];then
+					echo -e "\n:: node: ${_dlpath} SKIPPED: the previous target measured ${_dlslow} MB/s, and at that speed this 100MB probe costs minutes for a number that would only confirm the same storage is slow." >> "${backupFolder}/disk/latency.txt"
+					continue
+				fi
+				# Writing 100MB into a filesystem that is nearly full is the one case
+				# where this probe can cause the outage it is meant to diagnose, and a
+				# bundle is often collected precisely because a disk filled up.
+				_dlpct="$(df -P "$_dlpath" 2>/dev/null | awk 'NR==2{p=$(NF-1); gsub("%","",p); print p+0}')"
+				if [ -n "$_dlpct" ] && [ "$_dlpct" -ge 90 ];then
+					echo -e "\n:: node: ${_dlpath} SKIPPED: its filesystem is ${_dlpct}% full, and this probe writes 100MB. Free space there and re-run if the number is needed." >> "${backupFolder}/disk/latency.txt"
+					continue
+				fi
 				echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/${_dlfile} bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+				# Where this run's output starts, so the rate below is read from THIS
+				# measurement only. A fixed tail would pick up the previous target's
+				# number whenever a dd produces none - a failed probe would then be
+				# read as the last target's speed and could suppress the ones after it.
+				_dlmark=$(wc -l < "${backupFolder}/disk/latency.txt")
 				{ time timeout 300 dd if=/dev/zero of="${_dlpath}/${_dlfile}" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
 				rm -f "${_dlpath}/${_dlfile}"
+				# Under 5 MB/s the remaining targets are not worth their runtime: at
+				# 0.3 MB/s one of these took 300s of a 536s collection.
+				_dlrate="$(tail -n +$((_dlmark+1)) "${backupFolder}/disk/latency.txt" | grep -oE 'copied, [0-9.]+ s, [0-9.]+ [kMG]B/s' | tail -1 \
+					| awk '{n=$(NF-1); u=$NF; if(u=="kB/s")n=n/1000; else if(u=="GB/s")n=n*1000; printf "%.1f", n}')"
+				test -n "$_dlrate" && awk -v n="$_dlrate" 'BEGIN{exit !(n<5)}' && _dlslow="$_dlrate"
 			done
-			unset _dlpath
+			unset _dlslow _dlpct _dlrate _dlmark _dlpath
 		fi
 	else
 		echo "[-] Skipping disk latency check"
@@ -2009,7 +2390,16 @@ fi
 # bump - mtime is when this copy was installed. The clock block is here because the
 # archive mixes three time bases: pod logs in UTC, dmesg in node-local time, and kubectl
 # ages relative to the moment of collection.
-test "$gather" == 'gc' && gc_ssl_expiry
+# Runs against the files written above, so it must stay after every collector and
+# before collection_info.txt is composed.
+os_alerts
+if [ "$gather" == 'gc' ];then
+	gc_ssl_expiry
+	# Both passes read cluster state that was never collected when the cluster was
+	# unreachable; CLUSTER_UNREACHABLE.txt already says so, far louder than a check
+	# firing on an absent file would.
+	test -z "$cluster_unreachable" && { k8s_alerts; app_alerts; }
+fi
 {
 	echo ":: collector"
 	# One field per stat call: %n is the FILE NAME, not a newline, so a combined format
@@ -2044,15 +2434,32 @@ test "$gather" == 'gc' && gc_ssl_expiry
 		echo
 		echo ":: ssl expiry"
 		printf '%s' "$ssl_expiry_lines"
+	fi
+	echo
+	# Empty when nothing is wrong: an empty section means checked and clean. Outside the
+	# gc branch - the OS-level checks run on a Site Controller too.
+	echo ":: alerts"
+	printf '%s' "$alerts"
+	if [ -n "$alerts_other" ];then
 		echo
-		# Empty when nothing is wrong: an empty section means checked and clean.
-		echo ":: alerts"
-		printf '%s' "$ssl_alerts"
+		echo ":: alerts in other namespaces (context only, not shown on the console)"
+		printf '%s' "$alerts_other"
 	fi
 } > "${backupFolder}/collection_info.txt" 2>&1 || true
-# Alerts also go to the console, red, so the operator sees them without opening the
-# archive. Only alerts: the full expiry list stays in collection_info.txt.
-test -n "$ssl_alerts" && printf '%s' "$ssl_alerts" | sed "s/^/${lightred}[!] /;s/\$/${nc}/"
+# Alerts also go to the console so the operator sees them without opening the archive,
+# coloured by severity. printf, not echo -e: a message is free text and may contain
+# backslashes. The full expiry list stays in collection_info.txt.
+if [ -n "$alerts" ];then
+	echo
+	printf '%s' "$alerts" | while IFS= read -r _aline;do
+		case "$_aline" in
+			ALERT_CRITICAL:*) printf '%s[!] %s%s\n' "$lightred" "$_aline" "$nc" ;;
+			ALERT_WARNING:*)  printf '%s[!] %s%s\n' "$orange"   "$_aline" "$nc" ;;
+			*)                printf '%s[i] %s%s\n' "$gray"     "$_aline" "$nc" ;;
+		esac
+	done
+	echo
+fi
 
 echo "[i] creating an archive.."
 test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log.txt" &>/dev/null
