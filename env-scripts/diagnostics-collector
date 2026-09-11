@@ -93,7 +93,6 @@ test "$gather" == 'gc' && test -n "${ns:-}" && envname="$ns"
 pushfile=
 extended=
 pushfileFromArg=""
-sqlUpgradeLogs=""
 doNotAutoSend=""
 debugOn=""
 SKIP_DISK_LATENCY_CHECK=""
@@ -110,14 +109,13 @@ mysqldump_timeout=1800
 _dlfile="ms-diag-latency.$$"
 kubeconfig=""
 ms_version=""
-bsi_present=""
 parallel=4
 have_wait_n=""
 # Captured before getopts shifts them away: collection_info.txt records how the
 # collector was actually invoked, which decides what is legitimately absent (-e, -d).
 invocationArgs="$*"
 
-while getopts ":k:n:b:P:j:capezsxd" flag
+while getopts ":k:n:b:P:j:capezxd" flag
 do
 	case "${flag}" in
 		p) pushfile="1" ;;
@@ -128,7 +126,6 @@ do
 		n) envname="${OPTARG}" ;;
 		b) backupFolder="${OPTARG}" ;;
 		e) extended=1 ;;
-		s) sqlUpgradeLogs=1 ;;
 		z) doNotAutoSend=1 ;;
 		x) debugOn=1 ;;
 		d) SKIP_DISK_LATENCY_CHECK=1 ;;
@@ -381,13 +378,6 @@ function dns_probe ()
 	return 0
 }
 
-# version_ge 7.4.3 7.0.0 -> true when $1 >= $2 (dotted versions, sort -V)
-function version_ge ()
-{
-	test -n "$1" && test -n "$2" || return 1
-	test "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2"
-}
-
 # throttle <max> - block until fewer than <max> background jobs of THIS shell remain.
 # Used to fan out loops whose iterations each write their OWN file. Loops that append
 # to a shared file (stats.txt, not_running.txt, metallb_logs.txt, pod_netns.txt) are
@@ -434,7 +424,6 @@ function create_dirs ()
 		mkdir -p "${backupFolder}/k8s/ingress"
 		mkdir -p "${backupFolder}/k8s/logs"
 		mkdir -p "${backupFolder}/k8s/dns"
-		mkdir -p "${backupFolder}/k8s/bsi/varlog"
 		# api_resources is populated only under -e. Creating it unconditionally shipped an
 		# empty directory on every normal run, which reads as a failed collection rather
 		# than one that was never asked for - the same ambiguity host_cmd exists to avoid.
@@ -1885,24 +1874,27 @@ if [ "$gather" == 'gc' ];then
 	kubeconfig="$(detect_kubeconfig || true)"
 	test -n "$kubeconfig" && echo -e "[i] kubeconfig: ${kubeconfig}" || echo -e "${orange}[!] no working kubeconfig found; helm output may be empty${nc}"
 
-	# MetalSoft version, read off the license deployment image tag (present in every release).
-	ms_version="$(timeout 30 $k get deploy license -o jsonpath='{.spec.template.spec.containers[*].image}' 2>/dev/null \
-		| tr ' ' '\n' | grep -oP ':v?\K[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
-	# bsi was removed in 7.0.0. Gate on the deployment actually existing (authoritative,
-	# also covers unparsable tags like :latest) and keep the version for the report.
-	timeout 30 $k get deploy bsi &>/dev/null && bsi_present=1
+	# MetalSoft version, read off the license deployment image tag (present in every
+	# release, and bsi is gone as of 7.0.0 so it is the only source left).
+	#
+	# Take the tag first, then look for a version inside it. The previous pattern
+	# required the digits to sit immediately after the colon and to have three
+	# components, so a real tag like "license:release-v7.5" matched nothing and the
+	# whole bundle reported the version as undetermined. Patch level is optional and a
+	# prefix is allowed; a tag naming no version at all, "develop-monorepo", correctly
+	# yields nothing.
+	_lic_img="$(timeout 30 $k get deploy license -o jsonpath='{.spec.template.spec.containers[*].image}' 2>/dev/null | tr ' ' '\n' | head -1)"
+	# The tag verbatim, because the tag IS the version people speak in: "release-v7.5",
+	# not "7.5". Strip the registry first so a registry:5000 port is never mistaken for
+	# a tag, and treat a digest-pinned image as having no tag at all.
+	ms_version="${_lic_img##*/}"
+	case "$_lic_img" in
+		*@*)                 ms_version="" ;;
+		*) test "$ms_version" == "${ms_version#*:}" && ms_version="" || ms_version="${ms_version#*:}" ;;
+	esac
+	unset _lic_img
 	fi
 	test -n "$ms_version" && echo -e "[i] MetalSoft version: \e[1;32m${ms_version}\e[0m"
-	if [ -z "$bsi_present" ];then
-		if version_ge "${ms_version:-0}" 7.0.0; then
-			echo "[i] bsi deployment absent (expected on >= 7.0.0): skipping BSI checks"
-		elif [ -n "$ms_version" ];then
-			# bsi should exist below 7.0.0 - its absence is itself a finding, not a skip.
-			echo -e "${orange}[!] bsi deployment MISSING on MetalSoft ${ms_version} (< 7.0.0), where it is expected: skipping BSI checks${nc}"
-		else
-			echo "[i] bsi deployment absent (MetalSoft version undetermined): skipping BSI checks"
-		fi
-	fi
 
 	create_dirs
 	get_system
@@ -1930,56 +1922,47 @@ if [ "$gather" == 'gc' ];then
 
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
 		echo "[i] checking disk latency [100mb temp file] .."
-		if [ -n "$bsi_present" ];then
-			echo -e "\n:: BSI: df -h\n" >> "${backupFolder}/disk/bsi_df.txt"
-			timeout 60 $k exec -it deploy/bsi -- bash -c "df -h" >> "${backupFolder}/disk/bsi_df.txt" 2>&1
-			echo -e "\n:: time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-			timeout 300 $k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
-			echo -e "\n:: time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-			timeout 300 $k exec -it deploy/bsi -- bash -c "time dd if=/dev/zero of=/var/log/testfile bs=4096 count=24400 oflag=direct status=progress;rm -f /var/log/testfile" >> "${backupFolder}/disk/latency.txt" 2>&1
-		else
-			# No bsi container to write into (>= 7.0.0). Measure the node's own disks
-			# instead, otherwise every 7.x dump ships an empty latency.txt.
-			echo "############ bsi deployment absent${ms_version:+ (MetalSoft ${ms_version})}: measured on the node instead of inside bsi" >> "${backupFolder}/disk/bsi_df.txt"
-			# PID in the name: /var/log is OUTSIDE the per-run backup folder, so a fixed
-			# "testfile" there is shared state. Two collectors - or one leftover from a
-			# killed run - write the same path and one rm -f pulls the file out from
-			# under the other's dd, making both latency numbers fiction. Verified: run
-			# B's rm makes run A's file vanish mid-write. A killed run also strands
-			# ~96MB, and on the customer node /var/log is a separate 4.0G LV at 51%.
-			_dlslow=""
-			for _dlpath in "${backupFolder}" /var/log;do
-				# Every skip is recorded where the measurement would have been. An
-				# absent section otherwise reads as "the probe failed", and the reason
-				# is exactly what the reader needs.
-				if [ -n "$_dlslow" ];then
-					echo -e "\n:: node: ${_dlpath} SKIPPED: the previous target measured ${_dlslow} MB/s, and at that speed this 100MB probe costs minutes for a number that would only confirm the same storage is slow." >> "${backupFolder}/disk/latency.txt"
-					continue
-				fi
-				# Writing 100MB into a filesystem that is nearly full is the one case
-				# where this probe can cause the outage it is meant to diagnose, and a
-				# bundle is often collected precisely because a disk filled up.
-				_dlpct="$(df -P "$_dlpath" 2>/dev/null | awk 'NR==2{p=$(NF-1); gsub("%","",p); print p+0}')"
-				if [ -n "$_dlpct" ] && [ "$_dlpct" -ge 90 ];then
-					echo -e "\n:: node: ${_dlpath} SKIPPED: its filesystem is ${_dlpct}% full, and this probe writes 100MB. Free space there and re-run if the number is needed." >> "${backupFolder}/disk/latency.txt"
-					continue
-				fi
-				echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/${_dlfile} bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
-				# Where this run's output starts, so the rate below is read from THIS
-				# measurement only. A fixed tail would pick up the previous target's
-				# number whenever a dd produces none - a failed probe would then be
-				# read as the last target's speed and could suppress the ones after it.
-				_dlmark=$(wc -l < "${backupFolder}/disk/latency.txt")
-				{ time timeout 300 dd if=/dev/zero of="${_dlpath}/${_dlfile}" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
-				rm -f "${_dlpath}/${_dlfile}"
-				# Under 5 MB/s the remaining targets are not worth their runtime: at
-				# 0.3 MB/s one of these took 300s of a 536s collection.
-				_dlrate="$(tail -n +$((_dlmark+1)) "${backupFolder}/disk/latency.txt" | grep -oE 'copied, [0-9.]+ s, [0-9.]+ [kMG]B/s' | tail -1 \
-					| awk '{n=$(NF-1); u=$NF; if(u=="kB/s")n=n/1000; else if(u=="GB/s")n=n*1000; printf "%.1f", n}')"
-				test -n "$_dlrate" && awk -v n="$_dlrate" 'BEGIN{exit !(n<5)}' && _dlslow="$_dlrate"
-			done
-			unset _dlslow _dlpct _dlrate _dlmark _dlpath
-		fi
+		# Measured on the node. The probe used to run inside the bsi container, which
+		# was removed in 7.0.0.
+		#
+		# PID in the name: /var/log is OUTSIDE the per-run backup folder, so a fixed
+		# "testfile" there is shared state. Two collectors - or one leftover from a
+		# killed run - write the same path and one rm -f pulls the file out from
+		# under the other's dd, making both latency numbers fiction. Verified: run
+		# B's rm makes run A's file vanish mid-write. A killed run also strands
+		# ~96MB, and on the customer node /var/log is a separate 4.0G LV at 51%.
+		_dlslow=""
+		for _dlpath in "${backupFolder}" /var/log;do
+			# Every skip is recorded where the measurement would have been. An
+			# absent section otherwise reads as "the probe failed", and the reason
+			# is exactly what the reader needs.
+			if [ -n "$_dlslow" ];then
+				echo -e "\n:: node: ${_dlpath} SKIPPED: the previous target measured ${_dlslow} MB/s, and at that speed this 100MB probe costs minutes for a number that would only confirm the same storage is slow." >> "${backupFolder}/disk/latency.txt"
+				continue
+			fi
+			# Writing 100MB into a filesystem that is nearly full is the one case
+			# where this probe can cause the outage it is meant to diagnose, and a
+			# bundle is often collected precisely because a disk filled up.
+			_dlpct="$(df -P "$_dlpath" 2>/dev/null | awk 'NR==2{p=$(NF-1); gsub("%","",p); print p+0}')"
+			if [ -n "$_dlpct" ] && [ "$_dlpct" -ge 90 ];then
+				echo -e "\n:: node: ${_dlpath} SKIPPED: its filesystem is ${_dlpct}% full, and this probe writes 100MB. Free space there and re-run if the number is needed." >> "${backupFolder}/disk/latency.txt"
+				continue
+			fi
+			echo -e "\n:: node: time dd if=/dev/zero of=${_dlpath}/${_dlfile} bs=4096 count=24400 oflag=direct status=progress\n" >> "${backupFolder}/disk/latency.txt"
+			# Where this run's output starts, so the rate below is read from THIS
+			# measurement only. A fixed tail would pick up the previous target's
+			# number whenever a dd produces none - a failed probe would then be
+			# read as the last target's speed and could suppress the ones after it.
+			_dlmark=$(wc -l < "${backupFolder}/disk/latency.txt")
+			{ time timeout 300 dd if=/dev/zero of="${_dlpath}/${_dlfile}" bs=4096 count=24400 oflag=direct status=progress ; } >> "${backupFolder}/disk/latency.txt" 2>&1
+			rm -f "${_dlpath}/${_dlfile}"
+			# Under 5 MB/s the remaining targets are not worth their runtime: at
+			# 0.3 MB/s one of these took 300s of a 536s collection.
+			_dlrate="$(tail -n +$((_dlmark+1)) "${backupFolder}/disk/latency.txt" | grep -oE 'copied, [0-9.]+ s, [0-9.]+ [kMG]B/s' | tail -1 \
+				| awk '{n=$(NF-1); u=$NF; if(u=="kB/s")n=n/1000; else if(u=="GB/s")n=n*1000; printf "%.1f", n}')"
+			test -n "$_dlrate" && awk -v n="$_dlrate" 'BEGIN{exit !(n<5)}' && _dlslow="$_dlrate"
+		done
+		unset _dlslow _dlpct _dlrate _dlmark _dlpath
 	else
 		echo "[-] Skipping disk latency check"
 		echo "############ disk latency check skipped" >> "${backupFolder}/disk/latency.txt"
@@ -2145,26 +2128,6 @@ if [ "$gather" == 'gc' ];then
 	throttle 1   # NOT bare `wait`: see the throttle comment - bare wait blocks on the
 	             # tee process substitutions this script installs on stdout/stderr.
 	unset _lf _df
-	# bsi was dropped in MetalSoft 7.0.0; skip its checks entirely when it is not deployed.
-	if [ -n "$bsi_present" ];then
-	timeout 60 $k exec -it deploy/bsi -- bash -c 'supervisorctl status all' > "${backupFolder}/k8s/bsi/supervisorctl.txt" 2>&1
-	bsipod="$($k get pod --no-headers|grep ^bsi|awk '{print $1}')"
-	test -n "$bsipod" && while read -r bsi;do
-	if [ -z "$sqlUpgradeLogs" ];then
-		varlogs="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*" \) -type f -iname "*.log"' 2>/dev/null|tr -d '\r')"
-	else
-		varlogs="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ExportVHosts/bsi/ \( -path "/var/log/ExportVHosts/bsi/BSI/Endpoints/JSONRPC/*" -or -path "/var/log/ExportVHosts/bsi/PHP_*" -or -path "/var/log/ExportVHosts/bsi/SQLUpgrader/*/finished_logs/*" -or -path "/var/log/ExportVHosts/bsi/switchDevices/*"  \) -type f -iname "*.log" -or -iname "*.sql"' 2>/dev/null|tr -d '\r')"
-	fi
-
-	test -n "$varlogs" && while read -r z;do timeout 120 $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogs"
-
-	varlogsbsi="$(timeout 120 $k exec -it "$bsi" -- bash -c 'find /var/log/ -maxdepth 1 -type f -iname "bsi-*.log"' 2>/dev/null|tr -d '\r')"
-	test -n "$varlogsbsi" && while read -r z;do timeout 120 $k cp "$bsi:${z}" "${backupFolder}/k8s/bsi/varlog/${bsi}_${z//\//_}" &>/dev/null;done <<< "$varlogsbsi"
-done <<< "$bsipod"
-	else
-		echo "bsi deployment not present${ms_version:+ (MetalSoft ${ms_version})}: BSI checks skipped (bsi was removed in 7.0.0)" > "${backupFolder}/k8s/bsi/supervisorctl.txt"
-	fi
-
 $k get secret --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get secret "$z" -o yaml;done > "${backupFolder}/k8s/resources/secrets.yaml"
 $k get cm --no-headers|awk '{print $1}'|while read -r z;do echo -e '\n---';$k get cm "$z" -o yaml;done > "${backupFolder}/k8s/resources/configmaps.yaml"
 # When the listing above fails, the while body never runs and the file is left EMPTY -
