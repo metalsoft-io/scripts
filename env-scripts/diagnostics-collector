@@ -93,6 +93,7 @@ curl_no_proxy=""
 newbackupFolder=""
 mysqldump_exitcode_error=""
 cluster_unreachable=""
+tls_secrets=""
 ns_list=""
 ns_rc=0
 autopush_tried=""
@@ -1028,6 +1029,60 @@ function get_ssl ()
 	test -f /etc/ssl/certs/ca-certificates.crt && cp /etc/ssl/certs/ca-certificates.crt "${backupFolder}/ssl/ca_certificates.crt" || true
 }
 
+# One line per cert for the ':: ssl expiry' section of collection_info.txt, plus an
+# ALERT_CRITICAL line when the cert is already expired. $1 is the label, the PEM comes
+# on stdin (never through a pipe: the caller needs the two variables back, and a pipe
+# would run this in a subshell). openssl x509 reads the first cert of a chain = the leaf.
+ssl_expiry_lines="" ssl_alerts=""
+function ssl_expiry_line ()
+{
+	local pem cn san end
+	pem="$(cat)"
+	end="$(printf '%s\n' "$pem" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)"
+	test -n "$end" || { ssl_expiry_lines+="${1}: (unable to decode)"$'\n'; return; }
+	cn="$(printf '%s\n' "$pem" | openssl x509 -noout -subject -nameopt sep_multiline 2>/dev/null | grep -m1 -oP 'CN=\K.*')"
+	# CN alone is not the hostname: on the customer GC the CN is a different node than
+	# the SAN traefik actually answers for, so list the SANs when the cert has any.
+	san="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -oP 'DNS:\K[^,\s]+' | paste -sd, -)"
+	local who="CN=${cn}${san:+ SAN=${san}}"
+	if printf '%s\n' "$pem" | openssl x509 -noout -checkend 0 &>/dev/null;then
+		ssl_expiry_lines+="${1}: ${who} notAfter=${end}"$'\n'
+	else
+		ssl_expiry_lines+="${1}: ${who} notAfter=${end} EXPIRED"$'\n'
+		ssl_alerts+="ALERT_CRITICAL: SSL for ${1} (${who}) has expired at ${end} (now is $(date -u '+%F %T %Z'))"$'\n'
+	fi
+}
+
+# GC-only post-collection check for the failure seen most often in the field: an
+# expired cert. Two independent sources - the k8s secrets carrying tls.crt (the
+# MetalSoft SSL traefik serves, k3s-serving, webhook certs), and the k3s node cert
+# files (apiserver, kubelet, CAs, etcd), which traefik never touches but which take
+# the cluster down when they lapse. The node files are checked even when the cluster
+# is unreachable - that is exactly when an expired apiserver cert is the suspect.
+function gc_ssl_expiry ()
+{
+	local f secret
+	{
+		for f in /var/lib/rancher/k3s/server/tls/*.crt /var/lib/rancher/k3s/server/tls/etcd/*.crt /var/lib/rancher/k3s/agent/*.crt;do
+			test -f "$f" || continue
+			echo ":::: $f"
+			openssl x509 -noout -subject -issuer -dates -in "$f" 2>&1
+			ssl_expiry_line "$f" < "$f"
+		done
+	} > "${backupFolder}/ssl/k3s_node_certs.txt" 2>&1 || true
+	test -s "${backupFolder}/ssl/k3s_node_certs.txt" || echo ":: no k3s cert files under /var/lib/rancher/k3s (not a k3s node, or a different distribution)" > "${backupFolder}/ssl/k3s_node_certs.txt"
+	if [ -n "$cluster_unreachable" ];then
+		ssl_expiry_lines+="k8s secrets: skipped (cluster unreachable)"$'\n'
+	elif [ -z "$tls_secrets" ];then
+		ssl_expiry_lines+="k8s secrets: none carrying tls.crt, or the listing failed (see ssl/k8s_tls_certs.txt)"$'\n'
+	else
+		while read -r secret;do
+			test -n "$secret" || continue
+			ssl_expiry_line "secret ${secret}" < <(timeout 30 $k_orig -n "${secret%%/*}" get secret "${secret##*/}" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null)
+		done <<< "$tls_secrets"
+	fi
+}
+
 function get_disks ()
 {
 	# host_cmd, like df -i below: df walks every mount, so one slow or remounting
@@ -1740,19 +1795,25 @@ test -s "${backupFolder}/k8s/resources/secrets.yaml" || \
 test -s "${backupFolder}/k8s/resources/configmaps.yaml" || \
 	{ echo ":: nothing was dumped - the namespace has no configmaps, or the listing failed:"; $k get cm 2>&1; } > "${backupFolder}/k8s/resources/configmaps.yaml" 2>&1 || true
 
-	# GC-specific SSL: TLS secret expiry
+	# GC-specific SSL: TLS secret expiry.
+	# Select by the presence of a tls.crt key, not by secret type: the MetalSoft SSL
+	# secret traefik serves (<ns>-ssl) is type Opaque, and filtering on kubernetes.io/tls
+	# skipped it - the one cert whose expiry cuts every SC off the controller. The list
+	# is kept in $tls_secrets for gc_ssl_expiry so the cluster is asked only once.
+	tls_secrets="$(timeout 60 $k_orig get secrets -A -o json 2>/dev/null | jq -r '.items[] | select(.data["tls.crt"] != null) | .metadata.namespace + "/" + .metadata.name' 2>/dev/null)"
 	{
-		$k_orig get secrets -A -o json 2>/dev/null | jq -r '.items[] | select(.type=="kubernetes.io/tls") | .metadata.namespace + "/" + .metadata.name' 2>/dev/null | while read -r secret; do
+		printf '%s\n' "$tls_secrets" | while read -r secret; do
+			test -n "$secret" || continue
 			ns_name="${secret%%/*}"
 			sec_name="${secret##*/}"
 			echo ":::: $ns_name/$sec_name"
-			$k_orig -n "$ns_name" get secret "$sec_name" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -subject -enddate 2>/dev/null || echo "  (unable to decode)"
+			timeout 30 $k_orig -n "$ns_name" get secret "$sec_name" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -subject -enddate 2>/dev/null || echo "  (unable to decode)"
 		done
 	} > "${backupFolder}/ssl/k8s_tls_certs.txt" 2>&1 || true
 	# Same trap as secrets.yaml: if the listing or jq fails the while body never runs and
 	# the file is empty, which is indistinguishable from "this cluster has no TLS secrets".
 	test -s "${backupFolder}/ssl/k8s_tls_certs.txt" || \
-		{ echo ":: no kubernetes.io/tls secrets found, or the listing failed:"
+		{ echo ":: no secrets carrying tls.crt found, or the listing failed:"
 		  command -v jq &>/dev/null || echo ":: jq is not installed on this host - the listing cannot run"
 		  timeout 60 $k_orig get secrets -A 2>&1 | head -20; } > "${backupFolder}/ssl/k8s_tls_certs.txt" 2>&1 || true
 	# GC-specific SSL: traefik cert logs.
@@ -1948,6 +2009,7 @@ fi
 # bump - mtime is when this copy was installed. The clock block is here because the
 # archive mixes three time bases: pod logs in UTC, dmesg in node-local time, and kubectl
 # ages relative to the moment of collection.
+test "$gather" == 'gc' && gc_ssl_expiry
 {
 	echo ":: collector"
 	# One field per stat call: %n is the FILE NAME, not a newline, so a combined format
@@ -1979,8 +2041,18 @@ fi
 			echo "cluster:    reachable"
 		fi
 		timeout 30 $k_orig version 2>&1 | head -4 || true
+		echo
+		echo ":: ssl expiry"
+		printf '%s' "$ssl_expiry_lines"
+		echo
+		# Empty when nothing is wrong: an empty section means checked and clean.
+		echo ":: alerts"
+		printf '%s' "$ssl_alerts"
 	fi
 } > "${backupFolder}/collection_info.txt" 2>&1 || true
+# Alerts also go to the console, red, so the operator sees them without opening the
+# archive. Only alerts: the full expiry list stays in collection_info.txt.
+test -n "$ssl_alerts" && printf '%s' "$ssl_alerts" | sed "s/^/${lightred}[!] /;s/\$/${nc}/"
 
 echo "[i] creating an archive.."
 test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log.txt" &>/dev/null
