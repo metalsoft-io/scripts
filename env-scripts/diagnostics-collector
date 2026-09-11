@@ -1593,6 +1593,7 @@ if [ "$gather" == 'gc' ];then
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show global variables\G' &> "${backupFolder}/mysql/mysql_show_global_variables" || true
+	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show global status' &> "${backupFolder}/mysql/mysql_show_global_status" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show session variables\G' &> "${backupFolder}/mysql/mysql_show_session_variables" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT * FROM information_schema.innodb_trx\G' &> "${backupFolder}/mysql/mysql_information_schema.innodb_trx" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SELECT * FROM performance_schema.data_locks' &> "${backupFolder}/mysql/mysql_performance_schema.data_locks" || true
@@ -1611,6 +1612,20 @@ if [ "$gather" == 'gc' ];then
 		echo "# idx = '** TABLE SCAN (no index) **' with high ops/total_wait_s means queries on that table hit no index."
 		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT object_schema AS db, object_name AS tbl, IFNULL(index_name, '** TABLE SCAN (no index) **') AS idx, count_star AS ops, ROUND(sum_timer_wait / 1000000000000, 2) AS total_wait_s FROM performance_schema.table_io_waits_summary_by_index_usage WHERE count_star > 0 AND object_schema NOT IN ('mysql', 'performance_schema', 'sys') ORDER BY sum_timer_wait DESC LIMIT 30"
 	} &> "${backupFolder}/mysql/mysql_performance_schema.table_io" || true
+	{
+		echo "# Top statements by total time (digest = literals normalised to ?). Cumulative since mysqld start."
+		echo "# rows_examined >> rows_sent, no_index_used > 0, or tmp_disk_tables > 0 = candidate for an index or a rewrite."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT SCHEMA_NAME AS db, COUNT_STAR AS execs, ROUND(SUM_TIMER_WAIT / 1000000000000, 2) AS total_s, ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_ms, ROUND(MAX_TIMER_WAIT / 1000000000, 3) AS max_ms, SUM_ROWS_EXAMINED AS rows_examined, SUM_ROWS_SENT AS rows_sent, SUM_ROWS_AFFECTED AS rows_affected, SUM_CREATED_TMP_DISK_TABLES AS tmp_disk_tables, SUM_NO_INDEX_USED AS no_index_used, SUM_SORT_SCAN AS sort_scans, FIRST_SEEN, LAST_SEEN, LEFT(DIGEST_TEXT, 1000) AS query FROM performance_schema.events_statements_summary_by_digest WHERE SCHEMA_NAME IS NULL OR SCHEMA_NAME NOT IN ('mysql', 'performance_schema', 'sys', 'information_schema') ORDER BY SUM_TIMER_WAIT DESC LIMIT 30\G"
+		echo
+		echo "# Current InnoDB lock waits: who is blocked, by whom, on what. Empty when healthy."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT * FROM sys.innodb_lock_waits\G"
+		echo
+		echo "# Largest tables. data_free_mb = fragmentation / reclaimable space. table_rows is an InnoDB estimate."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT table_schema AS db, table_name AS tbl, engine, table_rows, ROUND(data_length / 1024 / 1024, 1) AS data_mb, ROUND(index_length / 1024 / 1024, 1) AS index_mb, ROUND((data_length + index_length) / 1024 / 1024, 1) AS total_mb, ROUND(data_free / 1024 / 1024, 1) AS data_free_mb FROM information_schema.tables WHERE table_schema NOT IN ('mysql', 'performance_schema', 'sys', 'information_schema') ORDER BY data_length + index_length DESC LIMIT 40"
+		echo
+		echo "# File I/O by file since mysqld start: which tablespace / redo / binlog is hot. Correlate with the disk latency check."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT * FROM sys.io_global_by_file_by_bytes LIMIT 20"
+	} &> "${backupFolder}/mysql/mysql_performance_summary" || true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
 	timeout 180 $k exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
