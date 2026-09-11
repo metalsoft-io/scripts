@@ -1602,6 +1602,15 @@ if [ "$gather" == 'gc' ];then
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_exception_history order by afc_exception_id desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_exception_history" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue_debug_log where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue_debug_log" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'select * from afc_queue where datacenter_name <> "master" order by afc_updated_timestamp desc limit 2000\G' metalsoft &> "${backupFolder}/mysql/mysql_metalsoft_afc_queue" || true
+	{
+		echo "# Which tables are causing the most I/O"
+		echo "# Cumulative since mysqld start. Sort key: total_wait_s. High write_ops + high avg_wait_us = hot table; high read_ops with table scans (see below) = missing index."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT object_schema AS db, object_name AS tbl, count_star AS total_ops, count_read AS read_ops, count_write AS write_ops, count_insert AS inserts, count_update AS updates, count_delete AS deletes, ROUND(sum_timer_wait / 1000000000000, 2) AS total_wait_s, ROUND(avg_timer_wait / 1000000, 3) AS avg_wait_us, ROUND(max_timer_wait / 1000000, 3) AS max_wait_us FROM performance_schema.table_io_waits_summary_by_table WHERE count_star > 0 AND object_schema NOT IN ('mysql', 'performance_schema', 'sys', 'information_schema') ORDER BY sum_timer_wait DESC LIMIT 25"
+		echo
+		echo "# Within those tables, which indexes / table scans are responsible"
+		echo "# idx = '** TABLE SCAN (no index) **' with high ops/total_wait_s means queries on that table hit no index."
+		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT object_schema AS db, object_name AS tbl, IFNULL(index_name, '** TABLE SCAN (no index) **') AS idx, count_star AS ops, ROUND(sum_timer_wait / 1000000000000, 2) AS total_wait_s FROM performance_schema.table_io_waits_summary_by_index_usage WHERE count_star > 0 AND object_schema NOT IN ('mysql', 'performance_schema', 'sys') ORDER BY sum_timer_wait DESC LIMIT 30"
+	} &> "${backupFolder}/mysql/mysql_performance_schema.table_io" || true
 	echo "[i] backing up mysql schema.."
 	mysql_start="$SECONDS"
 	timeout 180 $k exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
