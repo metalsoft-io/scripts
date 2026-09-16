@@ -756,6 +756,7 @@ if [[ "${ENVVAR_BUILD_IMAGE:-disabled}" == "enabled" ]] || [[ "${ENVVAR_BUILD_IM
       # - LOG_LEVEL=debug
       # - MINIMUM_FREE_DISK_SIZE_GB_TO_START_BUILD=40
       - OS_IMAGES_MOUNT=/iso
+      - MAXIMUM_BUILDS_IN_PARALLEL=20
     volumes:
       - /opt/metalsoft/nfs-storage:/iso
 "
@@ -772,6 +773,7 @@ else
 #      # - LOG_LEVEL=debug
 #      # - MINIMUM_FREE_DISK_SIZE_GB_TO_START_BUILD=40
 #      - OS_IMAGES_MOUNT=/iso
+#      - MAXIMUM_BUILDS_IN_PARALLEL=20
 #    volumes:
 #      - /opt/metalsoft/nfs-storage:/iso
 "
