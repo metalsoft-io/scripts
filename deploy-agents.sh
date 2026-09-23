@@ -718,6 +718,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER_HOME_HOST=\${ANSIBLE_RUNNER_HOME_HOST:-/opt/metalsoft/ansible-jobs}
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_DNS_SERVERS=\"8.8.8.8,1.1.1.1\"
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
+      #- ANSIBLE_RUNNER_DEBUG_KEEP_CONTAINER=1
 "
     fi
 fi
@@ -734,7 +735,6 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] || ! verlt "$IMAGES_T
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
       ${sock_prefix}\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}:\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
-      #- ANSIBLE_RUNNER_DEBUG_KEEP_CONTAINER=1
 "
 fi
 
