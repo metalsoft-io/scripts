@@ -29,8 +29,9 @@ yamltojson ()
   python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
 }
 
+# develop* tags compare as newest (v1000.0.0)
 verlte() {
-  printf '%s\n' "$1" "$2" | sort -C -V
+  printf '%s\n' "${1/#develop*/v1000.0.0}" "${2/#develop*/v1000.0.0}" | sort -C -V
 }
 
 verlt() {
@@ -79,6 +80,9 @@ testOS ()
 }
 read -r NAME VERSION_ID found_os os_packager < <(testOS)
 
+test -n "$IMAGES_TAG" || { echo -e "${lightred}Error: IMAGES_TAG not set (e.g. IMAGES_TAG=v7.4.0)${nc}" >&2; exit 12; }
+verlt "$IMAGES_TAG" v7.0.0 && { echo -e "${lightred}Error: IMAGES_TAG=${IMAGES_TAG} not supported, v7.0.0+ required${nc}" >&2; exit 13; }
+
 DOCKERBIN='docker'
 test "$USEPODMAN" == "1" && DOCKERBIN='podman'
 
@@ -97,43 +101,19 @@ if [ "$found_os" == "debian" ];then
 fi
 
 debuglog "Creating folders"
-if verlt "$IMAGES_TAG" v7.0.0; then
-PRE7FOLDERS="/opt/metalsoft/BSIAgentsVolume /opt/metalsoft/logs_agents /opt/metalsoft/logs /opt/metalsoft/mon /opt/metalsoft/.ssh"
-MONITORING_SERVICE_PORT=8099
-fi
-mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage/buildImageRequest /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns $PRE7FOLDERS || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
+mkdir -p /opt/metalsoft/agents /opt/metalsoft/containerd /opt/metalsoft/nfs-storage/buildImageRequest /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/pdns || { echo "ERROR: unable to create folders in /opt/"; exit 3; }
 chown -R 1000:1000 /opt/metalsoft/ansible-jobs /opt/metalsoft/ansible-archives /opt/metalsoft/nfs-storage
 if ! grep -q '^alias a=' /root/.bashrc;then echo "alias a='cd /opt/metalsoft/agents'" >> /root/.bashrc || true;fi
 
 REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
-if [ -n "$DOCKERENV" ]; then
-  echo "TAG=${IMAGES_TAG}" > /opt/metalsoft/agents/.env
-  IMAGES_TAGENV='${TAG}'
-  DCAGENTS_URL="${REG_HOST}/sc/datacenter-agents-compiled-v2:${IMAGES_TAGENV}"
-  JUNOSDRIVER_URL="${REG_HOST}/sc/junos-driver:${IMAGES_TAGENV}"
-  MSAGENT_URL="${REG_HOST}/sc/ms-agent:${IMAGES_TAGENV}"
-  ANSIBLE_RUNNER_URL="${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
-  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
-
-else
-  # Set default version if IMAGES_TAG not set
-  IMAGES_TAG=${IMAGES_TAG:-v6.4.0}
-
-  # Set URLs if not already defined, using IMAGES_TAG
-  DCAGENTS_URL=${DCAGENTS_URL:-${REG_HOST}/sc/datacenter-agents-compiled-v2:${IMAGES_TAG}}
-  JUNOSDRIVER_URL=${JUNOSDRIVER_URL:-${REG_HOST}/sc/junos-driver:${IMAGES_TAG}}
-  MSAGENT_URL=${MSAGENT_URL:-${REG_HOST}/sc/ms-agent:${IMAGES_TAG}}
-  ANSIBLE_RUNNER_URL=${ANSIBLE_RUNNER_URL:-${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAG}}
-  SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAG}"
-
-fi
+IMAGES_TAGENV='${TAG}'
+MSAGENT_URL="${REG_HOST}/sc/ms-agent:${IMAGES_TAGENV}"
+ANSIBLE_RUNNER_URL="${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
+SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
 
 MS_TUNNEL_SECRET="${MS_TUNNEL_SECRET:-default}"
 
 # Env vars set via CLI:
-if verlt "$IMAGES_TAG" v7.0.0; then
-CLI_DCCONF="$DCCONF"
-fi
 CLI_DATACENTERNAME="$DATACENTERNAME"
 
 # Get network interface information
@@ -158,11 +138,7 @@ debuglog "Using interface ${interface_name} with IP ${interface_ip}"
 # Try multiple methods to get main IP address. Prioritize the IP on the default route interface.
 MAINIP="$interface_ip"
 
-if verlt "$IMAGES_TAG" v7.0.0; then
-test -z "$SSL_HOSTNAME" && SSL_HOSTNAME="$(echo "$DCCONF"|cut -d/ -f3)"
-else
 test -n "$SSL_HOSTNAME" || { echo -e "${lightred}Error: SSL_HOSTNAME not set${nc}" >&2; exit 11; }
-fi
 NFSIP="$MAINIP"
 
 # keep the NFS_HOST if already set, as it could've been modified manually
@@ -372,7 +348,7 @@ fi
 
 backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
 # Create backup of config files if they exist
-for file in docker-compose.yaml haproxy.cfg supervisor.conf ssl-cert.pem; do
+for file in docker-compose.yaml ssl-cert.pem; do
   if [ -f "/opt/metalsoft/agents/$file" ]; then
     cp "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file}.bak"
   fi
@@ -395,23 +371,6 @@ if ! command -v yq >/dev/null; then
   debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
   curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
   chmod +x /usr/local/bin/yq
-fi
-
-if verlt "$IMAGES_TAG" v7.0.0 && [[ ! "$IMAGES_TAG" =~ ^develop ]]; then
-debuglog "Checking DCONF"
-if [ -z "$DCCONF" ];then
-  echo
-  echo Help:
-  echo Before you start, make sure you have copied the SSL pem to this server, as the script will ask for a file path or provided the PEM via SSL_B64 variable
-  echo If you save the ssl to /root/agents-ssl.pem it will be automatically picked up and copied to /opt/metalsoft/agents/ssl-cert.pem
-  echo
-  echo You must specify the configuration URL for your Datacenter ID as DCCONF, or if you use metalcloud-cli, you can pull a one-liner with:
-  echo 'DCCONF="$(metalcloud-cli datacenter get --id uk-london --return-config-url)" SSL_HOSTNAME=yourhost.metalsoft.io [ REGISTRY_LOGIN=base64HashOfRegistryCredentials SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem ] ] bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)'
-  echo
-  exit 0
-fi
-debuglog "Pulling DC config URL: $(echo "$DCCONF"|cut -d/ -f1,2,3)"
-  DCCONFDOWNLOADED="$(curl -skL $curl_s_proxy --connect-timeout 20 --retry 2 "${DCCONF}")" || { echo -e "${lightred}Error: Failed to download DC config from: ${DCCONF}${nc}" >&2; }
 fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
@@ -571,15 +530,7 @@ if [ -z "$SSL_HOSTNAME" ];then
   debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
 fi
 
-if verlt "$IMAGES_TAG" v7.0.0; then
-  debuglog "Setting DATACENTERNAME"
-  DCAURL="${AGENTS_IMG:-$DCAGENTS_URL}"
-  test -z "$DATACENTERNAME" && command -v yq &>/dev/null && DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | yq -p json .currentDatacenter 2>/dev/null|grep -v '\bnull\b')"
-  test -z "$DATACENTERNAME" && command -v jq &>/dev/null && DATACENTERNAME="$(echo "${DCCONFDOWNLOADED}" | jq -r .currentDatacenter | grep -v '\bnull\b')"
-  test -z "$DATACENTERNAME" && DATACENTERNAME="$(echo "$DCCONF" | head -1 | grep -oP '(?<=datacenter_name=)[a-z0-9\-\_]+')"
-else
-  test -n "$DATACENTERNAME" || { echo -e "${lightred}Error: DATACENTERNAME is not set${nc}" >&2; exit 1; }
-fi
+test -n "$DATACENTERNAME" || { echo -e "${lightred}Error: DATACENTERNAME is not set${nc}" >&2; exit 1; }
 
 HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
 HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/[.:][.:]*/-/g')-${HOSTNAMERANDOM}
@@ -635,23 +586,6 @@ for CAP in "${CAPABILITIES[@]}"; do
     fi
 done
 
- # Defaults for v6.x
-  if verlt "$IMAGES_TAG" v7.0.0; then
-    export ENVVAR_COMMAND_EXECUTION=enabled
-    export ENVVAR_DHCP_OOB=disabled
-    export ENVVAR_FILE_TRANSFER=enabled
-    export ENVVAR_HTTP_REQUEST=disabled
-    export ENVVAR_INBAND_FILE_TRANSFER=disabled
-    export ENVVAR_INBAND_HTTP_PROXY=disabled
-    export ENVVAR_NETCONF=enabled
-    export ENVVAR_OOB_HTTP_PROXY=enabled
-    export ENVVAR_SPICE=disabled
-    export ENVVAR_SSH_COMMAND=disabled
-    export ENVVAR_SWITCH_SUBSCRIPTION=enabled
-    export ENVVAR_SYSLOG=enabled
-    export ENVVAR_VNC=enabled
-  fi
-
 # Initialize ansible variables
 ansible_runner=""
 ms_agent_ansible_runner_mounts=""
@@ -659,23 +593,6 @@ ms_agent_ansible_runner_volumes=""
 
 # Conditionally define ansible-runner service and ms-agent mounts
 if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
-    if verlt "$IMAGES_TAG" v6.4; then
-        ansible_runner="#  ansible-runner:
-#     container_name: ansible-runner
-#     network_mode: host
-#     hostname: ansible-runner-${DATACENTERNAME}-${HOSTNAMERANDOM}
-#     image: ${ANSIBLE_RUNNER_URL}
-#     restart: always
-#     environment:
-#       - TZ=Etc/UTC
-#       - ANSIBLE_RUNNER=enabled
-#       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
-#       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
-#     volumes:
-#       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
-#       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
-"
-    else
         #debuglog "ANSIBLE_RUNNER capability enabled" info green
         if verlt "$IMAGES_TAG" v7.4.0; then
         ansible_runner="  ansible-runner:
@@ -720,7 +637,6 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
       #- ANSIBLE_RUNNER_DEBUG_KEEP_CONTAINER=1
 "
-    fi
 fi
 
 # ms-agent ansible runner volumes. Present when ANSIBLE_RUNNER enabled, or always for v7.4.0+
@@ -839,7 +755,7 @@ inband_dc="  ms-agent:
     image: ${MSAGENT_URL}
     restart: always
     cap_add: [NET_BIND_SERVICE, NET_ADMIN]
-    # group_add: active only for v7.4.0+ with ANSIBLE_RUNNER enabled - gives ms-agent (appuser) access to the docker socket (root-equivalent on host)
+    ### group_add: active only for v7.4.0+ with ANSIBLE_RUNNER enabled - gives ms-agent (appuser) access to the docker socket (root-equivalent on host)
 ${group_add_prefix}    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
 #    security_opt: [\"no-new-privileges:true\"]
     environment:
@@ -898,77 +814,6 @@ $ms_agent_ansible_runner_volumes
       # - /etc/hosts:/etc/hosts:ro
       # - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/ssl-cert.pem
 ${nfs_service}"
-non_inband_dc="  agents:
-    network_mode: host
-    container_name: agents
-    image: ${DCAURL}
-    restart: always
-    privileged: true
-    #command: bash -c \"update-ca-certificates\"
-    volumes:
-      - /opt/metalsoft/BSIAgentsVolume:/etc/BSIDatacenterAgents
-      - /opt/metalsoft/logs:/var/log
-      - /opt/metalsoft/.ssh:/root/.ssh
-      - /opt/metalsoft/mon:/var/lib/mon/data
-      - ${ms_agent_ssl_os_ca_path}:/etc/ssl/certs
-      - /usr/local/share/ca-certificates:/usr/local/share/ca-certificates
-      - /usr/share/ca-certificates:/usr/share/ca-certificates
-      #- /etc/hosts:/etc/hosts:ro
-      # Use only if custom CA is needed
-      #- /opt/metalsoft/agents/supervisor.conf:/var/vhosts/datacenter-agents-binary-compiled/supervisor.conf
-    ports:
-      - 9080:9080/tcp
-      - 8067:8067/tcp
-      - 3205:3205/tcp
-      - 8069:8069/tcp
-      - 8080:8080/tcp
-      - 81:81/tcp
-      - 53:53/tcp
-      - 53:53/udp
-      - 35280:35280/udp
-      - 3205:3205/udp
-      - 67:67/udp
-      - 69:69/udp
-      - 6343:6343/udp
-    environment:
-      ## Disable DHCP in agents when DHCP_OOB=enabled on ms-agent
-      # - DHCP_SERVICE_ENABLED=0
-      # - http_proxy=http://proxy_ip_here:3128
-      # - https_proxy=http://proxy_ip_here:3128
-      # - no_proxy=localhost,127.0.0.1,::1,192.168.0.0/16
-      # - HTTP_PROXY=http://proxy_ip_here:3128
-      # - HTTPS_PROXY=http://proxy_ip_here:3128
-      # - NO_PROXY=localhost,127.0.0.1,::1,192.168.0.0/16
-      - TZ=Etc/UTC
-      - URL=${DCCONF}
-      # - NODE_TLS_REJECT_UNAUTHORIZED=0
-      ## Use only if custom CA is needed
-      - NODE_EXTRA_CA_CERTS=/etc/ssl/certs/metalsoft_ca.pem
-    hostname: agents-${DATACENTERNAME}-${HOSTNAMERANDOM}
-  haproxy:
-    network_mode: host
-    container_name: dc-haproxy
-    image: ${REG_HOST}/sc/dc-haproxy:3.0.4
-    restart: always
-    privileged: true
-    volumes:
-      - /opt/metalsoft/agents/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - /opt/metalsoft/agents/ssl-cert.pem:/etc/ssl/certs/poc.metalsoft.io.pem
-    environment:
-      - TZ=Etc/UTC
-    hostname: dc-haproxy
-  junos-driver:
-    network_mode: bridge
-    container_name: junos-driver
-    image: ${JUNOSDRIVER_URL}
-    restart: always
-    ports:
-      - 8006:5000/tcp
-    environment:
-      - TZ=Etc/UTC
-    hostname: junos-driver
-"
-
 other_services="
 #  pdns-auth-recursor:
 #    container_name: pdns-auth-recursor
@@ -981,222 +826,20 @@ other_services="
 #    volumes:
 #      - /opt/metalsoft/pdns:/appdata
 "
-if ! verlt "$IMAGES_TAG" v7.0.0; then
-  non_inband_dc=''
-fi
-
-test "$INBAND" = "1" && non_inband_dc=''
-if [[ "$IMAGES_TAG" =~ ^develop ]]; then  non_inband_dc=''; fi
-
 debuglog "Creating /opt/metalsoft/agents/docker-compose.yaml"
+echo "TAG=${IMAGES_TAG}" > /opt/metalsoft/agents/.env
+unset TAG # an inherited TAG would override .env in compose
 cat > /opt/metalsoft/agents/docker-compose.yaml <<ENDD
 services:
 $inband_dc
 $ansible_runner
 $sc_image_builder
-$non_inband_dc
 $other_services
 ENDD
-
-if verlt "$IMAGES_TAG" v7.0.0; then
-debuglog "Creating /opt/metalsoft/agents/haproxy.cfg"
-cat > /opt/metalsoft/agents/haproxy.cfg <<ENDD
-global
-  chroot /var/lib/haproxy
-  user root
-  group root
-  daemon
-
-  ## set fd-hard-limit on haproxy 2.6+ to fix start-up error: 'Not enough memory to allocate 1073741816 entries for fdtab'
-  # fd-hard-limit 50000
-  # maxconn 4096
-
-  ssl-default-bind-options no-sslv3 no-tls-tickets
-  ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
-  ssl-default-server-options no-sslv3 no-tls-tickets
-  ssl-default-server-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256
-defaults
-  mode http
-  log stdout format raw local0
-
-  retries 3
-  timeout connect 10s
-  timeout client 100m
-  timeout server 30m
-  timeout check 10s
-  timeout http-keep-alive 10s
-  timeout queue 10m
-  timeout http-request 30m
-  timeout tunnel 480m
-  maxconn 3000
-  option httpclose
-  option forwardfor except 127.0.0.0/8
-  option redispatch
-  option abortonclose
-  option httplog
-  option dontlognull
-  option http-server-close
-
-frontend ft_local_apache_80
-  mode http
-  bind :80
-  bind 127.0.0.1:80
-  acl host_ws path_beg -i /api-ws
-  acl host_dhcpe path_beg -i /dhcpe
-  acl host_tftp path_beg -i /tftp8069
-  acl host_dhcpe path_beg -i /os-ready
-  acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
-  acl has_special_uri path_beg /remote-console
-  acl has_iso_uri path_beg /iso
-  use_backend bk_local_apache_8080 if host_ws
-  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-  use_backend bk_fullmetal_tftpe_8069 if host_tftp
-  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-  use_backend bk_repo_443 if host_repo
-  use_backend bk_guacamole_tomcat_8080 if has_special_uri
-  use_backend bk_msagents_8099 if has_iso_uri
-  default_backend bk_local_apache_81
-
-frontend ft_local_apache_443
-  mode http
-  bind :443 ssl crt /etc/ssl/certs/poc.metalsoft.io.pem
-  acl host_ws path_beg -i /api-ws
-  acl host_dhcpe path_beg -i /dhcpe
-  acl host_tftp path_beg -i /tftp8069
-  acl host_dhcpe path_beg -i /os-ready
-  acl host_repo hdr_dom(Host) -i repo.${SSL_HOSTNAME}
-  acl has_special_uri path_beg /remote-console
-  http-response add-header Strict-Transport-Security max-age=157680001
-  use_backend bk_local_apache_8080 if host_ws
-  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-  use_backend bk_fullmetal_tftpe_8069 if host_tftp
-  use_backend bk_fullmetal_dhcpe_8067 if host_dhcpe
-  use_backend bk_repo_443 if host_repo
-  use_backend bk_guacamole_tomcat_8080 if has_special_uri
-  default_backend bk_local_apache_81
-
-backend bk_fullmetal_dhcpe_8067
-  server localhost 127.0.0.1:8067
-
-  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-  option forwardfor header X-HAPROXY-OUTSIDE-IP
-
-backend bk_fullmetal_tftpe_8069
-  server localhost 127.0.0.1:8069
-
-  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-  option forwardfor header X-HAPROXY-OUTSIDE-IP
-
-backend bk_local_apache_81
-  server localhost 127.0.0.1:81
-
-      http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-  option forwardfor header X-HAPROXY-OUTSIDE-IP
-
-backend bk_local_apache_8080
-  server localhost 127.0.0.1:8080
-
-  http-request set-header X-HAPROXY-OUTSIDE-SAFE %[src]
-  option forwardfor header X-HAPROXY-OUTSIDE-IP
-
-backend bk_guacamole_tomcat_8080
-  server localhost 127.0.0.1:8081
-
-backend bk_repo_443
-  server repo.poc.metalsoft.io 127.0.0.1:9080
-
-backend bk_msagents_8099
-  server localhost 127.0.0.1:8099
-ENDD
-fi
 
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml
 
-        if verlt "$IMAGES_TAG" v7.0; then
-          test -n "${CLI_DCCONF}" && CLI_DCCONF="$(echo -n "${CLI_DCCONF}"|sed 's/&/\\&/g' )" && sed -i "s,\(\s\+\- URL=\).*,\1${CLI_DCCONF},g" /opt/metalsoft/agents/docker-compose.yaml
-          test -n "${CLI_DATACENTERNAME}" && sed -iE "s/^([[:space:]]*hostname: agents-)([^[:space:]]+)(-[[:alnum:]_]+)/\\\\1${CLI_DATACENTERNAME}\\\\3/g" /opt/metalsoft/agents/docker-compose.yaml
-
-          if [ -n "$CUSTOM_CA" ]; then
-            cat > /opt/metalsoft/agents/supervisor.conf <<ENDD
-[supervisord]
-nodaemon=true
-environment=
-    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/${CUSTOM_CA},
-    NODE_OPTIONS="--use-openssl-ca"
-
-[unix_http_server]
-file=/var/run/supervisor.sock
-chmod=0700
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
-
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-
-[program:BSI]
-command=/var/vhosts/datacenter-agents-binary-compiled/BSI/BSI --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/BSI.err.log
-stdout_logfile=/var/log/BSI.out.log
-
-[program:DHCP]
-command=/var/vhosts/datacenter-agents-binary-compiled/DHCP/DHCP --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/DHCP.err.log
-stdout_logfile=/var/log/DHCP.out.log
-
-
-[program:TFTP]
-command=/var/vhosts/datacenter-agents-binary-compiled/TFTP/TFTP --expose-gc
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/TFTP.err.log
-stdout_logfile=/var/log/TFTP.out.log
-
-[program:DNS]
-command=/var/vhosts/datacenter-agents-binary-compiled/DNS/DNS --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/DNS.err.log
-stdout_logfile=/var/log/DNS.out.log
-
-[program:iSNS]
-command=/var/vhosts/datacenter-agents-binary-compiled/iSNS/iSNS --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/iSNS.err.log
-stdout_logfile=/var/log/iSNS.out.log
-
-[program:Power]
-command=/var/vhosts/datacenter-agents-binary-compiled/Power/Power --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/Power.err.log
-stdout_logfile=/var/log/Power.out.log
-
-[program:AnsibleRunner]
-command=/var/vhosts/datacenter-agents-binary-compiled/AnsibleRunner/AnsibleRunner --expose-gc --use-openssl-ca
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/AnsibleRunner.err.log
-stdout_logfile=/var/log/AnsibleRunner.out.log
-
-[program:Monitoring]
-command=/usr/local/bin/node --expose-gc --use-openssl-ca /var/vhosts/datacenter-agents-binary-compiled/Monitoring/Monitoring.portable.js
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/Monitoring.err.log
-stdout_logfile=/var/log/Monitoring.out.log
-ENDD
-
-sed -i "s/\#\- \/opt\/metalsoft\/agents\/supervisor\.conf/\- \/opt\/metalsoft\/agents\/supervisor.conf/g" /opt/metalsoft/agents/docker-compose.yaml
-
-          fi
-          fi
 
 dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" "$HOME/.bashrc";then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> "$HOME/.bashrc" && source "$HOME/.bashrc";fi
 
@@ -1350,11 +993,7 @@ fi
 
 
 debuglog "Pulling discovery ISO"
-if verlt "$IMAGES_TAG" v7.0.0; then
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK_CentOS-7-x86_64.iso
-else
 test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
-fi
 
 if [ "$PULL_SUCCESS" -eq 1 ]; then
 sleep 2
