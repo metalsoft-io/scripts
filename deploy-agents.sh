@@ -724,11 +724,14 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
 fi
 
 # ms-agent ansible runner volumes. Present when ANSIBLE_RUNNER enabled, or always for v7.4.0+
-# (the runner moved into ms-agent). Socket mount is commented for <v7.4.0, active for v7.4.0+.
-if ! verlt "$IMAGES_TAG" v7.4.0; then
+# (the runner moved into ms-agent). Socket mount + docker group_add are active only for v7.4.0+
+# with ANSIBLE_RUNNER enabled (docker socket access is root-equivalent on the host).
+if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] && ! verlt "$IMAGES_TAG" v7.4.0; then
     sock_prefix="- "
+    group_add_prefix=""
 else
     sock_prefix="#- "
+    group_add_prefix="#"
 fi
 if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] || ! verlt "$IMAGES_TAG" v7.4.0; then
     ms_agent_ansible_runner_volumes="
@@ -836,7 +839,8 @@ inband_dc="  ms-agent:
     image: ${MSAGENT_URL}
     restart: always
     cap_add: [NET_BIND_SERVICE, NET_ADMIN]
-#    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
+    # group_add: active only for v7.4.0+ with ANSIBLE_RUNNER enabled - gives ms-agent (appuser) access to the docker socket (root-equivalent on host)
+${group_add_prefix}    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
 #    security_opt: [\"no-new-privileges:true\"]
     environment:
       # - HTTP_PROXY=http://proxy_ip_here:3128
