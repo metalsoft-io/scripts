@@ -4,12 +4,42 @@
 # How to install:
 # wget -q https://raw.githubusercontent.com/metalsoft-io/scripts/main/env-scripts/diagnostics-collector -O /usr/local/bin/diagnostics-collector && chmod +x /usr/local/bin/diagnostics-collector
 
+# The archive is encrypted (unless -u): a random AES-256 key+IV per run, wrapped with the
+# RSA public key below. File layout: [512-byte RSA-OAEP wrapped key][aes-256-cbc tar.gz].
+# One-time keygen (the private key stays with MetalSoft, NEVER in this repo):
+#   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out ms-diag.key && openssl pkey -in ms-diag.key -pubout -out ms-diag.pub
+# Decrypt (MS_DIAG_KEY = path to the private key, e.g. export MS_DIAG_KEY=~/.ssh/ms-diag.key in ~/.bashrc):
+#   f=/path/to/ms-diagnostics-XXXX.tar.gz.enc
+#   k=$(head -c 512 "$f" | openssl pkeyutl -decrypt -inkey "$MS_DIAG_KEY" -pkeyopt rsa_padding_mode:oaep)
+#   tail -c +513 "$f" | openssl enc -d -aes-256-cbc -K "${k:0:64}" -iv "${k:64:32}" | tar xzv -C "$(dirname "$f")"
+ms_diag_pubkey='-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAqsQtTgz8RR52NyT8cvCZ
+2IEQEQGJpNMTioYR/Ms/UBiqGxuVGwoWVUMQqxUPPu1+Ty3cHQoImGYoH20ua8yv
+Iz+DKzyHa4m+SuMrTpjhWYXjnMMGGtajyCF6Tk4GLcMnICqz9X9ibuoByt6mInc6
+BTmwnDVkeik1vUvz8LOn9ktulDMOk21Yosc6rFCQz3KQZJEvGtx3dMDcjfoeG/2z
+5oqB9diDK1dma7Zc51bHNqF0n5vTZzkx8LX/q8Vgc/HNz0DjMSViqQ1fapwi3tyD
+Ip5RtWcz/68Vz9JznKGRIqTxouUfWyvIRDVPyjTF5QKgqSz8CkdxICDdr4rYqPk/
+Mgd6sFHbqkkYm2ySnbgL2STgnmktNiSHMzMlqJf08KOYEVZ76uapdOZpIb2Usu7x
+LKIUMvcCLoEx/powl774Gr3CSPqK6erLG+nwdPUNrhMqzgv+udheGq68SjeECXyF
+1vmmRl8Kf6By8m+sfZt30molmP7KbLw6XDvhul+3dK14JMa7CDXnvsHOG4BzU00k
+AXXEhPpDq49qgpdDHkZpbaqH0CirLNeCH9+fbfMoM6JrjXp3a/Ia9JV2fi/B25ZO
+xjnDV8Ob7ZmjKx/O+uxOO8UadgrMz0cNn4Hv/lAOtw5VWNMKwM7BTlCS5sHipbeg
+hrlX0qwnq+IM7H3yS02zznECAwEAAQ==
+-----END PUBLIC KEY-----'
+
 # Every check in this script parses the output of another command, and a decimal comma
 # or a translated label silently defeats those patterns: dd reporting "17,6 MB/s" and
 # systemd reporting a translated "System clock synchronized" both make a check go quiet
 # rather than fail. One export fixes the class instead of each site, and it also makes
 # every bundle comparable regardless of the customer's locale. Commands run inside a
 # container still need their own, since this environment does not reach them.
+# The caller's locale is read first: it is the only hint of whether their terminal takes
+# UTF-8, and a non-UTF-8 one would print "•", "✓", "✗" as mojibake. Whether the font
+# has the glyph cannot be detected from here.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+	*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) info_icon="•" ok_icon="✓" err_icon="✗" ;;
+	*) info_icon="[i]" ok_icon="OK" err_icon="ERR" ;;
+esac
 export LC_ALL=C
 
 if tput sgr0 &>/dev/null; then
@@ -53,13 +83,13 @@ set -x
 # waits on stdin on a broken cluster is worse than one that fails.
 exec 0</dev/null
 
-#test "$EUID" -ne 0 && { echo -e "[\e[1;31m✗\e[0m] Please run as root"; exit 1; }
+#test "$EUID" -ne 0 && { echo -e "[\e[1;31m${err_icon}\e[0m] Please run as root"; exit 1; }
 thedate="$(date +"%F-%H%M")"
 backupFolder=/var/backups/metalsoft
 backupFolder="${backupFolder%/}"
 
 function usage {
-	echo -e "[i] $( basename "$0") gathers diagnostics for MetalSoft. Optional parameters:
+	echo -e "${info_icon} $( basename "$0") gathers diagnostics for MetalSoft. Optional parameters:
 	${bold}-n${nc} ${orange}(Required)${nc} ${gray}specify a namespace [ -n demo-metalsoft ]${nc}
 	${bold}-k${nc} ${gray}specify an alternative kubectl [ -k /usr/local/bin/kubectl ]${nc}
 	${bold}-b${nc} ${gray}specify a backup folder [ -b /var/backups/metalsoft ]${nc}
@@ -68,6 +98,7 @@ function usage {
 	${bold}-d${nc} ${gray}Flag [ skip disk latency check ]${nc}
 	${bold}-p${nc} ${gray}Flag [ Push the diagnostics to MetalSoft via HTTPS ]${nc}
 	${bold}-e${nc} ${gray}Flag [ Extended collection of k8s resources and DBs ]${nc}
+	${bold}-u${nc} ${gray}Flag [ do not encrypt the archive ]${nc}
 	${bold}-j${nc} ${gray}parallel workers for per-pod/per-DB collection, default 4 [ -j 1 = fully serial ]${nc}"
 	exit 0
 }
@@ -92,6 +123,7 @@ type kubectl &>/dev/null && gather='gc' && k='kubectl '
 test "$gather" == 'gc' && test -n "${ns:-}" && envname="$ns"
 pushfile=
 extended=
+noEncrypt=""
 pushfileFromArg=""
 doNotAutoSend=""
 debugOn=""
@@ -115,7 +147,7 @@ have_wait_n=""
 # collector was actually invoked, which decides what is legitimately absent (-e, -d).
 invocationArgs="$*"
 
-while getopts ":k:n:b:P:j:capezxd" flag
+while getopts ":k:n:b:P:j:capezxdu" flag
 do
 	case "${flag}" in
 		p) pushfile="1" ;;
@@ -126,6 +158,7 @@ do
 		n) envname="${OPTARG}" ;;
 		b) backupFolder="${OPTARG}" ;;
 		e) extended=1 ;;
+		u) noEncrypt=1 ;;
 		z) doNotAutoSend=1 ;;
 		x) debugOn=1 ;;
 		d) SKIP_DISK_LATENCY_CHECK=1 ;;
@@ -144,9 +177,9 @@ if ! [[ "$parallel" =~ ^[0-9]+$ ]] || [ "$parallel" -lt 1 ];then
 fi
 
 if [ -n "$pushfileFromArg" ];then
-	test -f "$pushfileFromArg" || { echo -e "[\e[1;31m✗\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
+	test -f "$pushfileFromArg" || { echo -e "[\e[1;31m${err_icon}\e[0m] File '$pushfileFromArg' does not exist"; exit 1; }
 	curl_log="/tmp/diagnostics-collector-curl-${thedate}.log"
-	echo -n "[i] Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... "
+	echo -n "${info_icon} Trying to auto-push the diagnostics file '$pushfileFromArg' to MetalSoft [HTTPS] ... "
 	http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushfromarg=1&ns=${envname}" "$pushfileFromArg" "$curl_log")"
 	curl_exit=$?
 	if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
@@ -154,19 +187,19 @@ if [ -n "$pushfileFromArg" ];then
 		rm -f "$curl_log"
 		exit 0
 	else
-		echo -e "\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+		echo -e "\n[\e[1;31m${err_icon}\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
 		exit 1
 	fi
 fi
 
-test -n "$gather" && echo "[i] Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m✗\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
+test -n "$gather" && echo "${info_icon} Collecting diagnostics for: ${gather^}" || { echo -e "[\e[1;31m${err_icon}\e[0m] please specify parameter -c [for Global Controller] or -a [for Site Controller or Agent]"; exit 1; }
 test -z "$envname" && test "$gather" == 'gc' && echo "${lightred}[e] Please use -n to specify namespace${nc}" && exit 10;
 set -u
 originalBackupFolder=${backupFolder}
 backupFolder=${backupFolder}/ms-diagnostics-${thedate}_${envname}__${gather}
 
 function finish {
-	echo "[i] cleaning up.."
+	echo "${info_icon} cleaning up.."
 	# the disk-latency probe writes outside backupFolder (into /var/log), so clear that
 	# too - matched by pid, so a concurrent run's probe is never touched
 	rm -f "/var/log/${_dlfile}"
@@ -176,7 +209,7 @@ function finish {
 }
 trap finish INT TERM
 test -n "$debugOn" && set -x
-mkdir -p "${backupFolder}" || { echo -e "[\e[1;31m✗\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
+mkdir -p "${backupFolder}" || { echo -e "[\e[1;31m${err_icon}\e[0m] ${backupFolder} could not be created. Please check path, permissions and available disk space"; exit 2; }
 
 env | grep -qi _proxy && echo -e "${lightred}PROXY setup:" && env|grep -i _proxy && echo -ne "${nc}"
 
@@ -1836,11 +1869,11 @@ if [ "$gather" == 'gc' ];then
 	fi
     test -n "$config_hostname" && newbackupFolder="$(echo "${backupFolder}"|sed "s/__/-${config_hostname}-/")"
 
-	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m✗\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
+	if ! type $k >/dev/null 2>&1 ;then echo -e "[\e[1;31m${err_icon}\e[0m] ${bold}$k${nc} was not found. Exiting.."; exit 1;fi
 	# Store original k for operations that don't need namespace
 	k_orig="$k"
 	test -z "$envname" && envname=$(timeout 60 $k_orig get pod -A|grep -v '^default'|grep mysql|head -1|awk '{print $1}') && test -z "$config_hostname" && envnamelabel="-${envname}-gc"
-	test -n "$envname" && echo -e "[i] Namespace [-n]: \e[1;31m${envname}\e[0m"
+	test -n "$envname" && echo -e "${info_icon} Namespace [-n]: \e[1;31m${envname}\e[0m"
 
 	# Update k to include namespace
 	k="$k -n $envname"
@@ -1858,13 +1891,13 @@ if [ "$gather" == 'gc' ];then
 	ns_list="$(timeout 60 $k_orig get ns 2>&1)"; ns_rc=$?
 	if [ "$ns_rc" -ne 0 ];then
 		# apiserver unreachable/wedged: collect what is still reachable (host level).
-		echo -e "[\e[1;31m✗\e[0m] Cluster unreachable (kubectl get ns exited ${ns_rc})."
+		echo -e "[\e[1;31m${err_icon}\e[0m] Cluster unreachable (kubectl get ns exited ${ns_rc})."
 		echo -e "${orange}[!] collecting host-level diagnostics only; see CLUSTER_UNREACHABLE.txt in the archive${nc}"
 		cluster_unreachable=1
 	elif ! printf '%s\n' "$ns_list" | grep -q "$envname";then
 		# cluster is fine, the namespace simply is not there - almost always a wrong -n.
 		# Fail fast and show what is available; collecting host data would not help.
-		echo -e "[\e[1;31m✗\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting.."
+		echo -e "[\e[1;31m${err_icon}\e[0m] Namespace \e[1;31m${envname}\e[0m not found. Exiting.."
 		printf '%s\n' "$ns_list"
 		exit 1
 	fi
@@ -1872,7 +1905,7 @@ if [ "$gather" == 'gc' ];then
 
 	if [ -z "$cluster_unreachable" ];then
 	kubeconfig="$(detect_kubeconfig || true)"
-	test -n "$kubeconfig" && echo -e "[i] kubeconfig: ${kubeconfig}" || echo -e "${orange}[!] no working kubeconfig found; helm output may be empty${nc}"
+	test -n "$kubeconfig" && echo -e "${info_icon} kubeconfig: ${kubeconfig}" || echo -e "${orange}[!] no working kubeconfig found; helm output may be empty${nc}"
 
 	# MetalSoft version, read off the license deployment image tag (present in every
 	# release, and bsi is gone as of 7.0.0 so it is the only source left).
@@ -1894,7 +1927,7 @@ if [ "$gather" == 'gc' ];then
 	esac
 	unset _lic_img
 	fi
-	test -n "$ms_version" && echo -e "[i] MetalSoft version: \e[1;32m${ms_version}\e[0m"
+	test -n "$ms_version" && echo -e "${info_icon} MetalSoft version: ${bold}${ms_version}${nc}"
 
 	create_dirs
 	get_system
@@ -1921,7 +1954,7 @@ if [ "$gather" == 'gc' ];then
 	get_k8s_cluster
 
 	if [ -z "$SKIP_DISK_LATENCY_CHECK" ];then
-		echo "[i] checking disk latency [100mb temp file] .."
+		echo "${info_icon} checking disk latency [100mb temp file] .."
 		# Measured on the node. The probe used to run inside the bsi container, which
 		# was removed in 7.0.0.
 		#
@@ -1968,12 +2001,12 @@ if [ "$gather" == 'gc' ];then
 		echo "############ disk latency check skipped" >> "${backupFolder}/disk/latency.txt"
 	fi
 	get_k8s
-	echo "[i] probing in-cluster DNS from running pods.."
+	echo "${info_icon} probing in-cluster DNS from running pods.."
 	dns_probe
 
 	mkdir -p "${backupFolder}/mysql"
 	if [ "$extended" == '1' ];then
-		echo "[i] backing up mysql databases.."
+		echo "${info_icon} backing up mysql databases.."
 		#backup all mysql DBs:
 		mysqldump_opts='--skip-comments'
 		# Dump ceiling, derived from real data size rather than a flat guess. The original
@@ -1991,7 +2024,7 @@ if [ "$gather" == 'gc' ];then
 		else
 			mysqldump_timeout=1800
 		fi
-		echo "[i] mysql data ${mysql_total_mb:-?} MB; per-database dump ceiling ${mysqldump_timeout}s"
+		echo "${info_icon} mysql data ${mysql_total_mb:-?} MB; per-database dump ceiling ${mysqldump_timeout}s"
 		all_dbs="$(timeout 60 $k exec deploy/mysql -- mysql -AN $mysqldump_opts -e 'show databases' | grep -Ev "^(Database|performance_schema|information_schema|sys)$")"
 		while read -r z;do
 			_outfile="${backupFolder}/mysql/mysqldatabase_${z}_${envname}.sql.gz"
@@ -2007,7 +2040,7 @@ if [ "$gather" == 'gc' ];then
 		done <<< "$all_dbs"
 	fi
 
-	echo "[i] backing up mysql locks.."
+	echo "${info_icon} backing up mysql locks.."
 	# get information_schema.innodb_trx
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'SHOW ENGINE INNODB STATUS\G' &> "${backupFolder}/mysql/mysql_show_engine_innodb_status" || true
 	timeout 120 $k exec deploy/mysql -- mysql -Ae 'show full processlist' &> "${backupFolder}/mysql/mysql_show_full_processlist" || true
@@ -2045,7 +2078,7 @@ if [ "$gather" == 'gc' ];then
 		echo "# File I/O by file since mysqld start: which tablespace / redo / binlog is hot. Correlate with the disk latency check."
 		timeout 120 $k exec deploy/mysql -- mysql -Ae "SELECT * FROM sys.io_global_by_file_by_bytes LIMIT 20"
 	} &> "${backupFolder}/mysql/mysql_performance_summary" || true
-	echo "[i] backing up mysql schema.."
+	echo "${info_icon} backing up mysql schema.."
 	mysql_start="$SECONDS"
 	timeout 180 $k exec deploy/mysql -- mysqldump --add-drop-table --no-data --single-transaction --skip-comments --triggers --routines --events metalsoft &> "${backupFolder}/mysql/mysql_database_schema.sql"
 	mysqldump_exitcode="$?"
@@ -2070,9 +2103,9 @@ if [ "$gather" == 'gc' ];then
 
 	mkdir -p "${backupFolder}/couchdb"
 	if [[ "$couchdbUrl" =~ ^([^:]+):([^@]*)@(.+)$ ]]; then
-		echo "[i] backing up couchdb: [${BASH_REMATCH[1]}:${BASH_REMATCH[2]:0:4}****@${BASH_REMATCH[3]}]"
+		echo "${info_icon} backing up couchdb: [${BASH_REMATCH[1]}:${BASH_REMATCH[2]:0:4}****@${BASH_REMATCH[3]}]"
 	else
-		echo "[i] backing up couchdb: [${couchdbUrl}]"
+		echo "${info_icon} backing up couchdb: [${couchdbUrl}]"
 	fi
 	if ! $curl_no_proxy curl -sS --max-time 15 "http://${couchdbUrl}/_all_dbs" | jq -rce . &>/dev/null; then
 		echo "CouchDB: $curl_no_proxy http://${couchdbUrl}/_all_dbs did not return valid JSON. Is proxy being used?" > "${backupFolder}/couchdb/couchdb_pull_failed"
@@ -2087,7 +2120,7 @@ if [ "$gather" == 'gc' ];then
 		$curl_no_proxy curl -sk --max-time 300 "http://${couchdbUrl}/$z/_all_docs?include_docs=true"|jq '{"docs": [.rows[].doc]}' | jq 'del(.docs[]._rev)'|jq -c .|gzip > "${backupFolder}/couchdb/couchdb_backup_${z}.gz"
 	done < <(test -n "$couchdbUrl" && $curl_no_proxy curl -sk --max-time 15 "http://${couchdbUrl}/_all_dbs" | jq -r ".[]" 2>/dev/null)
 
-	echo "[i] backing up k8s pod runtime logs.."
+	echo "${info_icon} backing up k8s pod runtime logs.."
 	# --all-containers + --prefix so init-container output is captured too (kubectl
 	# otherwise silently picks one container: "Defaulted container X out of: X, Y (init)").
 	# --timestamps because plenty of containers log without a clock of their own, which
@@ -2190,11 +2223,11 @@ test -s "${backupFolder}/k8s/resources/configmaps.yaml" || \
 	} > "${backupFolder}/ssl/traefik_certs.txt" 2>&1 || true
 
 if [ "$extended" == '1' ];then
-	echo "[i] backing up k8s resources.."
+	echo "${info_icon} backing up k8s resources.."
 	# k8s backups
 	$k api-resources --no-headers|awk '{print $1}'|while read -r z;do mkdir -p "${backupFolder}/k8s/api_resources/${z}";$k get "$z" --no-headers 2>/dev/null|awk '{print $1}'|while read -r a;do $k get "$z" "$a" -o yaml > "${backupFolder}/k8s/api_resources/${z}/${z}_${a}.yaml" 2>/dev/null;done;done || true
 
-	echo "[i] backing up k8s container logs.."
+	echo "${info_icon} backing up k8s container logs.."
 	# -L follows the symlinks /var/log/containers is made of, so this reads through to
 	# the real log files: bounded, because a full log directory on slow storage is
 	# exactly the state being investigated.
@@ -2272,10 +2305,10 @@ else # if gather=sc
 	get_ssl
 
 	get_egress
-	echo "[i] backing up docker stats.."
+	echo "${info_icon} backing up docker stats.."
 	get_docker
 	get_container_netns
-	echo "[i] probing DNS from running containers.."
+	echo "${info_icon} probing DNS from running containers.."
 	docker_dns_probe
 	test -f /opt/metalsoft/agents/docker-compose.yaml && timeout 120 rsync -a /opt/metalsoft/agents/ "${backupFolder}/docker/agents/" || true
 	# Recursive walk of an NFS mount. Bounded, and it says so when it was cut short:
@@ -2370,6 +2403,9 @@ fi
 	echo "path:  $(realpath "$0" 2>/dev/null || echo "$0")"
 	stat -c 'mtime: %y' "$(realpath "$0")" 2>&1 || true
 	stat -c 'ctime: %z' "$(realpath "$0")" 2>&1 || true
+	# mtime is download time, not version. The hash matches a line in diagnostics-collector.sum
+	# history: git log -S<sha1> -- env-scripts/diagnostics-collector.sum names the exact commit.
+	{ sha1sum "$(realpath "$0")" 2>/dev/null || echo '<unavailable>'; } | awk '{print "sha1:  " $1}' || true
 	echo "invoked as: $0 ${invocationArgs}"
 	echo
 	echo ":: clock at collection time"
@@ -2418,33 +2454,55 @@ if [ -n "$alerts" ];then
 		case "$_aline" in
 			ALERT_CRITICAL:*) printf '%s[!] %s%s\n' "$lightred" "$_aline" "$nc" ;;
 			ALERT_WARNING:*)  printf '%s[!] %s%s\n' "$orange"   "$_aline" "$nc" ;;
-			*)                printf '%s[i] %s%s\n' "$gray"     "$_aline" "$nc" ;;
+			*)                printf '%s%s %s%s\n' "$gray" "$info_icon" "$_aline" "$nc" ;;
 		esac
 	done
 	echo
 fi
 
-echo "[i] creating an archive.."
+echo "${info_icon} creating an archive.."
 test -f "$bash_log" && mv "$bash_log" "${backupFolder}/bash_log.txt" &>/dev/null
 resultFilename="${originalBackupFolder}/ms-diagnostics-${thedate}${envnamelabel}.tar.gz"
 test -z "$newbackupFolder" && newbackupFolder="$backupFolder"
 test "$backupFolder" != "$newbackupFolder" && mv "${backupFolder}" "${newbackupFolder}"
-tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackupFolder##*/}" >/dev/null 2>&1 && \
+tar_args=(-C "$(dirname "${newbackupFolder%*/}")" "${newbackupFolder##*/}")
+if [ -z "$noEncrypt" ];then
+	# No xtrace while the key is in scope: it would otherwise be written to bash_log.txt.
+	{ set +x; } 2>/dev/null
+	_kiv="$(openssl rand -hex 48 2>/dev/null)"
+	# Streamed, so the plaintext archive never touches disk. The key+IV hex is what gets
+	# RSA-wrapped, so decrypting needs nothing beyond openssl (see the header).
+	if [ "${#_kiv}" -eq 96 ] && ( set -o pipefail
+		printf '%s' "$_kiv" | openssl pkeyutl -encrypt -pubin -inkey <(printf '%s\n' "$ms_diag_pubkey") -pkeyopt rsa_padding_mode:oaep &&
+		tar czf - "${tar_args[@]}" | openssl enc -aes-256-cbc -K "${_kiv:0:64}" -iv "${_kiv:64:32}"
+	) > "${resultFilename}.enc" 2>/dev/null;then
+		resultFilename="${resultFilename}.enc"
+	else
+		rm -f "${resultFilename}.enc"
+		# The bundle is kept rather than lost, but an unencrypted one is not sent anywhere
+		# on its own: only an explicit -p still pushes it.
+		echo -e "${orange}[!] Encryption failed (is openssl installed?). The archive is NOT encrypted and will not be sent automatically.${nc}"
+		doNotAutoSend=1
+	fi
+	unset _kiv
+	set -x
+fi
+{ [[ "$resultFilename" == *.enc ]] || tar czf "${resultFilename}" "${tar_args[@]}" >/dev/null 2>&1; } && \
 	rm -rf "$newbackupFolder" && {
 	filesize="$(du -h "${resultFilename}" | awk '{print $1}')"
-	echo -e "[\e[1;32m✓\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}"
-} || { echo -e "[\e[1;31m✗\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
+	echo -e "[\e[1;32m${ok_icon}\e[0m][$filesize][${SECONDS}s] Please provide the following file to MetalSoft Team:\n${lightgreen}${resultFilename}${nc}"
+} || { echo -e "[\e[1;31m${err_icon}\e[0m] Error: Unable to create: ${resultFilename}"; exit 2; }
 
 	curl_log="${originalBackupFolder}/diagnostics-collector-curl-${thedate}.log"
 	if [ "$pushfile" == "1" ];then
-		echo -n "[i] Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} "
+		echo -n "${info_icon} Trying to auto-push the diagnostics file to MetalSoft [HTTPS]...${orange} "
 		http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&pushparam=1&ns=${envname}" "$resultFilename" "$curl_log")"
 		curl_exit=$?
 		if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
 			echo -e "${nc}Done (HTTP $http_code)\n"
 			rm -f "$curl_log"
 		else
-			echo -e "${nc}\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+			echo -e "${nc}\n[\e[1;31m${err_icon}\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
 			exit 1
 		fi
 	else
@@ -2474,14 +2532,14 @@ tar czf "${resultFilename}" -C "$(dirname "${newbackupFolder%*/}")" "${newbackup
 			read -r -p "${orange}[?] Send the file to MetalSoft Team via HTTPS POST? [y/N]${nc} " yn </dev/tty 2>/dev/tty
 			case $yn in
 				[Yy]* )
-					echo -n "[i] Trying to push the diagnostics file to MetalSoft [HTTPS]...${orange} "
+					echo -n "${info_icon} Trying to push the diagnostics file to MetalSoft [HTTPS]...${orange} "
 					http_code="$(push_diag "https://diagnostics-report.metalsoft.io/?a=121&f=992&promptedpush=1&ns=${envname}" "$resultFilename" "$curl_log")"
 					curl_exit=$?
 					if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
 						echo -e "${nc}Done (HTTP $http_code)\n"
 						rm -f "$curl_log"
 					else
-						echo -e "${nc}\n[\e[1;31m✗\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
+						echo -e "${nc}\n[\e[1;31m${err_icon}\e[0m] Push failed (HTTP ${http_code:-000}, curl exit ${curl_exit}). Trace: $curl_log"
 					fi
 					;;
 				* ) exit;;
