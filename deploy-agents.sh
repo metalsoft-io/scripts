@@ -699,16 +699,6 @@ else
     fi
 fi
 
-# Determine CONTROLLER_TCP_ADDRESS value based on SECOND_IP
-controller_tcp_address_val="${SSL_HOSTNAME}:9091"
-if [[ -n "${SECOND_IP}" && "${SECOND_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    controller_tcp_address_val="${SECOND_IP}:443"
-fi
-controller_tcp_address_line=""
-if verlt "$IMAGES_TAG" v7.2.0; then
-    controller_tcp_address_line="      - CONTROLLER_TCP_ADDRESS=${controller_tcp_address_val}"
-fi
-
 # Determine NFS service configuration (DEPLOY_NFS=1 to enable, default: enabled)
 if [[ "${DEPLOY_NFS:-1}" == "1" ]]; then
   nfs_service="  nfs:
@@ -774,8 +764,6 @@ ${group_add_prefix}    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
       - MONITORING_SERVICE_PORT=${MONITORING_SERVICE_PORT:-80}
       - LOG_LEVEL=debug
       - CONTROLLER_WS_URI=wss://${SSL_HOSTNAME}/tunnel-ctrl
-      ## CONTROLLER_TCP_ADDRESS (9091) should not be needed as of v7.2.0
-${controller_tcp_address_line}
       - CONTROLLER_REMOTE_CONSOLE_URI=wss://${SSL_HOSTNAME}/agent-remote-console
       - OS_IMAGES_MOUNT=/iso
       - NFS_HOST=${NFSIP}:/data
