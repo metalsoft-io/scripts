@@ -856,7 +856,7 @@ ${metrics_tls_line}
       - /etc/ssl/certs:/etc/ssl/certs:ro
 "
 else
-  metrics_service="#  vmagent: metrics pusher - disabled. Re-run with ENVVAR_ENABLE_METRICS=enabled plus
+  metrics_service="#  vmagent: metrics pusher - disabled. Re-run with ENABLE_METRICS=1 plus
 #    METRICS_REMOTE_WRITE_URL, METRICS_REMOTE_WRITE_USERNAME, METRICS_REMOTE_WRITE_PASSWORD, METRICS_GC_NAMESPACE
 #    (see the Metrics section of deploy-agents.sh).
 "
