@@ -639,6 +639,13 @@ for CAP in "${CAPABILITIES[@]}"; do
     fi
 done
 
+# The controller's install one-liner passes these two without the ACAP_ prefix (ENABLE_METRICS=1)
+for CAP in ENABLE_METRICS SWITCH_SNMP_HEALTH; do
+    case "${!CAP:-}" in
+        1|true|enabled) export "ENVVAR_${CAP}=enabled" ;;
+    esac
+done
+
  # Defaults for v6.x (develop* tags are current builds, not v6: same exclusion as the DCCONF check above)
   if verlt "$IMAGES_TAG" v7.0.0 && [[ ! "$IMAGES_TAG" =~ ^develop ]]; then
     export ENVVAR_COMMAND_EXECUTION=enabled
@@ -832,15 +839,15 @@ else
 fi
 
 # --- Metrics (opt-in) -------------------------------------------------------
-# ENVVAR_ENABLE_METRICS=enabled (or ACAP_ENABLE_METRICS=1) turns on:
+# ENVVAR_ENABLE_METRICS=enabled (or ACAP_ENABLE_METRICS=1 / ENABLE_METRICS=1) turns on:
 #   - the ENABLE_METRICS capability on ms-agent (ENABLE_METRICS=true; the agent only serves
 #     Prometheus /metrics on port 9464 when this is set - default false)
-#   - a vmagent container that scrapes 127.0.0.1:9464 and pushes the samples with
+#   - if the METRICS_* variables below are set, a vmagent container that scrapes 127.0.0.1:9464 and pushes the samples with
 #     Prometheus remote_write (HTTPS + basic auth) to the central Prometheus. Push,
 #     because site controllers are usually behind NAT: only outbound connections,
 #     like the agent's own tunnel. Buffers up to 1GB on disk while the receiver is
 #     unreachable and replays afterwards.
-# Required when enabled:
+# Required for the vmagent pusher (without them only the agent's /metrics endpoint is turned on):
 #   METRICS_REMOTE_WRITE_URL       e.g. https://grafana.example.com/api/v1/write
 #   METRICS_REMOTE_WRITE_USERNAME  basic-auth user created on the receiver
 #   METRICS_REMOTE_WRITE_PASSWORD  its password (stored in /opt/metalsoft/agents/vmagent/secrets, mode 0600)
@@ -854,21 +861,25 @@ fi
 #   METRICS_REMOTE_WRITE_INSECURE=1  skip TLS verification of the receiver (not recommended)
 #   VMAGENT_URL                    image override
 metrics_service=""
-if [[ "${ENVVAR_ENABLE_METRICS:-disabled}" == "enabled" ]] || [[ "${ENVVAR_ENABLE_METRICS:-disabled}" == "1" ]]; then
-  export ENVVAR_ENABLE_METRICS=enabled
-  metrics_missing=""
-  for metrics_var in METRICS_REMOTE_WRITE_URL METRICS_REMOTE_WRITE_USERNAME METRICS_REMOTE_WRITE_PASSWORD METRICS_GC_NAMESPACE; do
-    test -n "${!metrics_var}" || metrics_missing+=" ${metrics_var}"
-  done
-  if [ -n "$metrics_missing" ]; then
-    debuglog "ENVVAR_ENABLE_METRICS=enabled but not set:${metrics_missing} - metrics disabled" fail
-    export ENVVAR_ENABLE_METRICS=disabled
-  fi
-fi
 # The agent parses ENABLE_METRICS with strconv.ParseBool, so it gets true/false, not enabled/disabled.
 ms_agent_enable_metrics=false
-if [[ "${ENVVAR_ENABLE_METRICS:-disabled}" == "enabled" ]]; then
+metrics_push=0
+if [[ "${ENVVAR_ENABLE_METRICS:-disabled}" == "enabled" ]] || [[ "${ENVVAR_ENABLE_METRICS:-disabled}" == "1" ]]; then
+  export ENVVAR_ENABLE_METRICS=enabled
   ms_agent_enable_metrics=true
+  metrics_missing=""
+  metrics_set=0
+  for metrics_var in METRICS_REMOTE_WRITE_URL METRICS_REMOTE_WRITE_USERNAME METRICS_REMOTE_WRITE_PASSWORD METRICS_GC_NAMESPACE; do
+    if [ -n "${!metrics_var}" ]; then metrics_set=1; else metrics_missing+=" ${metrics_var}"; fi
+  done
+  # all set: vmagent; none set (the controller one-liner): only ENABLE_METRICS=true on ms-agent, silently
+  if [ -z "$metrics_missing" ]; then
+    metrics_push=1
+  elif [ "$metrics_set" = "1" ]; then
+    debuglog "vmagent pusher not deployed, not set:${metrics_missing}" info yellow
+  fi
+fi
+if [ "$metrics_push" = "1" ]; then
   METRICS_SC_NAME="${METRICS_SC_NAME:-${DATACENTERNAME}-$(echo "$interface_ip" | sed 's/[.:][.:]*/-/g')}"
   METRICS_SCRAPE_INTERVAL="${METRICS_SCRAPE_INTERVAL:-30s}"
   debuglog "Metrics enabled: vmagent pushes ms-agent metrics as pod=${METRICS_SC_NAME} namespace=${METRICS_GC_NAMESPACE} to ${METRICS_REMOTE_WRITE_URL}"

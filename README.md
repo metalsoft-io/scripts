@@ -50,27 +50,28 @@ ACAP_OOB_HTTP_PROXY=1 ACAP_FILE_TRANSFER=1 ACAP_COMMAND_EXECUTION=1 ACAP_NETCONF
 bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)
 ```
 
-`ACAP_ENABLE_METRICS=1` is accepted as an alias of `ENVVAR_ENABLE_METRICS=enabled`,
-like the other capabilities.
+`ACAP_ENABLE_METRICS=1` and `ENABLE_METRICS=1` (what the controller's install
+one-liner generates) are accepted as aliases of `ENVVAR_ENABLE_METRICS=enabled`.
 
 ### Variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `ENVVAR_ENABLE_METRICS` | yes | `enabled` turns the feature on (default `disabled`) |
-| `METRICS_REMOTE_WRITE_URL` | yes | remote_write receiver, e.g. `https://<host>/api/v1/write` |
-| `METRICS_REMOTE_WRITE_USERNAME` | yes | basic-auth user configured on the receiver |
-| `METRICS_REMOTE_WRITE_PASSWORD` | yes | its password; stored in `/opt/metalsoft/agents/vmagent/secrets/password` |
-| `METRICS_GC_NAMESPACE` | yes | Kubernetes namespace of the Global Controller environment this site controller belongs to (e.g. `mycompany-metalcloud`). Becomes the `namespace` label, so the site controller shows up next to the controller's own services in the MetalSoft Grafana dashboards |
+| `METRICS_REMOTE_WRITE_URL` | for vmagent | remote_write receiver, e.g. `https://<host>/api/v1/write` |
+| `METRICS_REMOTE_WRITE_USERNAME` | for vmagent | basic-auth user configured on the receiver |
+| `METRICS_REMOTE_WRITE_PASSWORD` | for vmagent | its password; stored in `/opt/metalsoft/agents/vmagent/secrets/password` |
+| `METRICS_GC_NAMESPACE` | for vmagent | Kubernetes namespace of the Global Controller environment this site controller belongs to (e.g. `mycompany-metalcloud`). Becomes the `namespace` label, so the site controller shows up next to the controller's own services in the MetalSoft Grafana dashboards |
 | `METRICS_SC_NAME` | no | name of this site controller in Prometheus (`pod`, `instance`, `site_controller` labels). Default `<DATACENTERNAME>-<ip with dashes>`, stable across re-runs |
 | `METRICS_SCRAPE_INTERVAL` | no | default `30s` |
 | `METRICS_REMOTE_WRITE_CA_FILE` | no | CA bundle for the receiver's certificate, path inside the container (the host's `/etc/ssl/certs` is mounted there). Default: system trust store, which already contains the MetalSoft CA |
 | `METRICS_REMOTE_WRITE_INSECURE` | no | `1` skips TLS verification of the receiver (not recommended) |
 | `VMAGENT_URL` | no | vmagent image; default `<registry>/hub_docker_com/victoriametrics/vmagent:v1.149.0` |
 
-If `ENVVAR_ENABLE_METRICS=enabled` is set but one of the required variables is
-missing, the script prints an error, keeps `ENABLE_METRICS=false` and deploys the
-site controller without the pusher.
+If `ENVVAR_ENABLE_METRICS=enabled` is set but one of the vmagent variables is
+missing, the script prints a warning, still sets `ENABLE_METRICS=true` on `ms-agent`
+(so `/metrics` on port `9464` can be scraped by something else) and deploys the site
+controller without the `vmagent` pusher.
 
 ### Check that it works
 
