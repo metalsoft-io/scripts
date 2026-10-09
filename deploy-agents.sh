@@ -109,7 +109,8 @@ REG_HOST=${REGISTRY_HOST:-"registry.metalsoft.dev"}
 IMAGES_TAGENV='${TAG}'
 MSAGENT_URL="${REG_HOST}/sc/ms-agent:${IMAGES_TAGENV}"
 ANSIBLE_RUNNER_URL="${REG_HOST}/sc/sc-ansible-playbook-runner:${IMAGES_TAGENV}"
-SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
+SCIMAGEBUILDER_URL="${REG_HOST}/sc/image-builder:${IMAGES_TAGENV}"
+verlt "$IMAGES_TAG" v8.0.0 && SCIMAGEBUILDER_URL="${REG_HOST}/sc/sc-image-builder:${IMAGES_TAGENV}"
 
 # Metrics pusher image (ENVVAR_ENABLE_METRICS=enabled); docker.io/victoriametrics/vmagent mirrored on the MetalSoft registry
 VMAGENT_URL="${VMAGENT_URL:-${REG_HOST}/hub_docker_com/victoriametrics/vmagent:v1.149.0}"
