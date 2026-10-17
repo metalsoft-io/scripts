@@ -885,6 +885,13 @@ docker_rewrite() {
 }
 
 docker_apply() {
+    # SC run by metalsoft-sc.service: the unit applies the new TAG (pull, health check, rollback)
+    if systemctl is-enabled -q metalsoft-sc.service 2>/dev/null; then
+        if (( DRY_RUN )); then printf '%s[dry-run]%s systemctl restart metalsoft-sc.service\n' "$C_DIM" "$C_RST"; return 0; fi
+        log "Running: systemctl restart metalsoft-sc.service (journalctl -t metalsoft-sc -f)"
+        systemctl restart metalsoft-sc.service || warn "systemctl restart metalsoft-sc.service failed."
+        return 0
+    fi
     if (( DRY_RUN )); then
         printf '%s[dry-run]%s ( cd %q && %s down && %s up -d )\n' \
             "$C_DIM" "$C_RST" "$AGENTS_DIR" "${COMPOSE_CMD[*]}" "${COMPOSE_CMD[*]}"

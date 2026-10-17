@@ -10,6 +10,8 @@ lightgreen="\e[1;32m"
 yellow="\e[1;33m"
 pink="\e[1;35m"
 orange="\e[6;33m"
+# absolute path of this script, if it runs from a file (it cd-s later; piped into bash it is not a file)
+SELF="$(readlink -f "$0" 2>/dev/null)"
 
 
 function debuglog ()
@@ -22,6 +24,835 @@ function debuglog ()
     *) mtypeis="${bold}[i]${nc}"; color=${3:-bold} ;;
   esac
   echo -e "${mtypeis} ${!color}${msg}${nc}"
+}
+
+# SC_SYSTEMD=1: sc-ctl.sh, its config and metalsoft-sc.service; on OVA hosts also the network hook that knows the unit.
+install_sc_systemd ()
+{
+  local A=/opt/metalsoft/agents compose_cmd bundle_url status_url
+  mkdir -p "$A/bin" "$A/last-good" "$A/run"
+  chmod 0700 "$A" "$A/run"
+  cat > "$A/bin/sc-ctl.sh.new" <<'MS_SC_CTL_EOF'
+#!/usr/bin/env bash
+# sc-ctl.sh - runs the MetalSoft site controller stack under systemd.
+#
+#   prestart  apply a new GC bundle, validate, pull images, fall back to last-good   (ExecStartPre)
+#   run       compose up -d, remove orphans, watch for registration, wait for agent (ExecStart)
+#   stop      after an agent exit: nothing more; on systemctl stop: the whole stack (ExecStop)
+#   down      stop the unit and remove every container of the stack              (manual)
+#   status    show config state and containers                                   (manual)
+#
+# The config is every file in $PREFIX except bin/ run/ staging/ last-good/ sc.conf.
+# last-good/ is a copy of it, taken when the agent registered; rollbacks restore it.
+#
+# GC bundle: a .tar.gz holding 'manifest' and the files it lists. Manifest lines:
+#   version <label>       optional, shown in logs. A bundle is identified by the sha256 of its content:
+#                         the same content is applied (or rejected) once, any change is a new bundle
+#   env KEY=VALUE         set KEY in .env; other lines are kept (COMPOSE_* refused)
+#   env-unset KEY         remove KEY from .env
+#   file <mode> <path>    copy <path> from the bundle to $PREFIX/<path>; ca/*.crt also go to the OS trust store
+#   compose <path>        compose files in -f order; replaces the list when present (default: docker-compose.yaml)
+#   delete <path>         remove a file or directory under $PREFIX (same path rules as 'file')
+#   login <host> <base64 of user:password>   registry login, written to the engine's auth file (needs jq)
+#   login-remove <host>   remove that host's registry login
+#
+# Requests to the GC (bundle, status) authenticate with AGENT_ID / AGENT_SECRET from .env (HTTP basic auth).
+# Status: a JSON document is POSTed to GC_STATUS_URL (.env overrides sc.conf) at each step; file:// appends locally.
+set -Eeuo pipefail
+# .env, rendered configs and bundles contain AGENT_SECRET.
+umask 077
+# Hashes depend on sort order, which depends on the locale: the unit, a shell and cron must agree.
+export LC_ALL=C
+
+# The unit sets PREFIX; run by hand, the script lives in $PREFIX/bin.
+PREFIX=${PREFIX:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}
+# shellcheck source=/dev/null
+. "$PREFIX/sc.conf"
+: "${ENGINE:?ENGINE not set in sc.conf}" "${PROJECT:?PROJECT not set in sc.conf}"
+: "${UNIT:=metalsoft-sc}" "${AGENT_SERVICE:=ms-agent}" "${AGENT_CONTAINER:=ms-agent}"
+: "${GC_BUNDLE_URL:=}" "${GC_STATUS_URL:=}" "${GC_TIMEOUT:=10}" "${CRASH_MAX:=3}"
+# Pull timeouts: long for an image not on the host yet, short when a local copy can be used instead.
+: "${PULL_TIMEOUT:=600}" "${PULL_TIMEOUT_LOCAL:=30}"
+# After registration, the whole stack must stay running for SETTLE_SECONDS before the config counts as good.
+: "${SETTLE_SECONDS:=20}"
+# .env keys owned by the host, not by a config version (the OVA network hook keeps them at the current IP):
+# a rollback keeps their current values instead of restoring last-good's.
+: "${HOST_KEYS:=SITE_CONTROLLER_IP NFS_HOST}"
+: "${GC_BUNDLE_MAX_BYTES:=52428800}" "${BUNDLE_MAX_EXTRACT_BYTES:=209715200}" "${MIN_FREE_MB:=2048}"
+# Registration: the agent's marker file (README: Needed from devs), else its log line (v7.5 logs it at debug level only).
+: "${HEALTH_FILE:=/tmp/ms-agent.registered}"
+: "${HEALTH_PATTERN:=registration successful|agent registered with controller}" "${HEALTH_TIMEOUT:=300}" "${HEALTH_POLL:=5}"
+[ "${#COMPOSE[@]}" -gt 0 ] || { echo "sc-ctl: COMPOSE not set in sc.conf" >&2; exit 1; }
+[ -n "${GC_CURL_OPTS+x}" ] || GC_CURL_OPTS=()
+if [ -d /usr/local/share/ca-certificates ]; then
+  : "${CA_TRUST_DIR:=/usr/local/share/ca-certificates}" "${CA_UPDATE_CMD:=update-ca-certificates}"
+else
+  : "${CA_TRUST_DIR:=/etc/pki/ca-trust/source/anchors}" "${CA_UPDATE_CMD:=update-ca-trust}"
+fi
+if [ "$ENGINE" = podman ]; then
+  : "${CA_ENGINE_DIR:=/etc/containers/certs.d}"; PROJECT_LABEL=io.podman.compose.project; SERVICE_FMT='{{index .Labels "com.docker.compose.service"}}'
+else
+  : "${CA_ENGINE_DIR:=/etc/docker/certs.d}"; PROJECT_LABEL=com.docker.compose.project; SERVICE_FMT='{{.Label "com.docker.compose.service"}}'
+fi
+
+# Reported to the GC in every status, so it only sends manifest lines this SC understands.
+SC_CTL_VERSION=1
+CAPABILITIES=(version env env-unset file compose delete login login-remove ca-sync status prune remove-orphans registration-marker)
+
+LIVE=$PREFIX GOOD=$PREFIX/last-good STAGING=$PREFIX/staging RUN=$PREFIX/run
+RESERVED=(bin run staging last-good last-good.tmp sc.conf)
+LOGBUF=()
+
+log() { echo "$*" >&2; LOGBUF+=("$*"); }
+# Any unexpected failure (set -e) is logged with its line and reported, instead of ending the step silently.
+trap 'rc=$?; trap - ERR; log "error: sc-ctl.sh line $LINENO: $BASH_COMMAND (exit $rc)"; post_status failed; exit "$rc"' ERR
+die() { log "$*"; post_status failed; exit 1; }
+join() { local s; s=$(printf '%s, ' "$@"); echo "${s%, }"; }
+rd() { cat "$1" 2>/dev/null || true; }  # file contents, or nothing when it does not exist
+
+env_get() {  # KEY: value from the live .env, surrounding quotes removed
+  sed -n "s/^$1=//p" "$LIVE/.env" 2>/dev/null | tail -1 | sed -e "s/^'\(.*\)'\$/\1/" -e 's/^"\(.*\)"$/\1/'
+}
+
+# A bundle controls compose, .env and trusted CAs: only use a verified GC
+# (CA-checked https, or -k with a pinned public key for IP / self-signed GCs).
+verified_url() {
+  local opts=" ${GC_CURL_OPTS[*]} "
+  [[ $1 == https://* && ( $opts != *" -k "* || $opts == *" --pinnedpubkey "* ) ]] || [ "${ALLOW_INSECURE_GC:-0}" = 1 ]
+}
+
+url_host() { local h=${1#*://}; h=${h%%/*}; echo "${h##*@}"; }
+
+# The GC host: the one serving the bundle, else GC_HOSTNAME from .env. Credentials are only ever sent there.
+gc_host() { if [ -n "$GC_BUNDLE_URL" ]; then url_host "$GC_BUNDLE_URL"; else env_get GC_HOSTNAME; fi; }
+
+# curl url [args]: with the agent's credentials when url is on the GC host (passed on stdin, not in the process list).
+gc_curl() {
+  local url=$1 id secret; shift
+  id=$(env_get AGENT_ID) secret=$(env_get AGENT_SECRET)
+  if [ -n "$id" ] && [ -n "$secret" ] && [ "$(url_host "$url")" = "$(gc_host)" ]; then
+    id=${id//\\/\\\\} secret=${secret//\\/\\\\}
+    printf 'user = "%s:%s"\n' "${id//\"/\\\"}" "${secret//\"/\\\"}" \
+      | curl -K - -fsS --max-time "$GC_TIMEOUT" "${GC_CURL_OPTS[@]}" "$@" "$url"
+  else
+    curl -fsS --max-time "$GC_TIMEOUT" "${GC_CURL_OPTS[@]}" "$@" "$url"
+  fi
+}
+
+# True when the GC answers at all (any HTTP status). Used to tell a GC outage from a broken config.
+gc_reachable() {
+  local url=${GC_BUNDLE_URL:-}
+  [ -n "$url" ] || { url=$(env_get GC_HOSTNAME); [ -z "$url" ] || url=https://$url/; }
+  [ -n "$url" ] || return 0
+  if [[ $url == file://* ]]; then [ -e "${url#file://}" ]; return; fi
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${GC_CURL_OPTS[@]}" "$url" 2>/dev/null)" != 000 ]
+}
+
+images_of() { grep -E '^[[:space:]]+image:' "$1" 2>/dev/null | awk '{print $2}' | tr -d "\"'" | sort -u; }
+
+disk_free_mb() {
+  local dir
+  if [ "$ENGINE" = podman ]; then dir=$("$ENGINE" info -f '{{.Store.GraphRoot}}' 2>/dev/null); else dir=$("$ENGINE" info -f '{{.DockerRootDir}}' 2>/dev/null); fi
+  df -Pm "${dir:-/}" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Sends the state and this step's log lines to the GC. Never fails or delays the caller beyond GC_TIMEOUT:
+# called as 'cmd || ...', so set -e and the ERR trap are off inside and any failure only skips the report.
+post_status() { _post_status "$@" || echo "status: not sent (event $1)" >&2; LOGBUF=(); }
+_post_status() {  # event
+  local url body
+  url=$(env_get GC_STATUS_URL); url=${url:-$GC_STATUS_URL}
+  [ -n "$url" ] || return 0
+  command -v jq >/dev/null || { echo "status: jq missing, not sent" >&2; return 0; }
+  body=$(jq -cn --arg event "$1" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg agent "$(env_get AGENT_ID)" \
+    --arg config "$(config_hash "$LIVE" 2>/dev/null)" --arg last_good "$(rd "$RUN/good.hash")" \
+    --arg bundle "$(rd "$RUN/gc-bundle.hash")" --arg failures "$(rd "$RUN/failures")" \
+    --arg disk_free_mb "$(disk_free_mb)" --arg agent_version "${AGENT_VERSION:-}" \
+    --arg sc_ctl_version "$SC_CTL_VERSION" --arg capabilities "${CAPABILITIES[*]}" \
+    --arg engine "$ENGINE $("$ENGINE" version --format '{{.Server.Version}}' 2>/dev/null || "$ENGINE" --version 2>/dev/null | awk '{print $NF}')" \
+    --arg compose "$("${COMPOSE[@]}" version 2>/dev/null | head -1)" \
+    --arg images "$(images_of "$RUN/resolved.yaml")" --arg messages "$(printf '%s\n' "${LOGBUF[@]+"${LOGBUF[@]}"}")" \
+    '{event: $event, time: $time, agent_id: $agent, config: $config, last_good: $last_good, bundle: $bundle,
+      failures: $failures, disk_free_mb: $disk_free_mb, agent_version: $agent_version,
+      sc_ctl_version: $sc_ctl_version, capabilities: ($capabilities | split(" ")), engine: $engine, compose: $compose,
+      images: ($images | split("\n") | map(select(length > 0))), messages: ($messages | split("\n") | map(select(length > 0)))}')
+  [ -n "$body" ] || return 1
+  if [[ $url == file://* ]]; then echo "$body" 2>/dev/null >>"${url#file://}"; return; fi
+  verified_url "$url" || { echo "status: refused, GC_STATUS_URL is not verified https" >&2; return 0; }
+  gc_curl "$url" -X POST -H 'Content-Type: application/json' --data-binary "$body" -o /dev/null 2>/dev/null \
+    || echo "status: POST to GC failed" >&2
+}
+
+copy_config() {  # src dst: dst gets src's config files; files only in dst stay
+  local excl=() r
+  for r in "${RESERVED[@]}"; do excl+=(--exclude="./$r"); done
+  tar -C "$1" "${excl[@]}" -cf - . | tar -C "$2" -xpf -
+}
+
+config_sums() {  # dir: "sha256  ./path" for each config file, sorted
+  local prune=() r
+  for r in "${RESERVED[@]}"; do prune+=(-path "./$r" -o); done
+  (cd "$1" && find . \( "${prune[@]}" -false \) -prune -o -type f -print0 | sort -z | xargs -0 -r sha256sum)
+}
+
+config_hash() { config_sums "$1" | sha256sum | cut -c1-64; }
+
+have_good() { [ -s "$RUN/good.hash" ] && [ -d "$GOOD" ]; }
+
+restore_good() {  # reason
+  have_good || die "$1; no last-good config to fall back to"
+  local k v kept=()
+  for k in $HOST_KEYS; do v=$(env_get "$k"); [ -z "$v" ] || kept+=("$k=$(sed -n "s/^$k=//p" "$LIVE/.env" | tail -1)"); done
+  copy_config "$GOOD" "$LIVE"  # ponytail: files added after last-good stay; a 'delete' line removes them
+  for v in "${kept[@]}"; do env_set "$LIVE/.env" "${v%%=*}" "${v#*=}"; done
+  ca_sync
+  log "rollback ($1): restored last-good config $(cut -c1-12 "$RUN/good.hash")"
+}
+
+compose_in() {  # dir args...: compose with the dir's compose files
+  local dir=$1 files=() f; shift
+  while read -r f; do files+=(-f "$f"); done < <(cat "$dir/compose-files" 2>/dev/null || echo docker-compose.yaml)
+  (cd "$dir" && "${COMPOSE[@]}" -p "$PROJECT" "${files[@]}" "$@")
+}
+
+validate() {  # dir: renders the config into $RUN/resolved.yaml
+  if ! compose_in "$1" config >"$RUN/resolved.yaml" 2>"$RUN/validate.err"; then
+    log "invalid compose config in ${1#"$PREFIX"/}: $(head -c 400 "$RUN/validate.err" | tr '\n' ' ')"; return 1
+  fi
+  grep -qE "^  ${AGENT_SERVICE}:" "$RUN/resolved.yaml" || { log "config in $1 has no '$AGENT_SERVICE' service"; return 1; }
+}
+
+# Removes images of the stack's repositories that neither the live nor the last-good config uses,
+# then dangling layers. Other images on the host are not touched.
+prune_images() {
+  local keep repos ref removed=()
+  keep=$({ images_of "$RUN/resolved.yaml"; rd "$RUN/good-images"; } | sort -u)
+  [ -n "$keep" ] || return 0
+  repos=$(sed 's/:[^:/]*$//' <<<"$keep" | sort -u)
+  while read -r ref; do
+    if [[ $ref == *"<none>"* ]] || ! grep -qxF -- "${ref%:*}" <<<"$repos" || grep -qxF -- "$ref" <<<"$keep"; then continue; fi
+    "$ENGINE" rmi "$ref" >/dev/null 2>&1 && removed+=("${ref##*/}")
+  done < <("$ENGINE" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+  "$ENGINE" image prune -f >/dev/null 2>&1 || true
+  (( ${#removed[@]} == 0 )) || log "prune: removed $(join "${removed[@]}")"
+}
+
+# A failed pull is fine when the image is already on the host; fails only when one is missing.
+pull_all() {
+  local img rc=0 out=() free
+  free=$(disk_free_mb)
+  if [ -n "$free" ] && (( free < MIN_FREE_MB )); then
+    log "disk: ${free} MB free (< ${MIN_FREE_MB}); pruning old images"
+    prune_images
+    free=$(disk_free_mb); (( ${free:-0} >= MIN_FREE_MB )) || log "disk: still ${free} MB free; pulls may fail"
+  fi
+  local local_copy t
+  for img in $(images_of "$RUN/resolved.yaml"); do
+    local_copy=0; "$ENGINE" image inspect "$img" >/dev/null 2>&1 && local_copy=1
+    t=$PULL_TIMEOUT; (( ! local_copy )) || t=$PULL_TIMEOUT_LOCAL
+    if timeout "$t" "$ENGINE" pull -q "$img" >/dev/null 2>&1; then out+=("${img##*/} ok")
+    elif (( local_copy )); then out+=("${img##*/} FAILED, using local copy")
+    else out+=("${img##*/} FAILED, not on host"); rc=1
+    fi
+  done
+  log "pull: $(join "${out[@]}")"
+  return "$rc"
+}
+
+# Mirrors $PREFIX/ca/*.crt into the OS trust store as metalsoft-<name>.crt (adds, updates, removes)
+# and writes the engine's registry CA for REG_HOST.
+ca_sync() {
+  local c changed=0 reg certs=()
+  for c in "$LIVE"/ca/*.crt; do
+    [ -f "$c" ] || continue
+    certs+=("$c")
+    cmp -s "$c" "$CA_TRUST_DIR/metalsoft-${c##*/}" || { install -m 0644 "$c" "$CA_TRUST_DIR/metalsoft-${c##*/}"; changed=1; }
+  done
+  for c in "$CA_TRUST_DIR"/metalsoft-*.crt; do
+    [ ! -f "$c" ] || [ -f "$LIVE/ca/${c##*/metalsoft-}" ] || { rm -f "$c"; changed=1; }
+  done
+  (( ! changed )) || { "$CA_UPDATE_CMD" >/dev/null 2>&1; log "ca: updated $CA_TRUST_DIR"; }
+  # Registry CA for the current REG_HOST. The file written is remembered in run/engine-ca, so it can be removed
+  # when no CA is left or REG_HOST changes (files placed there by someone else are never touched).
+  reg=$(env_get REG_HOST)
+  local want="" had
+  had=$(cat "$RUN/engine-ca" 2>/dev/null || true)
+  [ -z "$reg" ] || (( ${#certs[@]} == 0 )) || want=$CA_ENGINE_DIR/$reg/ca.crt
+  if [ -n "$had" ] && [ "$had" != "$want" ] && [ -f "$had" ]; then rm -f "$had"; log "ca: removed $had"; fi
+  if [ -z "$want" ]; then rm -f "$RUN/engine-ca"; return 0; fi
+  if (( changed )) || [ ! -f "$want" ] || [ "$had" != "$want" ]; then
+    mkdir -p "${want%/*}"
+    cat "${certs[@]}" >"$want" && chmod 0644 "$want"
+    log "ca: wrote $want"
+  fi
+  echo "$want" >"$RUN/engine-ca"
+}
+
+# Adds or replaces the registry login for host in the engine's auth file (as deploy-agents.sh writes REGISTRY_LOGIN).
+registry_login() {  # host [base64(user:password)]: set the login, or remove it when no auth is given
+  # shellcheck disable=SC2016  # $h and $a are jq variables
+  local f filter='.auths[$h].auth = $a'
+  if [ "$ENGINE" = podman ]; then f=${REGISTRY_AUTH_FILE:-/etc/containers/auth.json}; else f=${DOCKER_CONFIG:-${HOME:-/root}/.docker}/config.json; fi
+  # shellcheck disable=SC2016
+  [ -n "${2:-}" ] || { [ -s "$f" ] || return 0; filter='del(.auths[$h])'; }
+  mkdir -p "$(dirname "$f")"
+  [ -s "$f" ] || echo '{}' >"$f"
+  jq --arg h "$1" --arg a "${2:-}" "$filter" "$f" >"$f.tmp" && mv -f "$f.tmp" "$f" && chmod 0600 "$f"
+}
+
+env_set() {  # file key [value]: replace KEY=... or append it; without a value, remove KEY. Other lines unchanged.
+  local file=$1 key=$2 line found=0
+  {
+    if [ -f "$file" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        if [[ $line == "$key="* ]]; then (( found )) || [ $# -lt 3 ] || printf '%s=%s\n' "$key" "$3"; found=1
+        else printf '%s\n' "$line"; fi
+      done <"$file"
+    fi
+    (( found )) || [ $# -lt 3 ] || printf '%s=%s\n' "$key" "$3"
+  } >"$file.tmp" && mv -f "$file.tmp" "$file"
+}
+
+safe_path() {  # relative, no '..', not reserved, not .env or compose-files
+  local p=$1 r
+  [[ $p =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && /$p/ != */../* && $p != .env && $p != compose-files ]] || return 1
+  for r in "${RESERVED[@]}"; do [[ $p != "$r" && $p != "$r"/* ]] || return 1; done
+}
+
+apply_bundle() {
+  [ -n "$GC_BUNDLE_URL" ] || return 0
+  verified_url "$GC_BUNDLE_URL" || { log "bundle: refused, GC_BUNDLE_URL is not verified https (ALLOW_INSECURE_GC=1 for test stubs only)"; return 0; }
+  rm -rf "$STAGING" && mkdir -p "$STAGING/b" "$STAGING/new"
+  local err listing
+  case $(env_get AGENT_SECRET) in
+    ''|default) log "auth: AGENT_SECRET is empty or the shared 'default'; the GC cannot tell this SC from others" ;;
+  esac
+  if ! err=$(gc_curl "$GC_BUNDLE_URL" --max-filesize "$GC_BUNDLE_MAX_BYTES" -o "$STAGING/bundle.tgz" 2>&1); then
+    log "bundle: GC unreachable or bundle too large (> $GC_BUNDLE_MAX_BYTES bytes), keeping current config: curl ${err#curl: }"; return 0
+  fi
+  listing=$(tar -tvzf "$STAGING/bundle.tgz" 2>/dev/null) || { log "bundle: rejected, not a tar.gz"; return 0; }
+  # Only plain files and directories: a symlink in the bundle could point anywhere on the host.
+  if grep -qv '^[-d]' <<<"$listing"; then log "bundle: rejected, contains links or special files"; return 0; fi
+  if (( $(awk '{ s += $3 } END { print s + 0 }' <<<"$listing") > BUNDLE_MAX_EXTRACT_BYTES )); then
+    log "bundle: rejected, unpacks to more than $BUNDLE_MAX_EXTRACT_BYTES bytes"; return 0
+  fi
+  # GNU tar strips a leading '/' and refuses members containing '..' (then exits non-zero).
+  if ! err=$(tar -C "$STAGING/b" --no-same-owner --no-same-permissions -xzf "$STAGING/bundle.tgz" 2>&1); then
+    log "bundle: rejected, cannot be unpacked: $(grep -v '^tar: Removing leading' <<<"$err" | head -2 | tr '\n' ' ')"; return 0
+  fi
+  [ -f "$STAGING/b/manifest" ] || { log "bundle: rejected, no manifest"; return 0; }
+  # Identity = hash of the extracted files (the .tgz bytes change on every tar run even for the same files).
+  local id label
+  id=$( (cd "$STAGING/b" && find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-64)
+  [ "$id" != "$(rd "$RUN/gc-bundle.hash")" ] || { log "bundle: unchanged (${id:0:12})"; return 0; }
+  echo "$id" >"$RUN/gc-bundle.hash"  # applied or rejected: not retried until the GC serves different content
+  label=$(sed -n 's/^version //p' "$STAGING/b/manifest" | head -1 | tr -cd 'A-Za-z0-9._+-')
+  local version="${label:+$label }${id:0:12}"
+
+  copy_config "$LIVE" "$STAGING/new"
+  local line kind rest mode path src cfiles=() changes=() deletes=() d logins=() lhost lauth ekey eval_
+  while IFS= read -r line || [ -n "$line" ]; do
+    kind=${line%% *} rest=${line#* }
+    case $kind in
+      ''|'#'*|version) ;;
+      env)
+        [[ $rest =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ && ${BASH_REMATCH[1]} != COMPOSE_* ]] \
+          || { log "bundle $version: rejected, bad env line"; return 0; }
+        ekey=${BASH_REMATCH[1]} eval_=${BASH_REMATCH[2]}  # copied: the next =~ overwrites BASH_REMATCH
+        env_set "$STAGING/new/.env" "$ekey" "$eval_"
+        if [[ $ekey =~ SECRET|PASS|TOKEN|KEY ]]; then changes+=("$ekey=***"); else changes+=("$rest"); fi ;;
+      env-unset)
+        [[ $rest =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { log "bundle $version: rejected, bad env-unset line '$line'"; return 0; }
+        env_set "$STAGING/new/.env" "$rest"
+        changes+=("unset $rest") ;;
+      file)
+        read -r mode path <<<"$rest"
+        # No '..' (safe_path) and no links (rejected before extraction), so src stays inside the bundle.
+        src=$STAGING/b/$path
+        if ! [[ $mode =~ ^0[0-7]{3}$ ]] || ! safe_path "$path" || [ ! -f "$src" ] || [ -L "$src" ]; then
+          log "bundle $version: rejected, bad file line '$line'"; return 0
+        fi
+        mkdir -p "$STAGING/new/$(dirname "$path")"
+        install -m "$mode" "$src" "$STAGING/new/$path"
+        changes+=("$path") ;;
+      delete)
+        safe_path "$rest" || { log "bundle $version: rejected, bad delete line '$line'"; return 0; }
+        rm -rf "${STAGING:?}/new/$rest"
+        deletes+=("$rest"); changes+=("deleted $rest") ;;
+      login)
+        read -r lhost lauth <<<"$rest"
+        if ! [[ $lhost =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ && $lauth =~ ^[A-Za-z0-9+/]+=*$ ]] \
+          || ! base64 -d <<<"$lauth" 2>/dev/null | grep -q : || ! command -v jq >/dev/null; then
+          log "bundle $version: rejected, bad login line for '${lhost:-}' (or jq missing)"; return 0
+        fi
+        logins+=("$lhost $lauth"); changes+=("login $lhost") ;;
+      login-remove)
+        if ! [[ $rest =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || ! command -v jq >/dev/null; then
+          log "bundle $version: rejected, bad login-remove line '$line' (or jq missing)"; return 0
+        fi
+        logins+=("$rest "); changes+=("login removed $rest") ;;
+      compose)
+        safe_path "$rest" || { log "bundle $version: rejected, bad compose line '$line'"; return 0; }
+        cfiles+=("$rest") ;;
+      *) log "bundle $version: rejected, unknown line '$line'"; return 0 ;;
+    esac
+  done <"$STAGING/b/manifest"
+  if (( ${#cfiles[@]} )); then printf '%s\n' "${cfiles[@]}" >"$STAGING/new/compose-files"; changes+=("compose: ${cfiles[*]}"); fi
+
+  validate "$STAGING/new" || { log "bundle $version: rejected"; return 0; }
+  copy_config "$STAGING/new" "$LIVE"
+  # copy_config only adds and overwrites; a path a later 'file' line re-created is kept.
+  for d in "${deletes[@]}"; do [ -e "$STAGING/new/$d" ] || rm -rf "${LIVE:?}/$d"; done
+  for d in "${logins[@]}"; do registry_login "${d%% *}" "${d#* }"; done
+  ca_sync
+  log "bundle $version: applied $(join "${changes[@]}")"
+}
+
+# Counts starts that ended before the agent registered. After CRASH_MAX in a row on a config
+# other than last-good, last-good is restored.
+account_previous_run() {
+  local last prev n=0 gc_down=0
+  # The flag belongs to the previous start only: read it and clear it, whatever the outcome.
+  [ ! -f "$RUN/gc-unreachable" ] || gc_down=1
+  rm -f "$RUN/gc-unreachable"
+  last=$(rd "$RUN/last-started") || return 0
+  if [ "$last" = "$(rd "$RUN/healthy")" ]; then echo "$last 0" >"$RUN/failures"; return 0; fi
+  if (( gc_down )); then
+    log "previous start of config ${last:0:12} did not register while the GC was unreachable; not counted"; return 0
+  fi
+  [ ! -f "$RUN/failures" ] || read -r prev n <"$RUN/failures" || true
+  [ "${prev:-}" = "$last" ] || n=0
+  n=$(( ${n:-0} + 1 )); echo "$last $n" >"$RUN/failures"
+  log "previous start of config ${last:0:12} did not register ($n/$CRASH_MAX)"
+  if (( n >= CRASH_MAX )) && have_good && [ "$last" = "$(config_hash "$LIVE")" ] && [ "$last" != "$(cat "$RUN/good.hash")" ]; then
+    restore_good "config ${last:0:12} failed $n starts"
+  fi
+}
+
+promote() {
+  local hash=$1
+  if [ "$(config_hash "$LIVE")" != "$hash" ]; then
+    # Registered, but on files that have changed since (e.g. edited by hand): not a failure, not last-good either.
+    echo "$hash" >"$RUN/healthy"
+    log "config changed since start ($(diff "$RUN/last-started.sums" <(config_sums "$LIVE") 2>/dev/null \
+      | awk '/^[<>]/ { print $3 }' | sort -u | paste -sd' ' -)); not saving it as last-good"
+    return 1
+  fi
+  rm -rf "$GOOD.tmp" && mkdir -p "$GOOD.tmp"
+  copy_config "$LIVE" "$GOOD.tmp"
+  rm -rf "$GOOD" && mv "$GOOD.tmp" "$GOOD"
+  images_of "$RUN/resolved.yaml" >"$RUN/good-images"
+  echo "$hash" >"$RUN/good.hash"
+  echo "$hash" >"$RUN/healthy"
+}
+
+# True when the agent's marker file was written after the given time: "<unix seconds> <agent version>".
+# Read with 'cp' so the image needs no shell; the marker lives in the container, so a recreate clears it.
+registered_since() {  # epoch
+  local line
+  line=$("$ENGINE" cp "$AGENT_CONTAINER:$HEALTH_FILE" - 2>/dev/null | tar -xOf - 2>/dev/null | head -1) || return 1
+  [[ ${line%% *} =~ ^[0-9]+$ ]] && (( ${line%% *} >= $1 )) || return 1
+  AGENT_VERSION=${line#* }; [ "$AGENT_VERSION" != "$line" ] || AGENT_VERSION=
+}
+
+# "service state restart-count" for each container of the project.
+stack_state() {
+  "$ENGINE" ps -aq --filter "label=$PROJECT_LABEL=$PROJECT" 2>/dev/null \
+    | xargs -r "$ENGINE" inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{.State.Status}} {{.RestartCount}}' 2>/dev/null | sort
+}
+
+# True when every service of the config has a running container that did not restart during SETTLE_SECONDS.
+stack_settled() {
+  local before after svcs s bad=()
+  before=$(stack_state); sleep "$SETTLE_SECONDS"; after=$(stack_state)
+  svcs=$(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$RUN/resolved.yaml")
+  for s in $svcs; do
+    if ! grep -q "^$s running " <<<"$after"; then bad+=("$s $(awk -v s="$s" '$1 == s { print $2 }' <<<"$after" | head -1)")
+    elif [ "$(grep "^$s " <<<"$before")" != "$(grep "^$s " <<<"$after")" ]; then bad+=("$s restarted")
+    fi
+  done
+  (( ${#bad[@]} == 0 )) || { log "stack: not healthy after ${SETTLE_SECONDS}s: $(join "${bad[@]}")"; return 1; }
+}
+
+# A start that did not end healthy: report it, and restart unless that would not help.
+unhealthy() {  # hash reason
+  if [ "$1" = "$(rd "$RUN/good.hash")" ]; then
+    log "$2 on the last-good config; nothing to roll back to, leaving it running"
+  elif ! gc_reachable; then
+    touch "$RUN/gc-unreachable"
+    log "$2 while the GC is unreachable; not counted as a failure of config ${1:0:12}"
+  else
+    log "$2; restarting to count a failure of config ${1:0:12}"
+    post_status unhealthy
+    "$ENGINE" stop -t 30 "$AGENT_CONTAINER" >/dev/null 2>&1 || true
+    return
+  fi
+  post_status unhealthy
+}
+
+watch_health() {
+  local since=$1 epoch=$2 hash=$3 waited=0 how=
+  LOGBUF=()
+  while (( waited < HEALTH_TIMEOUT )); do
+    if registered_since "$epoch"; then how=marker
+    elif "$ENGINE" logs --since "$since" "$AGENT_CONTAINER" 2>&1 | grep -qE -- "$HEALTH_PATTERN"; then how="log line"
+    fi
+    [ -z "$how" ] || break
+    sleep "$HEALTH_POLL"; waited=$(( waited + HEALTH_POLL ))
+  done
+  [ -n "$how" ] || { unhealthy "$hash" "agent did not register within ${HEALTH_TIMEOUT}s"; return 0; }
+  log "agent registered after ${waited}s (${how}${AGENT_VERSION:+, $AGENT_VERSION})"
+  stack_settled || { unhealthy "$hash" "stack not healthy"; return 0; }
+  if promote "$hash"; then
+    log "stack running; config ${hash:0:12} is last-good"
+    prune_images
+  fi
+  post_status registered
+}
+
+# Removes containers of this compose project whose service is no longer in the config.
+# (docker compose has --remove-orphans; podman-compose accepts it on 'up' but ignores it.)
+remove_orphans() {
+  local svcs c s
+  svcs=$(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$RUN/resolved.yaml")
+  [ -n "$svcs" ] || return 0
+  while read -r c s; do
+    if [ -z "$c" ] || grep -qxF -- "$s" <<<"$svcs"; then continue; fi
+    "$ENGINE" rm -f "$c" >/dev/null 2>&1 && log "orphan: removed $c (service '$s' is no longer in the config)"
+  done < <("$ENGINE" ps -a --filter "label=$PROJECT_LABEL=$PROJECT" --format "{{.Names}} $SERVICE_FMT" 2>/dev/null)
+}
+
+cmd_prestart() {
+  mkdir -p "$RUN"
+  exec 9>"$RUN/lock"; flock -w 600 9 || die "another sc-ctl run holds $RUN/lock"
+  account_previous_run
+  apply_bundle
+  if ! validate "$LIVE"; then
+    restore_good "live config invalid"
+    validate "$LIVE" || die "last-good config is invalid too"
+  fi
+  if ! pull_all; then
+    if ! have_good || [ "$(config_hash "$LIVE")" = "$(cat "$RUN/good.hash")" ]; then
+      die "images missing and nothing to fall back to; retrying"
+    fi
+    restore_good "images missing"
+    { validate "$LIVE" && pull_all; } || die "cannot start the last-good config either; retrying"
+  fi
+  local h; h=$(config_hash "$LIVE"); echo "$h" >"$RUN/last-started"; config_sums "$LIVE" >"$RUN/last-started.sums"
+  rm -f "$RUN/healthy"
+  log "start: config ${h:0:12}$([ "$h" != "$(rd "$RUN/good.hash")" ] || echo ' (last-good)')"
+  post_status starting
+}
+
+cmd_run() {
+  local since epoch out code
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ) epoch=$(date +%s)
+  out=$(compose_in "$LIVE" up -d 2>&1) || die "up failed: $out"
+  # docker compose prints "Container <name> <state>" per step; keep the last state of each.
+  out=$(awk '$1 == "Container" { s[$2] = tolower($3) } END { for (c in s) printf "%s %s, ", c, s[c] }' <<<"$out" | sed 's/, $//')
+  # podman-compose prints no per-container states; list the project's containers instead.
+  [ -n "$out" ] || out=$("$ENGINE" ps -a --filter "label=$PROJECT_LABEL=$PROJECT" --format '{{.Names}} {{.State}}' 2>/dev/null | paste -sd, - | sed 's/,/, /g')
+  log "up: ${out:-done}"
+  remove_orphans
+  watch_health "$since" "$epoch" "$(cat "$RUN/last-started")" &
+  code=$("$ENGINE" wait "$AGENT_CONTAINER") || die "cannot wait for $AGENT_CONTAINER"
+  log "agent exited${code:+ (code $code$([ "$code" != 75 ] || echo ', upgrade requested'))}"
+  if [ "$(rd "$RUN/healthy")" != "$(cat "$RUN/last-started")" ] && ! gc_reachable; then
+    touch "$RUN/gc-unreachable"; log "agent exited before registering while the GC is unreachable; not counted as a failure"
+  fi
+  post_status exited
+}
+
+# ExecStop. systemd sets EXIT_CODE only when the main process (the agent) already exited: then nothing to do,
+# the agent restarts alone and the sidecars keep running. Without it, this is 'systemctl stop/restart': stop the stack.
+cmd_stop() {
+  if [ -n "${EXIT_CODE:-}" ]; then
+    "$ENGINE" stop -t 30 "$AGENT_CONTAINER" >/dev/null 2>&1 || true
+  else
+    compose_in "$LIVE" stop >/dev/null 2>&1 || true
+    log "stack stopped (systemctl stop/restart)"
+  fi
+}
+
+cmd_status() {
+  echo "unit:          /etc/systemd/system/$UNIT.service"
+  echo "live config:   $(config_hash "$LIVE" | cut -c1-12)"
+  echo "last-good:     $(cut -c1-12 "$RUN/good.hash" 2>/dev/null || echo none)"
+  echo "registered:    $(cut -c1-12 "$RUN/healthy" 2>/dev/null || echo no)"
+  echo "failures:      $(awk '{print substr($1,1,12), $2}' "$RUN/failures" 2>/dev/null || echo none)"
+  echo "GC bundle:     $(cut -c1-12 "$RUN/gc-bundle.hash" 2>/dev/null || echo none)"
+  echo "compose files: $(xargs <"$LIVE/compose-files" 2>/dev/null || echo docker-compose.yaml)"
+  echo "disk free:     $(disk_free_mb) MB"
+  "$ENGINE" ps -a --format '{{.Names}}  {{.Image}}  {{.Status}}'
+}
+
+case ${1:-} in
+  prestart) cmd_prestart ;;
+  run)      cmd_run ;;
+  stop)     cmd_stop ;;
+  down)     systemctl stop "$UNIT" || true; compose_in "$LIVE" down ;;
+  status)   cmd_status ;;
+  *) echo "usage: $0 prestart|run|stop|down|status" >&2; exit 2 ;;
+esac
+MS_SC_CTL_EOF
+  chmod 0755 "$A/bin/sc-ctl.sh.new" && mv -f "$A/bin/sc-ctl.sh.new" "$A/bin/sc-ctl.sh"
+
+  # GC endpoints: from SC_BUNDLE_URL / SC_STATUS_URL, else kept from the previous install
+  bundle_url="${SC_BUNDLE_URL-$( . "$A/sc.conf" 2>/dev/null; echo "${GC_BUNDLE_URL:-}")}"
+  status_url="${SC_STATUS_URL-$( . "$A/sc.conf" 2>/dev/null; echo "${GC_STATUS_URL:-}")}"
+  if [ "$DOCKERBIN" == "docker" ]; then compose_cmd="docker compose"; else compose_cmd="/usr/local/bin/podman-compose"; fi
+  (
+    umask 077
+    {
+      echo "# Written by deploy-agents.sh (SC_SYSTEMD=1); read by sc-ctl.sh."
+      printf 'ENGINE=%q\nCOMPOSE=(%s)\nPROJECT=agents\nUNIT=metalsoft-sc\nAGENT_SERVICE=ms-agent\nAGENT_CONTAINER=ms-agent\n' "$DOCKERBIN" "$compose_cmd"
+      printf 'GC_BUNDLE_URL=%q\nGC_STATUS_URL=%q\nGC_CURL_OPTS=()\n' "$bundle_url" "$status_url"
+    } > "$A/sc.conf.new" && mv -f "$A/sc.conf.new" "$A/sc.conf"
+  )
+
+  local after="network-online.target" requires=""
+  if [ "$DOCKERBIN" == "docker" ]; then after="$after docker.service"; requires="Requires=docker.service"; fi
+  cat > /etc/systemd/system/metalsoft-sc.service <<EOF
+# Written by deploy-agents.sh (SC_SYSTEMD=1)
+[Unit]
+Description=MetalSoft site controller stack
+Wants=network-online.target
+After=$after
+$requires
+# Only one manager for the stack
+Conflicts=podman-compose-agents.service
+# Never give up restarting (default: stop after 5 starts in 10 s)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=$A
+Environment=PREFIX=$A
+Environment=HOME=/root
+# proxy settings (http_proxy, no_proxy) as ms-sc-set-gc-ip writes them, for sc-ctl.sh's requests to the GC
+EnvironmentFile=-/etc/environment
+SyslogIdentifier=metalsoft-sc
+# Fetch the GC bundle, validate, pull images, fall back to last-good
+ExecStartPre=$A/bin/sc-ctl.sh prestart
+# compose up -d, then wait for the ms-agent container
+ExecStart=$A/bin/sc-ctl.sh run
+# After an agent exit only the agent restarts; on systemctl stop/restart the whole stack stops
+ExecStop=$A/bin/sc-ctl.sh stop
+Restart=always
+RestartSec=5
+TimeoutStartSec=3600
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+
+  # OVA login banner: it reads DATACENTER_ID from compose, which now holds ${DATACENTER_ID}; patch the one line
+  # in place (the script differs between OVA versions) so it falls back to .env
+  local banner=/etc/ms-pre-login-ips n rest
+  if [ -f "$banner" ] && ! grep -q 'agents/.env' "$banner"; then
+    n="$(grep -n '^dcname=.*DATACENTER_ID.*" && if grep -q' "$banner" | head -1 | cut -d: -f1)"
+    if [ -n "$n" ]; then
+      rest="$(sed -n "${n}p" "$banner" | sed 's/^dcname=.*" && \(if grep -q .*\)$/\1/')"
+      {
+        head -n $((n-1)) "$banner"
+        sed -n "${n}p" "$banner" | sed 's/" && if grep -q .*$/"/'
+        cat <<'MS_SC_BANNER_EOF'
+# compose run by metalsoft-sc.service references ${DATACENTER_ID}: the value is in .env
+case "$dcname" in '${'*|'') dcname="$(grep -Po "^DATACENTER_ID='?\K[^']*" /opt/metalsoft/agents/.env 2>/dev/null|tail -1)" ;; esac
+MS_SC_BANNER_EOF
+        printf 'test -n "$dcname" && %s\n' "$rest"
+        tail -n +$((n+1)) "$banner"
+      } > "$banner.new" && bash -n "$banner.new" && chmod 0755 "$banner.new" && mv -f "$banner.new" "$banner" \
+        && debuglog "Patched $banner to read DATACENTER_ID from .env"
+      rm -f "$banner.new"
+    fi
+  fi
+
+  # An older local copy (the OVA keeps one in /root) would rebuild the plain-compose stack behind the unit's back:
+  # replace it with this script when it runs from a file, else with a stub that points to the one-liner.
+  if [ -f /root/deploy-agents.sh ] && ! grep -q 'SC_SYSTEMD' /root/deploy-agents.sh; then
+    cp -p /root/deploy-agents.sh /root/deploy-agents.sh.pre-systemd
+    if [ -f "$SELF" ] && grep -q 'SC_SYSTEMD' "$SELF"; then
+      cp -f "$SELF" /root/deploy-agents.sh && debuglog "Replaced the old /root/deploy-agents.sh with this version"
+    else
+      cat > /root/deploy-agents.sh <<'MS_SC_STUB_EOF'
+#!/bin/bash
+echo "This site controller runs under metalsoft-sc.service; the old deploy-agents.sh kept here would bypass it." >&2
+echo "Run the one-liner from the Global Controller (it fetches the current deploy-agents.sh). Old copy: /root/deploy-agents.sh.pre-systemd" >&2
+exit 1
+MS_SC_STUB_EOF
+      debuglog "Replaced the old /root/deploy-agents.sh with a stub (the old copy would bypass metalsoft-sc.service)"
+    fi
+  fi
+
+  # OVA: the dcrestart alias restarts the unit instead of compose; the banner drops the drop-folder note
+  if grep -q '^alias dcrestart=' /root/.bashrc 2>/dev/null && ! grep -q '^alias dcrestart=.*metalsoft-sc' /root/.bashrc; then
+    { grep -v '^alias dcrestart=' /root/.bashrc; cat <<'MS_SC_ALIAS_EOF'
+alias dcrestart='if systemctl is-enabled -q metalsoft-sc 2>/dev/null; then echo restart metalsoft-sc.service; systemctl restart metalsoft-sc; else echo cd /opt/metalsoft/agents and restart docker compose;cd /opt/metalsoft/agents; docker compose down;sleep 2;docker compose up -d;cd -; fi'
+MS_SC_ALIAS_EOF
+    } > /root/.bashrc.new && cat /root/.bashrc.new > /root/.bashrc && debuglog "Updated the dcrestart alias in /root/.bashrc for metalsoft-sc.service"
+    rm -f /root/.bashrc.new
+  fi
+  if grep -q '^Airgapped image upgrades: drop' /etc/ssh/ms_banner 2>/dev/null \
+    && grep -q 'autoprocessing_<name>\.log$' /etc/ssh/ms_banner; then
+    sed '/^Airgapped image upgrades: drop/,/autoprocessing_<name>\.log$/d' /etc/ssh/ms_banner | cat -s > /etc/ssh/ms_banner.new \
+      && cat /etc/ssh/ms_banner.new > /etc/ssh/ms_banner && debuglog "Removed the drop-folder note from /etc/ssh/ms_banner"
+    rm -f /etc/ssh/ms_banner.new
+  fi
+
+  # OVA: the network hook must not run compose behind the unit's back (the new one updates .env and try-restarts)
+  local hook=/etc/networkd-dispatcher/routable.d/50-ms-ifup-hooks
+  if [ -f "$hook" ] && ! grep -q 'metalsoft-sc.service' "$hook"; then
+    # backup outside routable.d: networkd-dispatcher runs every executable in that directory
+    cp -p "$hook" "/root/50-ms-ifup-hooks.orig-$(date +%Y%m%d%H%M%S)" 2>/dev/null
+    cat > "$hook" <<'MS_SC_HOOK_EOF'
+#!/bin/bash
+
+# MetalSoft network interface up hook
+# This script runs when network interfaces become routable
+
+LOGFILE="/var/log/ms_network.log"
+LOCKFILE="/tmp/ms-ifup-hook.lock"
+
+# Function to log with timestamp
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOGFILE"
+}
+
+# Skip loopback interface as it doesn't need nameserver reconfiguration
+# Check this BEFORE any lockfile operations to avoid touching the lockfile
+if [ "$IFACE" = "lo" ]; then
+    log "Skipping loopback interface"
+    exit 0
+fi
+
+# Detect main interface (the one with default route) and only run for that interface
+main_iface=$(ip r get 1 2>/dev/null | head -1 | awk '{print $5}')
+main_ip=$(ip r get 1 2>/dev/null | head -1 | awk '{print $7}')
+
+if [ -z "$main_iface" ] && [ -n "$main_ip" ]; then
+    # Fallback: try to get interface from main IP
+    main_iface=$(ip addr show | grep "inet.*$main_ip" | awk '{print $NF}' | head -1)
+fi
+
+if [ "$IFACE" != "$main_iface" ]; then
+    log "Skipping non-main interface $IFACE (main interface: $main_iface)"
+    exit 0
+fi
+
+log "Processing main interface: $main_iface (IP: $main_ip)"
+
+# Use flock for proper atomic locking
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    log "Another instance is running, skipping execution"
+    exit 0
+fi
+
+# Lock acquired successfully, record timestamp and PID
+echo "$(date +%s) $$" > "$LOCKFILE"
+trap 'flock -u 200; rm -f "$LOCKFILE"' EXIT
+
+log "=== Network interface hook triggered ==="
+log "Triggered by: $IFACE ($STATE), Processing main interface: $main_iface"
+
+# Point the SC at the main IP (SITE_CONTROLLER_IP, NFS_HOST). Idempotent: nothing is written or restarted
+# when the values are already right, so repeated "routable" events (DHCP renew, link flap) are no-ops.
+AGENTS_DIR=/opt/metalsoft/agents
+SC_UNIT=metalsoft-sc.service
+# Enabled, not just installed: an SC whose unit was disabled is run with plain compose again.
+if [ -n "$main_ip" ] && [ -d "$AGENTS_DIR" ] && systemctl is-enabled -q "$SC_UNIT" 2>/dev/null; then
+    # SC managed by metalsoft-sc.service (sc-ctl.sh): the IPs live in .env, and the unit validates, starts and
+    # health-checks the stack. Never run compose here: it would bypass the unit (and its extra compose files).
+    envf="$AGENTS_DIR/.env"
+    # sc-ctl.sh rewrites .env while it applies a GC bundle: take its lock so neither write is lost.
+    if [ -d "$AGENTS_DIR/run" ]; then
+        exec 201>>"$AGENTS_DIR/run/lock"
+        flock -w 300 201 || log "sc-ctl.sh still holds $AGENTS_DIR/run/lock after 300s; updating .env anyway"
+    fi
+    cur_ip=$(sed -n 's/^SITE_CONTROLLER_IP=//p' "$envf" 2>/dev/null | tail -1)
+    cur_nfs=$(sed -n 's/^NFS_HOST=//p' "$envf" 2>/dev/null | tail -1)
+    if [ "$cur_ip" != "$main_ip" ] || [ "$cur_nfs" != "$main_ip:/data" ]; then
+        tmp=$(mktemp "$AGENTS_DIR/.env.XXXXXX")
+        grep -vE '^(SITE_CONTROLLER_IP|NFS_HOST)=' "$envf" 2>/dev/null >"$tmp"
+        printf 'SITE_CONTROLLER_IP=%s\nNFS_HOST=%s:/data\n' "$main_ip" "$main_ip" >>"$tmp"
+        chmod 0600 "$tmp" && mv -f "$tmp" "$envf"
+        log "$envf: SITE_CONTROLLER_IP ${cur_ip:-<unset>} -> $main_ip, NFS_HOST ${cur_nfs:-<unset>} -> $main_ip:/data"
+        # .env only reaches the containers where compose references ${SITE_CONTROLLER_IP} / ${NFS_HOST}.
+        if grep -qE -- '- (SITE_CONTROLLER_IP|NFS_HOST)=[^$]' "$AGENTS_DIR"/docker-compose*.yaml 2>/dev/null; then
+            log "WARNING: a compose file in $AGENTS_DIR sets SITE_CONTROLLER_IP/NFS_HOST literally; the new IP has no effect there"
+        fi
+        exec 201>&-  # release: the restart's prestart needs the lock
+        # Restarts only a running unit; at boot the unit starts after docker and reads the new .env itself.
+        systemctl try-restart "$SC_UNIT" && log "$SC_UNIT: try-restart done"
+    else
+        log "SC IP unchanged ($main_ip); nothing to do"
+    fi
+    exec 201>&-
+elif [ -n "$main_ip" ] && [ -w "$AGENTS_DIR/docker-compose.yaml" ] && grep -q '\- NFS_HOST=' "$AGENTS_DIR/docker-compose.yaml"; then
+    # SC deployed with docker compose only (deploy-agents.sh): same as before, but the compose file is only
+    # rewritten when an IP differs. 'compose up -d' changes nothing when the stack already runs this config.
+    if ! grep -q -- "- NFS_HOST=$main_ip:/data\$" "$AGENTS_DIR/docker-compose.yaml" \
+       || ! grep -q -- "- SITE_CONTROLLER_IP=$main_ip\$" "$AGENTS_DIR/docker-compose.yaml"; then
+        sed -i "s/- NFS_HOST=.*/- NFS_HOST=$main_ip:\/data/g" "$AGENTS_DIR/docker-compose.yaml"
+        sed -i "s/- SITE_CONTROLLER_IP=.*/- SITE_CONTROLLER_IP=$main_ip/g" "$AGENTS_DIR/docker-compose.yaml"
+        log "$AGENTS_DIR/docker-compose.yaml: SITE_CONTROLLER_IP and NFS_HOST set to $main_ip"
+    fi
+    docker compose -h &>/dev/null && cd "$AGENTS_DIR" && docker compose up -d &>> "$LOGFILE"
+fi
+
+# Reconfigure nameservers based on netplan configuration
+log "Starting nameserver reconfiguration"
+
+resolv="/etc/resolv.conf"
+tmpfile=$(mktemp)
+
+# Check if yq is available for YAML parsing
+if ! command -v yq >/dev/null 2>&1; then
+    log "yq not found, skipping nameserver reconfiguration"
+    exit 0
+fi
+
+# Get new nameservers from Netplan
+log "Extracting nameservers from netplan configuration"
+mapfile -t new_ns < <(yq '.network.ethernets.*.nameservers.addresses[]' /etc/netplan/*.yaml 2>/dev/null)
+
+if [ ${#new_ns[@]} -eq 0 ]; then
+    log "No nameservers found in netplan, using defaults"
+    new_ns=("8.8.8.8" "1.1.1.1")
+fi
+
+# Output new nameservers
+log "Configuring nameservers: ${new_ns[*]}"
+for ns in "${new_ns[@]}"; do
+    echo "nameserver $ns"
+done > "$tmpfile"
+
+# Add rest of original resolv.conf (without nameserver lines)
+if [ -f "$resolv" ]; then
+    grep -v '^nameserver ' "$resolv" >> "$tmpfile"
+    log "Preserved non-nameserver entries from existing resolv.conf"
+fi
+
+# Replace resolv.conf
+if mv "$tmpfile" "$resolv"; then
+    log "Successfully updated $resolv"
+else
+    log "ERROR: Failed to update $resolv"
+    rm -f "$tmpfile"
+    exit 1
+fi
+chmod 644 /etc/resolv.conf
+
+log "Nameserver reconfiguration completed"
+
+log "=== Network interface hook finished ==="
+MS_SC_HOOK_EOF
+    chmod 0755 "$hook"
+    debuglog "Updated $hook for metalsoft-sc.service"
+  fi
 }
 
 yamltojson ()
@@ -86,18 +917,27 @@ verlt "$IMAGES_TAG" v7.0.0 && { echo -e "${lightred}Error: IMAGES_TAG=${IMAGES_T
 DOCKERBIN='docker'
 test "$USEPODMAN" == "1" && DOCKERBIN='podman'
 
+# SC_SYSTEMD=1: the stack runs under metalsoft-sc.service (sc-ctl.sh: GC bundles, health checks, rollback).
+# Sticky: without SC_SYSTEMD, a re-run keeps the mode the SC already has; SC_SYSTEMD=0 switches back to plain compose.
+case "${SC_SYSTEMD:-}" in
+  '') if systemctl is-enabled -q metalsoft-sc.service 2>/dev/null; then SC_SYSTEMD=1; else SC_SYSTEMD=0; fi ;;
+  1|true|yes) SC_SYSTEMD=1 ;;
+  0|false|no) SC_SYSTEMD=0 ;;
+  *) echo -e "${lightred}Error: SC_SYSTEMD=${SC_SYSTEMD} - use 1 (metalsoft-sc.service) or 0 (plain compose)${nc}" >&2; exit 14 ;;
+esac
+
 debuglog "OS: ${yellow}$NAME $VERSION_ID${nc} / ${yellow}$os_packager${nc} for ${yellow}$found_os${nc} / ${lightgreen}$DOCKERBIN${nc} / whoami: ${pink}$(whoami)${nc}"
 if [ "$found_os" == "debian" ];then
   export LC_ALL=C
   export DEBIAN_FRONTEND=noninteractive
   export APT_LISTCHANGES_FRONTEND=none
 
-  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null || { debuglog "Installing required packages" && \
+  command -v curl  > /dev/null && command -v update-ca-certificates > /dev/null && command -v jq > /dev/null && command -v ip > /dev/null && command -v tar > /dev/null || { debuglog "Installing required packages" && \
     $os_packager update -qq && \
-    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip >/dev/null || debuglog "Error installing packages"; }
+    $os_packager -y install curl ca-certificates net-tools jq dnsutils iproute2 gzip tar >/dev/null || debuglog "Error installing packages"; }
     else # if rhel
-      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null || { debuglog "Installing required packages" && \
-        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip >/dev/null || debuglog "Error installing packages" fail; }
+      command -v curl  > /dev/null && command -v update-ca-trust > /dev/null && command -v jq > /dev/null && command -v netstat > /dev/null && command -v tar > /dev/null || { debuglog "Installing required packages" && \
+        $os_packager -qy install curl ca-certificates bind-utils iproute jq nmap-ncat wget net-tools gzip tar >/dev/null || debuglog "Error installing packages" fail; }
 fi
 
 debuglog "Creating folders"
@@ -146,7 +986,9 @@ test -n "$SSL_HOSTNAME" || { echo -e "${lightred}Error: SSL_HOSTNAME not set${nc
 NFSIP="$MAINIP"
 
 # keep the NFS_HOST if already set, as it could've been modified manually
-test -f /opt/metalsoft/agents/docker-compose.yaml && _nfsip="$(grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml)" && test -n "$_nfsip" && if [[ $_nfsip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]];then NFSIP="$_nfsip";fi
+# keep the NFS IP of an existing install: .env (SC_SYSTEMD=1 compose only has ${NFS_HOST}), else the compose file
+_nfsip="$( { grep -Po "^NFS_HOST='?\K[^:']*" /opt/metalsoft/agents/.env; grep -Po 'NFS_HOST=\K[^\:]*' /opt/metalsoft/agents/docker-compose.yaml; } 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+test -n "$_nfsip" && NFSIP="$_nfsip"
 
 if [ -n "$https_proxy" ];then curl_s_proxy="--proxy $https_proxy"; elif [ -n "$HTTPS_PROXY" ];then curl_s_proxy="--proxy $HTTPS_PROXY"; fi
 if [ -n "$http_proxy" ];then curl_proxy="--proxy $http_proxy"; elif [ -n "$HTTP_PROXY" ];then curl_proxy="--proxy $HTTP_PROXY"; fi
@@ -350,13 +1192,25 @@ else # if rhel
 
 fi
 
+# The systemd-managed SC (metalsoft-sc.service, sc-ctl.sh) also writes these files and restarts the containers:
+# stop it while this script runs, start it again at the end.
+if [ "$SC_SYSTEMD" != 1 ] && systemctl is-enabled -q metalsoft-sc.service 2>/dev/null; then
+  debuglog "SC_SYSTEMD=0: disabling metalsoft-sc.service, back to plain $DOCKERBIN compose"
+  systemctl disable -q --now metalsoft-sc.service || true
+elif systemctl is-active -q metalsoft-sc.service 2>/dev/null; then
+  debuglog "Stopping metalsoft-sc.service while deploying"
+  # Started again however this script ends (an early 'exit' included), so the SC is never left down.
+  systemctl stop metalsoft-sc.service && trap 'debuglog "Starting metalsoft-sc.service again"; systemctl start metalsoft-sc.service || debuglog "metalsoft-sc.service did not start; check: journalctl -u metalsoft-sc" fail' EXIT
+fi
+
 backupPrefix="backup-$(date +"%Y%m%d%H%M%S")"
-# Create backup of config files if they exist
-for file in docker-compose.yaml ssl-cert.pem; do
+# Create backup of config files if they exist (0600: docker-compose.yaml holds AGENT_SECRET, ssl-cert.pem a private key)
+for file in docker-compose.yaml ssl-cert.pem .env; do
   if [ -f "/opt/metalsoft/agents/$file" ]; then
-    cp "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file}.bak"
+    install -m 0600 "/opt/metalsoft/agents/$file" "/opt/metalsoft/agents/${backupPrefix}-${file#.}.bak"
   fi
 done
+chmod 0600 /opt/metalsoft/agents/backup-*.bak 2>/dev/null || true # older backups were 0644
 
 if ! command -v yq >/dev/null; then
   # Get latest yq version from GitHub API
@@ -540,6 +1394,13 @@ HOSTNAMERANDOM=$(echo ${RANDOM} | md5sum | head -c 3)
 HOSTNAMERANDOM=$(echo "$interface_ip"|sed 's/[.:][.:]*/-/g')-${HOSTNAMERANDOM}
 while [[ "$HOSTNAMERANDOM" == *[.:]* ]]; do HOSTNAMERANDOM=${HOSTNAMERANDOM//[.:]/-}; done
 while [[ "$HOSTNAMERANDOM" == *--* ]]; do HOSTNAMERANDOM=${HOSTNAMERANDOM//--/-}; done
+# Keep the agent's identity across re-runs: reuse the AGENT_ID of an existing install for the same datacenter
+# (from .env, or from a compose file that still holds the literal value).
+_prev_id="$( { grep -Po "^AGENT_ID='?\K[^']*" /opt/metalsoft/agents/.env; grep -Po '^\s+- AGENT_ID=\K[^$].*' /opt/metalsoft/agents/docker-compose.yaml; } 2>/dev/null | head -1)"
+if [[ $_prev_id == "${DATACENTERNAME}-"* && ${_prev_id#"${DATACENTERNAME}-"} =~ ^[A-Za-z0-9-]+$ ]]; then
+  HOSTNAMERANDOM="${_prev_id#"${DATACENTERNAME}-"}"
+  debuglog "Keeping AGENT_ID ${_prev_id} of the existing install"
+fi
 
 # Define the list of capabilities
 declare -a CAPABILITIES=(
@@ -956,6 +1817,43 @@ ENDD
     test -n "${CLI_MS_TUNNEL_SECRET}" && sed -i "s/\(\s\+\- AGENT_SECRET=\).*/\1${CLI_MS_TUNNEL_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
     test -n "${CLI_DATACENTERNAME}" && sed -i "s/\(\s\+\- DATACENTER_ID=\).*/\1${CLI_DATACENTERNAME}/g" /opt/metalsoft/agents/docker-compose.yaml
 
+# Per-SC values also go to .env, read back from the compose above so CLI overrides are included.
+# The systemd-managed SC (sc-ctl.sh) reads them (GC auth, registry, tag), and compose files that use ${VAR} get the same values.
+chmod 0600 /opt/metalsoft/agents/docker-compose.yaml # holds AGENT_SECRET
+compose_value() { grep -Po "^\s+- $1=\K.*" /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null | head -1; }
+(
+  umask 077
+  {
+    echo "TAG=${IMAGES_TAG}"
+    echo "REG_HOST=${REG_HOST}"
+    echo "GC_HOSTNAME=${SSL_HOSTNAME}"
+    for k in AGENT_ID AGENT_SECRET DATACENTER_ID SITE_CONTROLLER_IP NFS_HOST LOG_LEVEL \
+             BUILD_IMAGE COMMAND_EXECUTION DHCP_OOB ENABLE_METRICS FILE_TRANSFER HTTP_REQUEST INBAND_FILE_TRANSFER \
+             INBAND_HTTP_PROXY INBAND_WEBMKS NETCONF OOB_HTTP_PROXY SPICE SSH_COMMAND SWITCH_SNMP_HEALTH \
+             SWITCH_SUBSCRIPTION SYSLOG VNC; do
+      v="$(compose_value "$k")"
+      # single quotes keep compose from expanding a '$' inside the value (e.g. in a secret)
+      if [[ $v == *'$'* && $v != *"'"* ]]; then echo "$k='$v'"; elif [ -n "$v" ]; then echo "$k=$v"; fi
+    done
+  } > /opt/metalsoft/agents/.env
+)
+chmod 0600 /opt/metalsoft/agents/.env # '>' keeps the mode of the file created above with the default umask
+
+if [ "$SC_SYSTEMD" = 1 ]; then
+  debuglog "SC_SYSTEMD=1: compose takes per-SC values from .env; systemd restarts ms-agent"
+  _c=/opt/metalsoft/agents/docker-compose.yaml
+  # every key written to .env is referenced, so the GC (bundles) and the OVA network hook change it in one place
+  for k in $(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' /opt/metalsoft/agents/.env); do
+    sed -i "s|^\(\s\+- $k=\).*|\1\${$k}|" "$_c"
+  done
+  sed -i "s|^\(\s\+image: \)${REG_HOST}/|\1\${REG_HOST}/|" "$_c"
+  # ms-agent: the unit restarts it when it exits (also to apply an upgrade); the entrypoint makes the agent PID 1
+  # (images before the Dockerfile change still restart it in a loop inside the container)
+  sed -i '/^  ms-agent:$/,/^  [^ #]/ s|^    restart: always$|    restart: "no"\n    entrypoint: ["/bin/sh", "-c", "umask 022; exec /usr/bin/agent"]|' "$_c"
+  # SELinux (RHEL + podman): relabel the shared data dir for containers; ignored without SELinux
+  sed -i 's#^\(\s\+- /opt/metalsoft/nfs-storage:/\(iso\|data\)\)$#\1:z#' "$_c"
+fi
+
 
 dcname="$(grep -Po 'DATACENTER_ID=\K.*' /opt/metalsoft/agents/docker-compose.yaml 2>/dev/null|head -1)" && test -n "$dcname" && if ! grep -qP "^PS1=.+SC: .+" "$HOME/.bashrc";then echo "PS1='\\[\\e[1;43m\\]SC: $dcname \\[\\e[00m\\]\\[\\e[1;33m\\]\\h\\[\\e[1;34m\\] \\W\\[\\e[1;34m\\] \\$\\[\\e[m\\] '" >> "$HOME/.bashrc" && source "$HOME/.bashrc";fi
 
@@ -971,6 +1869,9 @@ if [ "$DOCKERBIN" == "docker" ];then
   else
   systemctl enable -q --now podman
   systemctl enable -q --now podman.socket
+  if [ "$SC_SYSTEMD" = 1 ]; then
+    systemctl disable -q --now podman-compose-agents.service 2>/dev/null || true
+  else
   cat > /etc/systemd/system/podman-compose-agents.service << EOF
 [Unit]
 Description=Podman-compose-agents.service
@@ -993,6 +1894,7 @@ WantedBy=default.target
 EOF
     systemctl daemon-reload
     systemctl enable -q --now podman-compose-agents.service
+  fi
   # until ${DOCKERBIN}-compose ps &>/dev/null;do sleep 1;echo -ne "[-] Waiting for $DOCKERBIN service to start.. \033[0K\r";done && echo
 fi
 
@@ -1062,15 +1964,32 @@ else
   ${DOCKERBIN}-compose pull && PULL_SUCCESS=1
 fi
 
-if [ "$PULL_SUCCESS" -eq 1 ]; then
-  debuglog "stopping any running $DOCKERBIN containers.." info lightred
-  $DOCKERBIN ps -qa|xargs -i bash -c "$DOCKERBIN stop {} && $DOCKERBIN rm {}" >/dev/null
+# SC_SYSTEMD=1: the unit takes over even if the pull above failed (it retries the pull and falls back to local images);
+# leaving the old containers on a compose file already rewritten for the unit would not restart ms-agent.
+if [ "$PULL_SUCCESS" -eq 1 ] || [ "$SC_SYSTEMD" = 1 ]; then
+  # Only the SC's own containers: this compose project (old services included via --remove-orphans),
+  # plus any container holding one of the compose file's container_name values. Other containers on the host stay.
+  debuglog "stopping SC $DOCKERBIN containers.." info lightred
+  if [ "$DOCKERBIN" == "docker" ];then
+    $DOCKERBIN compose down --remove-orphans >/dev/null 2>&1 || true
+  else
+    ${DOCKERBIN}-compose down --remove-orphans >/dev/null 2>&1 || true
+  fi
+  for cname in $(grep -Po '^\s+container_name:\s*\K\S+' /opt/metalsoft/agents/docker-compose.yaml); do
+    $DOCKERBIN rm -f "$cname" >/dev/null 2>&1 || true
+  done
 
+  if [ "$SC_SYSTEMD" = 1 ]; then
+    install_sc_systemd
+    debuglog "starting metalsoft-sc.service (journalctl -t metalsoft-sc -f)"
+    systemctl enable -q metalsoft-sc.service && systemctl restart metalsoft-sc.service
+  else
   debuglog "starting containers with updated images.."
   if [ "$DOCKERBIN" == "docker" ];then
     $DOCKERBIN compose up -d --remove-orphans
   else
     ${DOCKERBIN}-compose up -d
+  fi
   fi
 else
   debuglog "Image pull failed, skipping container restart to avoid downtime" fail
@@ -1098,7 +2017,9 @@ fi
 if [[ -n ${RESOLVCONFCHANGED} ]];then
   debuglog "Resolv.conf changed, restarting $DOCKERBIN containers"
   cd /opt/metalsoft/agents || exit 1
-  if [ "$DOCKERBIN" == "docker" ];then
+  if [ "$SC_SYSTEMD" = 1 ]; then
+    systemctl try-restart metalsoft-sc.service
+  elif [ "$DOCKERBIN" == "docker" ];then
     $DOCKERBIN compose down
     $DOCKERBIN compose up -d --remove-orphans
   else

@@ -137,6 +137,11 @@ HTAjPGqtBmfrA3e6HutGyfEeL8R2SUX+Z+Xy
 
 ## Troubleshooting SC:
 
+If the SC was deployed with `SC_SYSTEMD=1` (`systemctl is-enabled metalsoft-sc` says `enabled`), the stack is managed by
+`metalsoft-sc.service`: use `journalctl -t metalsoft-sc -f` for what it does on each start (bundle, pull, start,
+registration, rollback), `/opt/metalsoft/agents/bin/sc-ctl.sh status` for its state, and `systemctl restart metalsoft-sc`
+(or `dcrestart`) instead of `docker compose down/up`.
+
 once you ssh into the SC, you can check the running containers via: `docker ps`
 
 ```bash

@@ -140,6 +140,10 @@ ms_major_version=""
 if [ -f /opt/metalsoft/agents/docker-compose.yaml ];then
         ms_major_version="$(grep -oP 'image:\s+\S+:v\K[0-9]+' /opt/metalsoft/agents/docker-compose.yaml | sort -n | tail -1)"
 fi
+# compose under metalsoft-sc.service references ${TAG}: the version is in .env
+if [ -z "$ms_major_version" ] && [ -f /opt/metalsoft/agents/.env ];then
+        ms_major_version="$(grep -oP "^TAG='?v\K[0-9]+" /opt/metalsoft/agents/.env | tail -1)"
+fi
 is_v7plus=0
 if [ -n "$ms_major_version" ] && [ "$ms_major_version" -ge 7 ] 2>/dev/null;then
         is_v7plus=1
@@ -167,7 +171,25 @@ ip=$1
 test -z "$ip" && exit 1
 echo new Controller IP: "$ip"
 
-test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
+# SC run by metalsoft-sc.service (deploy-agents.sh SC_SYSTEMD=1): per-SC values live in .env and the unit applies
+# them; compose is never edited or run from here (it would bypass the unit's checks and rollback).
+sc_unit=0
+systemctl is-enabled -q metalsoft-sc.service 2>/dev/null && sc_unit=1
+set_env() {  # key value: replace or add KEY=value in .env, other lines kept
+        # under sc-ctl.sh's lock (it rewrites .env while applying a GC bundle), held only for this write
+        (
+                local f=/opt/metalsoft/agents/.env tmp
+                flock -w 300 9 || echo "[!] sc-ctl.sh still holds its lock after 300s; continuing"
+                tmp="$(mktemp /opt/metalsoft/agents/.env.XXXXXX)" || exit 1
+                { grep -v "^$1=" "$f" 2>/dev/null; printf '%s=%s\n' "$1" "$2"; } >"$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$f"
+        ) 9>>"$( [ -d /opt/metalsoft/agents/run ] && echo /opt/metalsoft/agents/run/lock || echo /dev/null )"
+}
+
+if [ "$sc_unit" -eq 1 ];then
+        set_env SITE_CONTROLLER_IP "$aip"
+else
+        test -f /opt/metalsoft/agents/docker-compose.yaml && sed -i "s/SITE_CONTROLLER_IP=.*/SITE_CONTROLLER_IP=${aip}/g" /opt/metalsoft/agents/docker-compose.yaml
+fi
 
 if [ -n "$2" ];then
         proxy_url="$2"
@@ -219,7 +241,11 @@ if [ -n "$2" ];then
         systemctl show --no-pager --property='Environment docker'
 fi
 
-sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
+if [ "$sc_unit" -eq 1 ];then
+        set_env NFS_HOST "${aip}:/data"
+else
+        sed -i "s/\(NFS_HOST\)=.*:\(\/data\)/\1=${aip}:\2/g" /opt/metalsoft/agents/docker-compose.yaml
+fi
 if [ -n "$DCURL" ];then
         if [ "$is_v7plus" -eq 1 ];then
                 echo "${orange}[!] DCURL is not valid for v${ms_major_version}+ agents; ignoring.${nc}"
@@ -251,6 +277,14 @@ else
 fi
 
 cd /opt/metalsoft/agents/
+if [ "$sc_unit" -eq 1 ];then
+        # the unit pulls the images and restarts the stack, with its health check and rollback
+        echo -e "${lightgreen}[i] Restarting metalsoft-sc.service (journalctl -t metalsoft-sc -f)${nc}"
+        systemctl restart metalsoft-sc.service
+        test -x /etc/ms-pre-login-ips && /etc/ms-pre-login-ips
+        echo Done
+        exit 0
+fi
 if [ -f docker-compose.yaml ];then
         registryUrl="$(grep -m 1 -oP 'image:\s+\K[^\/]+' docker-compose.yaml)"
         curl -sk --connect-timeout 10 "https://${registryUrl}" &>/dev/null && echo -e "${lightgreen}[i] Pulling images from ${registryUrl}${nc}" && ${docker_compose} pull || { echo -e "${lightred}[e] Error pulling docker images from ${registryUrl}${nc}"; }

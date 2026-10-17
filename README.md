@@ -15,6 +15,23 @@ SSL_B64=base64OfSslKeyAndCertPemFormat [ or SSL_PULL_URL=https://url.to/ssl.pem 
 bash <(curl -sk https://raw.githubusercontent.com/metalsoft-io/scripts/main/deploy-agents.sh)
 ```
 
+## Site controller under systemd (`SC_SYSTEMD=1`)
+
+`SC_SYSTEMD=1` runs the stack under `metalsoft-sc.service` instead of plain `docker compose` / `podman-compose-agents.service`:
+on every start `/opt/metalsoft/agents/bin/sc-ctl.sh` applies the configuration bundle from the Global Controller (when
+`SC_BUNDLE_URL` is set), pulls the images, starts the stack, waits until `ms-agent` has registered and rolls back to the
+last configuration that worked when a new one fails. The agent restarts (for example to apply an upgrade) without the
+other containers.
+
+- The mode sticks: a re-run without `SC_SYSTEMD` keeps it; `SC_SYSTEMD=0` goes back to plain compose.
+- Per-SC values (`AGENT_ID`, `AGENT_SECRET`, IPs, capabilities, `TAG`, `REG_HOST`) live in `/opt/metalsoft/agents/.env`;
+  `docker-compose.yaml` references them as `${VAR}`. A re-run keeps the existing `AGENT_ID`.
+- `ms-sc-set-gc-ip`, `ms-upgrade` (and the OVA's air-gapped drop folder) and the OVA network hook change `.env` and
+  restart the unit; they never run compose themselves. `dcrestart` restarts the unit.
+- Optional: `SC_BUNDLE_URL` / `SC_STATUS_URL` (the Global Controller's bundle and status endpoints).
+
+Check it: `systemctl status metalsoft-sc`, `journalctl -t metalsoft-sc -f`, `/opt/metalsoft/agents/bin/sc-ctl.sh status`.
+
 ## Site controller metrics (Prometheus)
 
 `deploy-agents.sh` can ship the site controller's `ms-agent` metrics to a central
