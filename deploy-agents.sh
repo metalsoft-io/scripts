@@ -1618,8 +1618,11 @@ fi
 #   - if the METRICS_* variables below are set, a vmagent container that scrapes 127.0.0.1:9464 and pushes the samples with
 #     Prometheus remote_write (HTTPS + basic auth) to the central Prometheus. Push,
 #     because site controllers are usually behind NAT: only outbound connections,
-#     like the agent's own tunnel. Buffers up to 1GB on disk while the receiver is
-#     unreachable and replays afterwards.
+#     like the agent's own tunnel. Buffers up to 32MB in memory (tmpfs) while the receiver is
+#     unreachable and replays afterwards. The buffer is empty on every container start: after an
+#     outage longer than the receiver's out-of-order window (6h) the oldest buffered block is
+#     rejected with "too old sample" (HTTP 500 on Prometheus v2.39), which vmagent retries forever
+#     and which would block everything queued behind it.
 # Required for the vmagent pusher (without them only the agent's /metrics endpoint is turned on):
 #   METRICS_REMOTE_WRITE_URL       e.g. https://grafana.example.com/api/v1/write
 #   METRICS_REMOTE_WRITE_USERNAME  basic-auth user created on the receiver
@@ -1656,7 +1659,9 @@ if [ "$metrics_push" = "1" ]; then
   METRICS_SC_NAME="${METRICS_SC_NAME:-${DATACENTERNAME}-$(echo "$interface_ip" | sed 's/[.:][.:]*/-/g')}"
   METRICS_SCRAPE_INTERVAL="${METRICS_SCRAPE_INTERVAL:-30s}"
   debuglog "Metrics enabled: vmagent pushes ms-agent metrics as pod=${METRICS_SC_NAME} namespace=${METRICS_GC_NAMESPACE} to ${METRICS_REMOTE_WRITE_URL}"
-  mkdir -p /opt/metalsoft/agents/vmagent/secrets /opt/metalsoft/agents/vmagent/data
+  mkdir -p /opt/metalsoft/agents/vmagent/secrets
+  # on-disk queue of older deployments, replaced by the tmpfs below
+  rm -rf /opt/metalsoft/agents/vmagent/data
   (umask 077
    printf '%s' "${METRICS_REMOTE_WRITE_USERNAME}" > /opt/metalsoft/agents/vmagent/secrets/username
    printf '%s' "${METRICS_REMOTE_WRITE_PASSWORD}" > /opt/metalsoft/agents/vmagent/secrets/password)
@@ -1705,16 +1710,19 @@ ENDD
       - -remoteWrite.basicAuth.usernameFile=/etc/vmagent/secrets/username
       - -remoteWrite.basicAuth.passwordFile=/etc/vmagent/secrets/password
 ${metrics_tls_line}
-      # disk buffer while the receiver is unreachable
+      # in-memory buffer (tmpfs) while the receiver is unreachable: empty on every container start,
+      # so a block too old for the receiver cannot block the queue after a long outage
       - -remoteWrite.tmpDataPath=/vmagent-data
-      - -remoteWrite.maxDiskUsagePerURL=1GB
+      - -remoteWrite.maxDiskUsagePerURL=32MB
       # receiver is Prometheus: plain remote_write protocol, one queue so replayed samples stay in order
       - -remoteWrite.forcePromProto=true
       - -remoteWrite.queues=1
+    # counts against mem_limit; kept above maxDiskUsagePerURL
+    tmpfs:
+      - /vmagent-data:size=48m
     volumes:
       - /opt/metalsoft/agents/vmagent/scrape.yml:/etc/vmagent/scrape.yml:ro
       - /opt/metalsoft/agents/vmagent/secrets:/etc/vmagent/secrets:ro
-      - /opt/metalsoft/agents/vmagent/data:/vmagent-data
       - /etc/ssl/certs:/etc/ssl/certs:ro
 "
 else
