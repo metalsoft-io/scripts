@@ -704,10 +704,11 @@ MS_SC_ALIAS_EOF
 
   # OVA: the network hook must not run compose behind the unit's back (the new one updates .env and try-restarts)
   local hook=/etc/networkd-dispatcher/routable.d/50-ms-ifup-hooks
-  if [ -f "$hook" ] && ! grep -q 'metalsoft-sc.service' "$hook"; then
-    # backup outside routable.d: networkd-dispatcher runs every executable in that directory
-    cp -p "$hook" "/root/50-ms-ifup-hooks.orig-$(date +%Y%m%d%H%M%S)" 2>/dev/null
-    cat > "$hook" <<'MS_SC_HOOK_EOF'
+  # Rewritten whenever it differs, so hooks from older runs of this script get later fixes too.
+  # Temp file outside routable.d (networkd-dispatcher runs every executable there), mv: a running hook is never rewritten in place.
+  local hook_new=/etc/networkd-dispatcher/.50-ms-ifup-hooks.new
+  if [ -f "$hook" ]; then
+    cat > "$hook_new" <<'MS_SC_HOOK_EOF'
 #!/bin/bash
 
 # MetalSoft network interface up hook
@@ -809,15 +810,40 @@ log "Starting nameserver reconfiguration"
 resolv="/etc/resolv.conf"
 tmpfile=$(mktemp)
 
-# Check if yq is available for YAML parsing
-if ! command -v yq >/dev/null 2>&1; then
-    log "yq not found, skipping nameserver reconfiguration"
-    exit 0
-fi
-
-# Get new nameservers from Netplan
+# Get new nameservers from Netplan (ethernets, bonds, vlans, bridges): yq if present, else python3 (netplan.io depends on python3-yaml)
 log "Extracting nameservers from netplan configuration"
-mapfile -t new_ns < <(yq '.network.ethernets.*.nameservers.addresses[]' /etc/netplan/*.yaml 2>/dev/null)
+new_ns=()
+command -v yq >/dev/null 2>&1 && mapfile -t new_ns < <(yq -N '.network | (.ethernets, .bonds, .vlans, .bridges) | .[] | .nameservers.addresses[]' /etc/netplan/*.yaml 2>/dev/null | awk '!seen[$0]++')
+if [ ${#new_ns[@]} -eq 0 ]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+        log "Neither yq nor python3 found, skipping nameserver reconfiguration"
+        exit 0
+    fi
+    # an unreadable netplan must not replace resolv.conf with the defaults below
+    if ! ns_out=$(python3 -c '
+import sys
+try:
+    import yaml
+    ns = []
+    for f in sys.argv[1:]:
+        net = (yaml.safe_load(open(f)) or {}).get("network") or {}
+        for kind in ("ethernets", "bonds", "vlans", "bridges"):
+            for dev in (net.get(kind) or {}).values():
+                a = ((dev or {}).get("nameservers") or {}).get("addresses") or []
+                if not isinstance(a, list):
+                    raise ValueError("%s: nameservers.addresses is not a list" % f)
+                for x in a:
+                    if x not in ns:
+                        ns.append(x)
+except Exception as e:
+    sys.exit("%s: %s" % (type(e).__name__, " ".join(str(e).split())))
+print("\n".join(map(str, ns)))
+' /etc/netplan/*.yaml 2>&1); then
+        log "ERROR: cannot read netplan nameservers with python3 ($ns_out), skipping nameserver reconfiguration"
+        exit 0
+    fi
+    [ -n "$ns_out" ] && mapfile -t new_ns <<< "$ns_out"
+fi
 
 if [ ${#new_ns[@]} -eq 0 ]; then
     log "No nameservers found in netplan, using defaults"
@@ -850,14 +876,46 @@ log "Nameserver reconfiguration completed"
 
 log "=== Network interface hook finished ==="
 MS_SC_HOOK_EOF
-    chmod 0755 "$hook"
-    debuglog "Updated $hook for metalsoft-sc.service"
+    if cmp -s "$hook_new" "$hook"; then
+      rm -f "$hook_new"
+    else
+      # backup outside routable.d: networkd-dispatcher runs every executable in that directory
+      cp -p "$hook" "/root/50-ms-ifup-hooks.orig-$(date +%Y%m%d%H%M%S)" 2>/dev/null
+      chmod 0755 "$hook_new" && mv -f "$hook_new" "$hook"
+      debuglog "Updated $hook for metalsoft-sc.service"
+    fi
   fi
 }
 
-yamltojson ()
+# Nameservers of the netplan ethernets/bonds/vlans/bridges in file $1, one per line (fallback when yq is missing); errors on stderr
+netplan_nameservers ()
 {
-  python3 -c "import yaml;import json; yml = yaml.safe_load(open('$1')); x = json.dumps(yml); print(x)"
+  local out
+  command -v python3 >/dev/null || { debuglog "Cannot read nameservers from $1: neither yq nor python3 is available" fail >&2; return 1; }
+  if ! out=$(python3 -c '
+import sys
+try:
+    import yaml
+    ns = []
+    for f in sys.argv[1:]:
+        net = (yaml.safe_load(open(f)) or {}).get("network") or {}
+        for kind in ("ethernets", "bonds", "vlans", "bridges"):
+            for dev in (net.get(kind) or {}).values():
+                a = ((dev or {}).get("nameservers") or {}).get("addresses") or []
+                if not isinstance(a, list):
+                    raise ValueError("%s: nameservers.addresses is not a list" % f)
+                for x in a:
+                    if x not in ns:
+                        ns.append(x)
+except Exception as e:
+    sys.exit("%s: %s" % (type(e).__name__, " ".join(str(e).split())))
+print("\n".join(map(str, ns)))
+' "$1" 2>&1); then
+    debuglog "Cannot read nameservers from $1 with python3: $out" fail >&2
+    return 1
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # develop* tags compare as newest (v1000.0.0)
@@ -1212,9 +1270,10 @@ for file in docker-compose.yaml ssl-cert.pem .env; do
 done
 chmod 0600 /opt/metalsoft/agents/backup-*.bak 2>/dev/null || true # older backups were 0644
 
-if ! command -v yq >/dev/null; then
+# yq only reads netplan nameservers (debian/ubuntu); netplan_nameservers (python3) covers a failed download
+if [ "$found_os" == "debian" ] && ! command -v yq >/dev/null; then
   # Get latest yq version from GitHub API
-  YQ_VERSION=$(curl -sSL $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+  YQ_VERSION=$(curl -fsSL --connect-timeout 5 --max-time 10 $curl_s_proxy https://api.github.com/repos/mikefarah/yq/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
   # Fallback to known working version if API call fails
   YQ_VERSION="${YQ_VERSION:-v4.45.4}"
 
@@ -1222,13 +1281,18 @@ if ! command -v yq >/dev/null; then
   case "$YQ_ARCH" in
     "x86_64") YQ_ARCH="amd64" ;;
     "aarch64" | "arm64") YQ_ARCH="arm64" ;;
-    *) echo "yq installation: Unsupported architecture: $YQ_ARCH"; exit 1 ;;
+    *) YQ_ARCH="" ;;
   esac
 
   YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${YQ_ARCH}"
-  debuglog "Installing yq ${YQ_VERSION} for ${YQ_ARCH}"
-  curl -sSL $curl_s_proxy -o /usr/local/bin/yq "${YQ_URL}"
-  chmod +x /usr/local/bin/yq
+  # temp file + --version check: a partial or wrong download never becomes /usr/local/bin/yq
+  if [ -n "$YQ_ARCH" ] && curl -fsSL --connect-timeout 5 --max-time 60 $curl_s_proxy -o /usr/local/bin/yq.tmp "${YQ_URL}" 2>/dev/null \
+     && chmod +x /usr/local/bin/yq.tmp && /usr/local/bin/yq.tmp --version >/dev/null 2>&1 && mv -f /usr/local/bin/yq.tmp /usr/local/bin/yq; then
+    debuglog "Installed yq ${YQ_VERSION} for ${YQ_ARCH}"
+  else
+    rm -f /usr/local/bin/yq.tmp
+    debuglog "yq not present locally and could not be downloaded, using python3 to read netplan"
+  fi
 fi
 
   debuglog "Enabling nfs/nfsd kernel modules"
@@ -1935,9 +1999,9 @@ if [ "$found_os" == "debian" ];then
   debuglog "Add DNS resolvers to /etc/resolv.conf"
   test -L /etc/resolv.conf && \rm -f /etc/resolv.conf && touch /etc/resolv.conf && RESOLVCONFCHANGED="YES"
   find /etc/netplan -type f -iname "*.yaml" | while read -r netplan_file; do
-    nameservers=$(yq e '.network.ethernets[].nameservers.addresses[]' "$netplan_file" 2>/dev/null)
-    # redundancy, also the only dependenscy that needs jq and yamltojson
-    test -z "$nameservers" && nameservers="$(yamltojson "$netplan_file" 2>/dev/null | jq .network.ethernets 2>/dev/null | jq -r '.[].nameservers | .addresses' 2>/dev/null | jq -sr 'flatten(1) | join(" ")' 2>/dev/null)"
+    nameservers=""
+    command -v yq >/dev/null && nameservers=$(yq e '.network | (.ethernets, .bonds, .vlans, .bridges) | .[] | .nameservers.addresses[]' "$netplan_file" 2>/dev/null)
+    test -z "$nameservers" && nameservers=$(netplan_nameservers "$netplan_file")
     for nameserver in $nameservers; do
       debuglog "netplan nameserver ${yellow}$nameserver${nc}"
       if [[ "$nameserver" != "$(grep "$nameserver" /etc/resolv.conf | cut -d" " -f2)" ]];then
@@ -2039,7 +2103,18 @@ fi
 
 
 debuglog "Pulling discovery ISO"
-test ! -f /opt/metalsoft/nfs-storage/BDK.iso && curl $curl_s_proxy -#L -o /opt/metalsoft/nfs-storage/BDK.iso https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+BDK_URL=https://repo.metalsoft.io/.tftp/BDK-Rocky-9-x86_64.iso
+# temp file: a failed or partial download must not leave a BDK.iso that later runs skip.
+# mktemp outside nfs-storage: that dir is owned by uid 1000, a fixed temp name there could be a planted symlink.
+if [ ! -f /opt/metalsoft/nfs-storage/BDK.iso ]; then
+  BDK_TMP=$(mktemp /opt/metalsoft/.BDK.iso.XXXXXX)
+  if curl -f --connect-timeout 10 $curl_s_proxy -#L -o "$BDK_TMP" "$BDK_URL" && chmod 0644 "$BDK_TMP"; then
+    mv -f "$BDK_TMP" /opt/metalsoft/nfs-storage/BDK.iso
+  else
+    rm -f "$BDK_TMP"
+    debuglog "Discovery ISO download failed. Manually: download $BDK_URL from a machine with access and copy it to this host as /opt/metalsoft/nfs-storage/BDK.iso" fail
+  fi
+fi
 
 if [ "$PULL_SUCCESS" -eq 1 ]; then
 sleep 2
