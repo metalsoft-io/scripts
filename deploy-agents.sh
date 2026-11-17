@@ -1426,13 +1426,32 @@ else
   podman-compose version &>/dev/null || { debuglog "Installing podman-compose" && curl $curl_s_proxy -sfo /usr/local/bin/podman-compose https://raw.githubusercontent.com/containers/podman-compose/main/podman_compose.py && chmod +x /usr/local/bin/podman-compose; }
 fi
 
-# Detect the GID that owns the docker socket (authoritative for container access),
-# fall back to the docker group entry, then 999. Used as the group_add default below.
+# Container engine socket the ms-agent ansible runner uses to start execution-environment containers
+# (ANSIBLE_RUNNER_SOCKET_PATH default and socket mount below), and the GID that owns it (group_add default).
+# Docker: /var/run/docker.sock; GID from the socket, else the docker group entry, then 999.
+# Podman (rootful): /run/podman/podman.sock, the Docker-compatible API of podman.socket. That socket is
+# root:root 0660 by default and ms-agent runs as a non-root user, so a systemd drop-in gives it to a
+# 'podman' group, whose GID ms-agent joins via group_add.
+RUNNER_SOCKET=/var/run/docker.sock
+PODMAN_SOCKET_CHANGED=0
 DOCKER_GID=""
 if [ "$DOCKERBIN" == "docker" ]; then
   DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null)"
   test -z "$DOCKER_GID" && DOCKER_GID="$(getent group docker 2>/dev/null | cut -d: -f3)"
   debuglog "Detected DOCKER_GID=${DOCKER_GID:-999}"
+else
+  RUNNER_SOCKET=/run/podman/podman.sock
+  getent group podman >/dev/null 2>&1 || groupadd -r podman
+  DOCKER_GID="$(getent group podman 2>/dev/null | cut -d: -f3)"
+  _dropin=/etc/systemd/system/podman.socket.d/10-metalsoft-agent.conf
+  _dropin_new="$(printf '%s\n' '# Written by deploy-agents.sh: lets ms-agent (group_add) reach the podman API socket' \
+    '[Socket]' 'SocketGroup=podman' 'SocketMode=0660')"
+  if [ "$(cat "$_dropin" 2>/dev/null)" != "$_dropin_new" ]; then
+    mkdir -p "${_dropin%/*}" && printf '%s\n' "$_dropin_new" > "$_dropin"
+    systemctl daemon-reload
+    PODMAN_SOCKET_CHANGED=1  # podman.socket is restarted below, before the agents start
+  fi
+  debuglog "podman: ansible runner socket ${RUNNER_SOCKET}, group podman (GID ${DOCKER_GID:-?})"
 fi
 test -z "$DOCKER_GID" && DOCKER_GID=999
 
@@ -1565,20 +1584,21 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]]; then
       - ANSIBLE_RUNNER=enabled
       - ANSIBLE_RUNNER_HOME=/opt/metalsoft/ansible-jobs
       - ANSIBLE_RUNNER_ARCHIVES_FOLDER=/opt/metalsoft/ansible-archives
-      - ANSIBLE_RUNNER_RUN_UID=\"1000\"
-      - ANSIBLE_RUNNER_RUN_GID=\"1000\"
+      ## list-form values are taken verbatim (quotes would become part of the value), so no quotes here
+      - ANSIBLE_RUNNER_RUN_UID=1000
+      - ANSIBLE_RUNNER_RUN_GID=1000
       - ANSIBLE_RUNNER_EXECUTION_ENV=\${ANSIBLE_RUNNER_EXECUTION_ENV:-registry.metalsoft.dev/ee/ee-default:latest}
-      - ANSIBLE_RUNNER_SOCKET_PATH=\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
+      - ANSIBLE_RUNNER_SOCKET_PATH=\${ANSIBLE_RUNNER_SOCKET_PATH:-${RUNNER_SOCKET}}
       - ANSIBLE_RUNNER_HOME_HOST=\${ANSIBLE_RUNNER_HOME_HOST:-/opt/metalsoft/ansible-jobs}
-      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_DNS_SERVERS=\"8.8.8.8,1.1.1.1\"
-      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=\"bridge\" # [bridge|host|none]
+      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_DNS_SERVERS=8.8.8.8,1.1.1.1
+      - ANSIBLE_RUNNER_EXECUTION_CONTAINER_NETWORK_MODE=bridge # [bridge|host|none]
       #- ANSIBLE_RUNNER_DEBUG_KEEP_CONTAINER=1
 "
 fi
 
 # ms-agent ansible runner volumes. Present when ANSIBLE_RUNNER enabled, or always for v7.4.0+
-# (the runner moved into ms-agent). Socket mount + docker group_add are active only for v7.4.0+
-# with ANSIBLE_RUNNER enabled (docker socket access is root-equivalent on the host).
+# (the runner moved into ms-agent). Socket mount + engine group_add are active only for v7.4.0+
+# with ANSIBLE_RUNNER enabled (docker/podman socket access is root-equivalent on the host).
 if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] && ! verlt "$IMAGES_TAG" v7.4.0; then
     sock_prefix="- "
     group_add_prefix=""
@@ -1590,7 +1610,7 @@ if [[ "${ENVVAR_ANSIBLE_RUNNER:-disabled}" == "enabled" ]] || ! verlt "$IMAGES_T
     ms_agent_ansible_runner_volumes="
       - /opt/metalsoft/ansible-jobs:/opt/metalsoft/ansible-jobs
       - /opt/metalsoft/ansible-archives:/opt/metalsoft/ansible-archives
-      ${sock_prefix}\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}:\${ANSIBLE_RUNNER_SOCKET_PATH:-/var/run/docker.sock}
+      ${sock_prefix}\${ANSIBLE_RUNNER_SOCKET_PATH:-${RUNNER_SOCKET}}:\${ANSIBLE_RUNNER_SOCKET_PATH:-${RUNNER_SOCKET}}
 "
 fi
 
@@ -1802,8 +1822,10 @@ inband_dc="  ms-agent:
     hostname: ms-agent-${DATACENTERNAME}-${HOSTNAMERANDOM}
     image: ${MSAGENT_URL}
     restart: always
-    cap_add: [NET_BIND_SERVICE, NET_ADMIN]
-    ### group_add: active only for v7.4.0+ with ANSIBLE_RUNNER enabled - gives ms-agent (appuser) access to the docker socket (root-equivalent on host)
+    ### /usr/bin/agent has file capabilities cap_net_bind_service,cap_net_admin,cap_net_raw=eip: all three must be in the
+    ### container's bounding set or exec fails with 'Operation not permitted'. Docker grants NET_RAW by default, podman does not.
+    cap_add: [NET_BIND_SERVICE, NET_ADMIN, NET_RAW]
+    ### group_add: active only for v7.4.0+ with ANSIBLE_RUNNER enabled - gives ms-agent (appuser) access to the docker/podman socket (root-equivalent on host)
 ${group_add_prefix}    group_add: [\"\${DOCKER_GID:-${DOCKER_GID}}\"]
 #    security_opt: [\"no-new-privileges:true\"]
     environment:
@@ -1941,6 +1963,10 @@ if [ "$DOCKERBIN" == "docker" ];then
   else
   systemctl enable -q --now podman
   systemctl enable -q --now podman.socket
+  # apply a new SocketGroup/SocketMode drop-in to an already listening socket. Only when it changed:
+  # a restart recreates the socket file, and a running ms-agent keeps a bind mount of the old one
+  # (the compose change that comes with a new drop-in recreates ms-agent anyway).
+  if [ "$PODMAN_SOCKET_CHANGED" = 1 ]; then systemctl restart podman.socket; fi
   if [ "$SC_SYSTEMD" = 1 ]; then
     systemctl disable -q --now podman-compose-agents.service 2>/dev/null || true
   else
