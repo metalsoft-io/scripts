@@ -1161,33 +1161,6 @@ check_remote_conn "${REG_HOST}" 443 tcp || REG_HOST_CONN_FAILED=1
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 443 tcp
 test -n "$SSL_HOSTNAME" && check_remote_conn "${SSL_HOSTNAME}" 0 icmp
 
-function manageSSL
-{
-  test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 $curl_s_proxy "${SSL_PULL_URL}" |tee /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate"; }
-  test -f /root/agents-ssl.pem && echo "Found /root/agents-ssl.pem. Checking.." && openssl x509 -in /root/agents-ssl.pem -text -nocert|grep -q 'Not Before:' && ssl=/root/agents-ssl.pem
-  test -z "${ssl}" && debuglog "Please provide path of the SSL pem:" && read -r -e -p "Path to SSL pem: " ssl
-  if [ -r "$ssl" ];then
-    DISCOVERED_SSL_HOSTNAMES="$(openssl x509 -in "$ssl" -noout -text 2>/dev/null|grep DNS:|head -1)"
-    DISCOVERED_SSL_HOSTNAME="$(echo "$DISCOVERED_SSL_HOSTNAMES"|sed 's/,\s\+/\n/g;'|sed 's/.*DNS://g'|cut -d. -f2-10|head -1)"
-    if [ -z "$DISCOVERED_SSL_HOSTNAME" ];then
-      debuglog "WARNING: no hostname discovered in SSL file" bold yellow
-      # return 1
-    fi
-    if cp "$ssl" /opt/metalsoft/agents/ssl-cert.pem;then
-      debuglog "copied $ssl to /opt/metalsoft/agents/ssl-cert.pem. Found SSL hosts: $DISCOVERED_SSL_HOSTNAMES"
-      return 0
-    else
-      echo Error: could not copy "$ssl"
-      return 1
-
-    fi
-  else
-    echo "Error: no valid path provided or missing SSL_PULL_URL"
-    return 1
-  fi
-}
-
-
 test ! -f /usr/local/share/ca-certificates/metalsoft_ca.crt && mkdir -p /usr/local/share/ca-certificates/ && \
   cat > /usr/local/share/ca-certificates/metalsoft_ca.crt <<ENDD
 -----BEGIN CERTIFICATE-----
@@ -1455,21 +1428,9 @@ else
 fi
 test -z "$DOCKER_GID" && DOCKER_GID=999
 
-debuglog "Checking provided SSL"
+# SSL_B64/ssl-cert.pem: unused by default v7+ agents (ms-agent self-signs its :443 cert); kept only for SCs where
+# TLS_PEM_FILE + the ssl-cert.pem mount were uncommented by hand. Remove once no SC uses that opt-in (MS-11513).
 test -n "$SSL_B64" && echo -n "$SSL_B64"|base64 -d > /opt/metalsoft/agents/ssl-cert.pem
-
-if [ ! -f /opt/metalsoft/agents/ssl-cert.pem ];then
-  SSL_PULL_URL="${SSL_PULL_URL}" manageSSL
-  while [ $? -ne 0 ]; do
-    manageSSL
-  done
-fi
-
-if [ -z "$SSL_HOSTNAME" ];then
-  read -r -p "Enter SSL hostname [${DISCOVERED_SSL_HOSTNAME}]: " name
-  SSL_HOSTNAME=${name:-$DISCOVERED_SSL_HOSTNAME}
-  debuglog "SSL_HOSTNAME set to: $SSL_HOSTNAME"
-fi
 
 test -n "$DATACENTERNAME" || { echo -e "${lightred}Error: DATACENTERNAME is not set${nc}" >&2; exit 1; }
 
