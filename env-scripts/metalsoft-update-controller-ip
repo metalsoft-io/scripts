@@ -257,6 +257,8 @@ if [ -n "$DATACENTERS_SECRET" ];then
         echo "Reconfiguring DATACENTERS_SECRET=${DATACENTERS_SECRET}"
         sed -i "s/\(- DATACENTERS_SECRET\)=.*/\1=${DATACENTERS_SECRET}/g" /opt/metalsoft/agents/docker-compose.yaml
 fi
+# SSL_PULL_URL: unused by default v7+ agents (ms-agent self-signs its :443 cert); kept only for SCs where TLS_PEM_FILE +
+# the ssl-cert.pem mount were uncommented by hand in docker-compose.yaml. Remove once no SC uses that opt-in (MS-11513).
 if [ -n "$SSL_PULL_URL" ];then
         echo "Reconfiguring SSL_PULL_URL=${SSL_PULL_URL}"
         test -n "${SSL_PULL_URL}" && curl -skL --connect-timeout 20 "${SSL_PULL_URL}" > /root/agents-ssl.pem.tmp && openssl x509 -in /root/agents-ssl.pem.tmp -text -nocert|grep -q 'Not Before:' && cp -f /root/agents-ssl.pem.tmp /opt/metalsoft/agents/ssl-cert.pem && mv /root/agents-ssl.pem.tmp /root/agents-ssl.pem || { rm -f /root/agents-ssl.pem.tmp; echo "Error pulling certificate or not a valid PEM certificate"; }
